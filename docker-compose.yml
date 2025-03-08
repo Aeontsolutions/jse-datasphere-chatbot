@@ -1,0 +1,20 @@
+version: '3'
+
+services:
+  streamlit-app:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/service-account.json
+      - METADATA_FILE_PATH=/app/metadata.json
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - METADATA_S3_BUCKET=${METADATA_S3_BUCKET} 
+      - DOCUMENT_METADATA_S3_BUCKET=${DOCUMENT_METADATA_S3_BUCKET}
+    volumes:
+      - type: bind
+        source: ./service-account.json
+        target: /app/service-account.json
+    
