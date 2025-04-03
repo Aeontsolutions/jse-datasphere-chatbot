@@ -4,6 +4,7 @@
 # Google Cloud service account
 *.json
 !metadata-example.json
+!companies.json
 
 # Python
 __pycache__/
