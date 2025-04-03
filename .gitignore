@@ -47,4 +47,6 @@ ehthumbs.db
 Thumbs.db
 
 # PDF files uploaded by users
-*.pdf
+./pdfs/*
+./chroma_db/*
+./chroma/*
