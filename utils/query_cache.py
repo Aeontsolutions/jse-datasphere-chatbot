@@ -190,19 +190,88 @@ def qa_bot(query: str, context: str):
         logger.error(f"Error generating response: {str(e)}")
         raise
 
-def qa_workflow(query: str):
+def enhance_query_with_context(query: str, conversation_history: list = None) -> str:
+    """
+    Enhance the user query using conversation history and context.
+    
+    Args:
+        query (str): The original user query
+        conversation_history (list, optional): List of conversation messages with 'role' and 'content'
+    
+    Returns:
+        str: Enhanced query optimized for financial document analysis
+    """
+    logger.info("Enhancing query with context...")
+    
+    try:
+        client = genai.Client(api_key=os.getenv("CHATBOT_API_KEY"))
+        
+        # Format conversation history if available
+        conversation_context = ""
+        if conversation_history and len(conversation_history) > 0:
+            # Get the last few exchanges to provide context (limit to last 5 exchanges)
+            recent_history = conversation_history[-10:]
+            conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+        
+        # Create a prompt for query enhancement
+        enhancement_prompt = f"""
+        You are a financial analyst assistant. Your task is to enhance the user's query to make it more effective for retrieving and analyzing financial document information.
+        
+        Consider the following:
+        1. The query will be used to search through financial statements and reports
+        2. The response should maintain the original intent while being more specific about financial metrics and time periods
+        3. Include relevant financial terminology when appropriate
+        4. If the query is about company performance, specify which metrics would be most relevant
+        
+        Previous conversation context:
+        {conversation_context}
+        
+        Original query: {query}
+        
+        Please provide an enhanced version of this query that would be more effective for financial document analysis.
+        Focus on making it more specific and relevant to financial statement analysis.
+        """
+        
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-lite-001",
+            config=types.GenerateContentConfig(
+                temperature=0,
+            ),
+            contents=[enhancement_prompt]
+        )
+        
+        enhanced_query = response.text.strip()
+        logger.info(f"Query enhanced from '{query}' to '{enhanced_query}'")
+        return enhanced_query
+        
+    except Exception as e:
+        logger.error(f"Error enhancing query: {str(e)}")
+        return query  # Return original query if enhancement fails
+
+def qa_workflow(query: str, conversation_history: list = None):
     """
     A workflow to answer questions about the financial document summaries.
+    
+    Args:
+        query (str): The question to answer
+        conversation_history (list, optional): List of conversation messages with 'role' and 'content'
     """
     logger.info(f"Starting QA workflow for query: {query}")
     
     try:
-        # Step 1: Query ChromaDB
-        sorted_results, context = query_chromadb_sorted(collection, query)
+        # Step 1: Enhance the query with context
+        if conversation_history:    
+            enhanced_query = enhance_query_with_context(query, conversation_history)
+        else:
+            enhanced_query = query
+        logger.info(f"Using enhanced query: {enhanced_query}")
+        
+        # Step 2: Query ChromaDB
+        sorted_results, context = query_chromadb_sorted(collection, enhanced_query)
         logger.info("Successfully retrieved and sorted results from ChromaDB")
         
-        # Step 2: Answer the question
-        answer = qa_bot(query, context)
+        # Step 3: Answer the question
+        answer = qa_bot(enhanced_query, context)
         logger.info("Successfully generated answer")
         
         return answer

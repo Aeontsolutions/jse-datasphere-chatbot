@@ -11,6 +11,17 @@ import tempfile
 import PyPDF2
 from io import BytesIO
 import time
+import logging
+from utils.query_cache import qa_workflow
+
+st.set_page_config(page_title="JSE Document Chat", page_icon=":material/chat:", layout="wide")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -491,62 +502,72 @@ if user_input:
     document_recommendation = auto_load_message
 
     try:
-        # Generate response using Vertex AI Gemini
-        model = GenerativeModel("gemini-2.0-flash-001")
-        
-        # Append the new user message to conversation history if memory is enabled
-        if memory_enabled:
-            st.session_state.conversation_history.append({"role": "user", "content": user_input})
+        # First try the structured QA implementation
+        logger.info("Attempting structured QA implementation...")
+        structured_answer = None
+        try:
+            if st.session_state.conversation_history:
+                structured_answer = qa_workflow(user_input, st.session_state.conversation_history[-10:])
+            else:
+                structured_answer = qa_workflow(user_input)
+            if structured_answer and len(structured_answer.strip()) > 0:
+                logger.info("Successfully generated structured answer")
+                ai_message = structured_answer
+        except Exception as e:
+            logger.warning(f"Structured QA implementation failed: {str(e)}")
+            logger.info("Falling back to dynamic QA implementation...")
+
+        # If structured QA failed or returned empty, use the original implementation
+        if not structured_answer:
+            model = GenerativeModel("gemini-2.0-flash-001")
             
-            # Construct the conversation context from history (limited to maintain token limits)
-            # Only include the last 10 exchanges to avoid context length issues
-            recent_history = st.session_state.conversation_history[-20:]
-            conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
-        else:
-            # Memory is disabled, only use the current question
-            conversation_context = f"user: {user_input}"
-        
-        # If we have document context, include it in the prompt
-        if st.session_state.document_context:
-            # Create a prompt that includes document context and conversation history
-            prompt = f"""
-            The following are documents that have been uploaded:
+            # Append the new user message to conversation history if memory is enabled
+            if memory_enabled:
+                st.session_state.conversation_history.append({"role": "user", "content": user_input})
+                
+                # Construct the conversation context from history (limited to maintain token limits)
+                recent_history = st.session_state.conversation_history[-20:]
+                conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+            else:
+                conversation_context = f"user: {user_input}"
             
-            {st.session_state.document_context}
+            # If we have document context, include it in the prompt
+            if st.session_state.document_context:
+                prompt = f"""
+                The following are documents that have been uploaded:
+                
+                {st.session_state.document_context}
+                
+                Previous conversation:
+                {conversation_context}
+                
+                Based on the above documents and our conversation history, please answer the following question:
+                {user_input}
+                
+                If the question relates to our previous conversation, use that context in your answer.
+                
+                IMPORTANT: Use plain text formatting for all financial data. Do not use special formatting for dollar amounts or numbers.
+                """
+                
+                if auto_load_message and "Semantically selected" in auto_load_message:
+                    prompt += f"\n\nNote: {auto_load_message}"
+                
+                response = model.generate_content(prompt)
+            else:
+                prompt = f"""
+                Previous conversation:
+                {conversation_context}
+                
+                Based on our conversation history, please answer the following question:
+                {user_input}
+                
+                If the question relates to our previous conversation, use that context in your answer.
+                
+                IMPORTANT: Use plain text formatting for all financial data. Do not use special formatting for dollar amounts or numbers.
+                """
+                response = model.generate_content(prompt)
             
-            Previous conversation:
-            {conversation_context}
-            
-            Based on the above documents and our conversation history, please answer the following question:
-            {user_input}
-            
-            If the question relates to our previous conversation, use that context in your answer.
-            
-            IMPORTANT: Use plain text formatting for all financial data. Do not use special formatting for dollar amounts or numbers.
-            """
-            
-            # If auto-loaded documents, add that context
-            if auto_load_message and "Semantically selected" in auto_load_message:
-                prompt += f"\n\nNote: {auto_load_message}"
-            
-            # Generate response with document context and conversation history
-            response = model.generate_content(prompt)
-        else:
-            # No documents uploaded, just use conversation history
-            prompt = f"""
-            Previous conversation:
-            {conversation_context}
-            
-            Based on our conversation history, please answer the following question:
-            {user_input}
-            
-            If the question relates to our previous conversation, use that context in your answer.
-            
-            IMPORTANT: Use plain text formatting for all financial data. Do not use special formatting for dollar amounts or numbers.
-            """
-            response = model.generate_content(prompt)
-        
-        ai_message = response.text
+            ai_message = response.text
         
         # Add document recommendation to the AI response if relevant
         if document_recommendation and "Semantically selected" in document_recommendation:
@@ -554,11 +575,7 @@ if user_input:
         
         # Add AI response to conversation history if memory is enabled
         if memory_enabled:
-            # Don't include auto-load message in the conversation history to avoid repetition
-            history_message = ai_message
-            if document_recommendation:
-                history_message = history_message.replace(document_recommendation, "")
-            st.session_state.conversation_history.append({"role": "assistant", "content": history_message})
+            st.session_state.conversation_history.append({"role": "assistant", "content": ai_message})
         
         # Display AI message using code block to avoid formatting issues
         st.session_state.messages.append({"role": "assistant", "content": ai_message})
