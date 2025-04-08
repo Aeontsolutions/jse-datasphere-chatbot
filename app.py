@@ -12,7 +12,7 @@ import PyPDF2
 from io import BytesIO
 import time
 import logging
-from utils.query_cache import qa_workflow
+from utils.query_cache import qa_workflow, answer_found
 
 st.set_page_config(page_title="JSE Document Chat", page_icon=":material/chat:", layout="wide")
 
@@ -505,33 +505,46 @@ if user_input:
         # First try the structured QA implementation
         logger.info("Attempting structured QA implementation...")
         structured_answer = None
+        _answer_found = False  # Initialize to False
         try:
             if st.session_state.conversation_history:
                 structured_answer = qa_workflow(user_input, st.session_state.conversation_history[-10:])
             else:
                 structured_answer = qa_workflow(user_input)
-            if structured_answer and len(structured_answer.strip()) > 0:
-                logger.info("Successfully generated structured answer")
-                ai_message = structured_answer
-        except Exception as e:
-            logger.warning(f"Structured QA implementation failed: {str(e)}")
-            logger.info("Falling back to dynamic QA implementation...")
+                
+            # Check if the answer was found only if structured_answer is not None
+            if structured_answer:
+                _answer_found = answer_found(structured_answer, user_input)
+                logger.info(f"Answer found check result: {_answer_found}")
+            else:
+                 logger.info("Structured QA returned None, skipping answer_found check.")
 
-        # If structured QA failed or returned empty, use the original implementation
-        if not structured_answer:
-            model = GenerativeModel("gemini-2.0-flash-001")
+        except Exception as e:
+            logger.error(f"Error during structured QA or answer check: {str(e)}")
+            # Ensure _answer_found remains False if an error occurs
+            _answer_found = False 
             
+        # Decide based on whether the answer was found
+        if _answer_found:
+            logger.info("Structured answer considered valid.")
+            ai_message = structured_answer
+        else:
+            logger.info("Structured answer not found or invalid, falling back to dynamic QA implementation.")
+            # Fallback logic starts here...
+            model = GenerativeModel("gemini-2.0-flash-001")
+        
             # Append the new user message to conversation history if memory is enabled
             if memory_enabled:
                 st.session_state.conversation_history.append({"role": "user", "content": user_input})
                 
                 # Construct the conversation context from history (limited to maintain token limits)
-                recent_history = st.session_state.conversation_history[-20:]
+                recent_history = st.session_state.conversation_history[-20:] # Keep context length reasonable
                 conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
             else:
+                # If memory is off, just use the current input
                 conversation_context = f"user: {user_input}"
             
-            # If we have document context, include it in the prompt
+            # Prepare prompt for fallback model
             if st.session_state.document_context:
                 prompt = f"""
                 The following are documents that have been uploaded:
@@ -549,11 +562,13 @@ if user_input:
                 IMPORTANT: Use plain text formatting for all financial data. Do not use special formatting for dollar amounts or numbers.
                 """
                 
+                # Add auto-load message if relevant
                 if auto_load_message and "Semantically selected" in auto_load_message:
                     prompt += f"\n\nNote: {auto_load_message}"
                 
                 response = model.generate_content(prompt)
             else:
+                # No document context, just use conversation
                 prompt = f"""
                 Previous conversation:
                 {conversation_context}
@@ -568,13 +583,18 @@ if user_input:
                 response = model.generate_content(prompt)
             
             ai_message = response.text
-        
-        # Add document recommendation to the AI response if relevant
+
+        # Add document recommendation to the AI response if relevant (outside the if/else block)
         if document_recommendation and "Semantically selected" in document_recommendation:
-            ai_message += f"\n\n{document_recommendation}"
+            # Avoid duplicating the message if it's already part of the fallback prompt
+             if not (not _answer_found and auto_load_message and "Semantically selected" in auto_load_message):
+                 ai_message += f"\n\n{document_recommendation}"
         
         # Add AI response to conversation history if memory is enabled
         if memory_enabled:
+            # Ensure history is not excessively long (optional limit)
+            # if len(st.session_state.conversation_history) > 50: 
+            #     st.session_state.conversation_history = st.session_state.conversation_history[-50:]
             st.session_state.conversation_history.append({"role": "assistant", "content": ai_message})
         
         # Display AI message using code block to avoid formatting issues
