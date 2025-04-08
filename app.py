@@ -546,12 +546,12 @@ for i, message in enumerate(st.session_state.messages):
 
             # Handle initial feedback click
             if feedback:
-                # Store feedback value and index, then rerun to show comment box
+                # Store feedback value and index
                 st.session_state.current_feedback_value = feedback
                 st.session_state.pending_feedback_comment = i
                 # print(f"Feedback for message {i}: {feedback}") # Original print removed
-                st.rerun()
-            # --- End Comment Form Logic --- 
+                # st.rerun() # REMOVE RERUN HERE
+            # --- End Comment Form Logic ---
         else:
             st.write(content)
 
@@ -708,11 +708,11 @@ if user_input:
             
             # Handle initial feedback click for the new message
             if feedback:
-                 # Store feedback value and index, then rerun to show comment box
+                 # Store feedback value and index
                  st.session_state.current_feedback_value = feedback
                  st.session_state.pending_feedback_comment = new_message_index
                  # print(f"Feedback for new message {new_message_index}: {feedback}") # Original print removed
-                 st.rerun()
+                 # st.rerun() # REMOVE RERUN HERE
             # --- End Comment Form Logic ---
             
     except Exception as e:
