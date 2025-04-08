@@ -23,7 +23,7 @@ google_ef  = embedding_functions.GoogleGenerativeAiEmbeddingFunction(api_key=os.
 client = chromadb.PersistentClient()
 
 # Get the collection
-collection = client.get_collection(name="fin_doc_summaries", embedding_function=google_ef)
+collection = client.get_collection(name="doc_summaries", embedding_function=google_ef)
 
 json_file = "companies.json"
 with open(json_file, "r") as f:
@@ -82,6 +82,63 @@ def get_companies_from_query(query):
 
     return companies_found
 
+def get_doctype_from_query(query):
+    """Get the document type from the query.
+    Args:
+        query (str): The query to get the document type from.
+
+    Returns:
+        str: The document type.
+    """
+    
+    client = genai.Client(api_key=os.getenv("CHATBOT_API_KEY"))
+    response = client.models.generate_content(
+        model="gemini-2.0-flash-lite-001",
+        config=types.GenerateContentConfig(
+            system_instruction="""
+                You are a document classification assistant helping to identify the most relevant source type for answering user queries: financial documents, non-financial documents, or both.
+
+                Your task is to analyze the user's query and determine **which type of document(s)** would best provide a useful and accurate response, in order to minimize irrelevant or noisy context.
+
+                Respond in the following format:
+
+                    Justification: <your justification>
+                    Label: <financial | non-financial | both>
+
+                Where:
+                - Your **justification** explains your reasoning clearly and concisely.
+                - Your **response** must be one of the following (exact match):  
+                - 'financial' → for queries that rely on metrics, earnings, ratios, cash flows, or balance sheet information.  
+                - 'non-financial' → for queries that depend on business strategy, ESG initiatives, leadership tone, risks, or narrative insights.  
+                - 'both' → for queries that require a combination of numeric financial data *and* strategic or qualitative context.
+
+                Think carefully and respond accurately to ensure the correct documents are used to answer the query.
+                
+                For example:
+                Query: "What is the revenue growth of Company X in 2023?"
+                Justification: "The query is about financial metrics and data."
+                Label: "financial"
+                
+                Query: "What is the strategic direction of Company Y?"
+                Justification: "The query is about business strategy and non-financial information."
+                Label: "non-financial"
+                
+                Query: "Summarize Company Z's performance in 2023."
+                Justification: "Summarizing performance typically includes both financial results (e.g., revenue, profit) and qualitative drivers (e.g., market conditions, management commentary)."
+                Label: "both"
+                """,
+            temperature=0,
+        ),
+        contents=[query]
+    )
+    last_line = response.text.lower().strip().split("\n")[-1].strip('"')
+    doctype_map = {
+        "label: both": ["financial", "non-financial"],
+        "label: non-financial": ["non-financial"],
+        "label: financial": ["financial"]
+    }
+    return doctype_map.get(last_line, ["unknown"])
+
 def query_chromadb_sorted(collection, query, n_results=5):
     """
     Queries ChromaDB, retrieves matching documents, sorts them by year (most recent first),
@@ -102,13 +159,19 @@ def query_chromadb_sorted(collection, query, n_results=5):
     # Step 1: Get Company Matches
     company_matches = get_companies_from_query(query)
     logger.info(f"Company matches for query: {company_matches}")
+    
+    doc_type = get_doctype_from_query(query)
+    logger.info(f"Document type for query: {doc_type}")
 
     # Step 2: Query ChromaDB
     results = collection.query(
         query_texts=[query],
         n_results=n_results,
         where={
-            "company_name": {"$in": company_matches}
+            "$and": [
+                {"company_name": {"$in": company_matches}},
+                {"file_type": {"$in": doc_type}}
+            ]
         }
     )
     logger.info(f"ChromaDB query results count: {len(results.get('documents', [[]])[0])}")
@@ -163,6 +226,7 @@ def qa_bot(query: str, context: str):
 
         * **Insightful Analysis Based on Facts:** You must base your insights and analysis *exclusively* on the information explicitly stated or logically implied within the provided summaries. Aim to connect different pieces of information, identify trends, and explain the significance of the data in relation to the user's question.
         * **No Fabrication or External Information:** Under no circumstances should you make up information, invent scenarios, or bring in knowledge from outside the provided financial document summaries.
+        * **Most Recent Information:** If the user's question is about the most recent information, you should use the most recent document summaries.
         * **Handling Questions Beyond the Summaries:**
             * If the answer to the user's question requires information or analysis not explicitly present or logically derivable from the provided summaries, respond with: "Based on the provided document summaries, I cannot offer a more detailed or insightful analysis on this specific aspect." Then guide the user on how to find the answer.
             * If the question is unrelated to the financial document summaries, respond with: "This question falls outside the scope of the provided financial document summaries, and therefore I cannot offer an insightful response."
@@ -281,6 +345,6 @@ def qa_workflow(query: str, conversation_history: list = None):
 
 
 if __name__ == "__main__":
-    query = "How well did the EduFocal perform in 20243"
+    query = "Who is on Edufocal's board of directors?"
     answer = qa_workflow(query)
     print(answer)
