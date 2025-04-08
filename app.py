@@ -16,6 +16,18 @@ from utils.query_cache import qa_workflow, answer_found
 
 st.set_page_config(page_title="JSE Document Chat", page_icon=":material/chat:", layout="wide")
 
+# Initialize session state variables (moved to top)
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "metadata" not in st.session_state:
+    st.session_state.metadata = None
+if "document_texts" not in st.session_state:
+    st.session_state.document_texts = {}
+if "document_context" not in st.session_state:
+    st.session_state.document_context = ""
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -127,6 +139,9 @@ def download_and_extract_from_s3(s3_path):
         bucket_name = path_without_prefix.split('/')[0]
         key = '/'.join(path_without_prefix.split('/')[1:])
         
+        # Log the attempt
+        logger.info(f"Attempting to download S3 object: Bucket='{bucket_name}', Key='{key}' from Path='{s3_path}'")
+        
         with st.spinner(f"Downloading from S3: {key}..."):
             # Create a temporary file to store the PDF
             with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
@@ -143,6 +158,8 @@ def download_and_extract_from_s3(s3_path):
             
             return text
     except Exception as e:
+        # Log the error with details
+        logger.error(f"Error downloading/processing PDF from S3 Path='{s3_path}'. Bucket='{bucket_name}', Key='{key}'. Error: {str(e)}")
         st.error(f"Error downloading/processing PDF from S3: {str(e)}")
         return None
 
@@ -323,22 +340,35 @@ auto_load_documents = st.checkbox("Use semantic document selection", value=True,
 st.header("Metadata Configuration")
 metadata_option = st.radio("Select metadata source:", ["Use metadata from S3", "Upload metadata file"])
 
-metadata = None
+# Use session state for metadata
+# metadata = None # Remove local variable initialization
 if metadata_option == "Use metadata from S3":
-    # Load metadata from the S3 bucket specified in .env
-    metadata = load_metadata_from_s3()
-    if metadata:
-        st.success(f"Metadata loaded from S3 bucket 'jse-metadata-bucket': {len(metadata)} companies found.")
+    # Load metadata from the S3 bucket specified in .env only if not already loaded
+    if st.session_state.metadata is None:
+        st.session_state.metadata = load_metadata_from_s3()
+
+    # Display status based on session state metadata
+    if st.session_state.metadata:
+        st.success(f"Metadata loaded from S3 bucket 'jse-metadata-bucket': {len(st.session_state.metadata)} companies found.")
     else:
         st.warning(f"Failed to load metadata from S3 bucket 'jse-metadata-bucket'. Please check your AWS credentials and bucket name.")
 else:
     # Allow user to upload a metadata file
     uploaded_metadata = st.file_uploader("Upload metadata JSON file", type="json")
     if uploaded_metadata:
-        metadata_content = uploaded_metadata.read().decode('utf-8')
-        metadata = parse_metadata_file(metadata_content)
-        if metadata:
-            st.success(f"Metadata loaded: {len(metadata)} companies found.")
+        # Check if this is a new upload to avoid reprocessing
+        # (Simple check based on file uploader state, might need more robust logic if needed)
+        if st.session_state.get("last_uploaded_metadata_name") != uploaded_metadata.name:
+            metadata_content = uploaded_metadata.read().decode('utf-8')
+            # Store parsed metadata in session state
+            st.session_state.metadata = parse_metadata_file(metadata_content)
+            st.session_state.last_uploaded_metadata_name = uploaded_metadata.name # Track uploaded file
+
+        if st.session_state.metadata:
+            st.success(f"Metadata loaded: {len(st.session_state.metadata)} companies found.")
+        else:
+            # Clear tracker if parsing failed
+             st.session_state.pop("last_uploaded_metadata_name", None)
 
 # Sidebar for PDF upload and settings
 with st.sidebar:
@@ -350,8 +380,8 @@ with st.sidebar:
         ["Upload PDFs", "Manual Document Selection", "Automatic Only"]
     )
     
-    # Initialize document_texts dictionary to store all document contents
-    document_texts = {}
+    # Use session state for document_texts
+    # document_texts = {} # Remove local variable initialization
     
     # Upload PDFs option
     if doc_source in ["Upload PDFs", "Manual Document Selection"]:
@@ -361,30 +391,32 @@ with st.sidebar:
         # Process uploaded PDFs
         if uploaded_files:
             for file in uploaded_files:
-                # Generate a unique key for each file to avoid caching issues
-                file_key = f"{file.name}_{int(time.time())}"
-                
-                with st.spinner(f"Processing {file.name}..."):
-                    text = extract_text_from_pdf(BytesIO(file.getvalue()))
-                    if text:
-                        document_texts[file.name] = text
-                        st.success(f"Processed: {file.name}")
-                    else:
-                        st.error(f"Failed to process: {file.name}")
+                # Check if file is already processed and stored in session state
+                if file.name not in st.session_state.document_texts:
+                    with st.spinner(f"Processing {file.name}..."):
+                        text = extract_text_from_pdf(BytesIO(file.getvalue()))
+                        if text:
+                            # Store extracted text in session state
+                            st.session_state.document_texts[file.name] = text
+                            st.success(f"Processed: {file.name}")
+                        else:
+                            st.error(f"Failed to process: {file.name}")
+                else:
+                     st.info(f"Already processed: {file.name}") # Inform user if already loaded
     
     # Manual document selection option
-    if doc_source == "Manual Document Selection" and metadata:
+    if doc_source == "Manual Document Selection" and st.session_state.metadata:
         st.subheader("Manual Document Selection")
         
-        # Get list of companies
-        companies = list(metadata.keys())
+        # Get list of companies from session state metadata
+        companies = list(st.session_state.metadata.keys())
         
         # Company selection dropdown
         selected_company = st.selectbox("Select Company:", companies)
         
         if selected_company:
-            # Get documents for selected company
-            company_docs = metadata[selected_company]
+            # Get documents for selected company from session state metadata
+            company_docs = st.session_state.metadata[selected_company]
             
             # Create document selection checkboxes
             st.write("Select documents to load (max 3):")
@@ -403,26 +435,31 @@ with st.sidebar:
                     doc_url = doc["document_link"]
                     doc_name = doc["filename"]
                     
-                    with st.spinner(f"Downloading {doc_name}..."):
-                        text = download_and_extract_from_s3(doc_url)
-                        if text:
-                            document_texts[doc_name] = text
-                            st.success(f"Loaded: {doc_name}")
-                        else:
-                            st.error(f"Failed to load: {doc_name}")
-    elif doc_source == "Manual Document Selection" and not metadata:
+                    # Check if document is already loaded in session state
+                    if doc_name not in st.session_state.document_texts:
+                        with st.spinner(f"Downloading {doc_name}..."):
+                            text = download_and_extract_from_s3(doc_url)
+                            if text:
+                                # Store downloaded text in session state
+                                st.session_state.document_texts[doc_name] = text
+                                st.success(f"Loaded: {doc_name}")
+                            else:
+                                st.error(f"Failed to load: {doc_name}")
+                    else:
+                        st.info(f"Already loaded: {doc_name}") # Inform user
+    elif doc_source == "Manual Document Selection" and not st.session_state.metadata:
         st.error("Metadata file not found or contains invalid JSON")
         st.info("Please upload a metadata file or use the example metadata")
     
-    # Show currently loaded documents
-    if document_texts:
+    # Show currently loaded documents from session state
+    if st.session_state.document_texts:
         st.subheader("Currently Loaded Documents")
-        for doc_name in document_texts.keys():
+        for doc_name in st.session_state.document_texts.keys():
             st.info(f"✅ {doc_name}")
             
-        # Add button to clear loaded documents
+        # Add button to clear loaded documents from session state
         if st.button("Clear All Loaded Documents"):
-            document_texts = {}
+            st.session_state.document_texts = {} # Clear session state dict
             st.session_state.document_context = ""
             st.rerun()
     else:
@@ -445,35 +482,32 @@ with st.sidebar:
         memory_turns = len(st.session_state.conversation_history) // 2
         st.info(f"Conversation memory: {memory_turns} turns")
 
-# Initialize session state variables
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-if "document_context" not in st.session_state:
-    st.session_state.document_context = ""
-    
-if "conversation_history" not in st.session_state:
-    st.session_state.conversation_history = []
-
-# Update document context when new documents are loaded
-if document_texts and "document_context" in st.session_state:
-    # Combine all document texts with document names as headers
+# Update document context when new documents are loaded (using session state)
+if st.session_state.document_texts and "document_context" in st.session_state:
+    # Combine all document texts from session state with document names as headers
     combined_text = ""
-    for doc_name, doc_text in document_texts.items():
-        combined_text += f"Document: {doc_name}\n{doc_text}\n\n"
+    for doc_name, doc_text in st.session_state.document_texts.items():
+        combined_text += f"Document: {doc_name}\\n{doc_text}\\n\\n"
     
     st.session_state.document_context = combined_text
 
 # Display chat history
-for message in st.session_state.messages:
+# Use enumerate to get index for feedback keys
+for i, message in enumerate(st.session_state.messages):
     role = message["role"]
     content = message["content"]
-    
-    # Always use code blocks for assistant messages to avoid Markdown issues
-    if role == "assistant":
-        st.chat_message(role).code(content)
-    else:
-        st.chat_message(role).write(content)
+
+    with st.chat_message(role):
+        # Use code block for assistant to avoid markdown issues
+        if role == "assistant":
+            st.code(content)
+            # Add feedback for historical assistant messages
+            feedback = st.feedback(options="thumbs", key=f"feedback_{i}")
+            if feedback:
+                # Simple print for demonstration, replace with logging/storage
+                print(f"Feedback for message {i}: {feedback}") 
+        else:
+            st.write(content)
 
 # User input
 user_input = st.chat_input("Ask me about the uploaded documents...")
@@ -484,18 +518,23 @@ if user_input:
 
     # Auto-load relevant documents if enabled (limited to 3)
     auto_load_message = ""
-    if auto_load_documents and metadata:
-        document_texts, auto_load_message = auto_load_relevant_documents(user_input, metadata, document_texts)
+    if auto_load_documents and st.session_state.metadata:
+        # Pass session state document_texts to the function
+        st.session_state.document_texts, auto_load_message = auto_load_relevant_documents(
+            user_input,
+            st.session_state.metadata,
+            st.session_state.document_texts # Pass session state dict
+        )
         
         # If memory is disabled, we should mention this could affect document selection
         if not memory_enabled and "conversation_history" in st.session_state and len(st.session_state.conversation_history) > 0:
             auto_load_message += "\n\nNote: Conversation memory is disabled. Enabling it could improve document selection for follow-up questions."
         
-        # Update document context with any newly loaded documents
+        # Update document context with any newly loaded documents (reading from session state)
         if auto_load_message and "Semantically selected" in auto_load_message:
             combined_text = ""
-            for doc_name, doc_text in document_texts.items():
-                combined_text += f"Document: {doc_name}\n{doc_text}\n\n"
+            for doc_name, doc_text in st.session_state.document_texts.items():
+                combined_text += f"Document: {doc_name}\\n{doc_text}\\n\\n"
             st.session_state.document_context = combined_text
             
     # Store message for later use
@@ -598,8 +637,16 @@ if user_input:
             st.session_state.conversation_history.append({"role": "assistant", "content": ai_message})
         
         # Display AI message using code block to avoid formatting issues
+        # Store the index before appending for the feedback key
+        new_message_index = len(st.session_state.messages)
         st.session_state.messages.append({"role": "assistant", "content": ai_message})
-        st.chat_message("assistant").code(ai_message)
+        # Display the new message and add feedback
+        with st.chat_message("assistant"):
+            st.code(ai_message)
+            feedback = st.feedback(options="thumbs", key=f"feedback_{new_message_index}")
+            if feedback:
+                 # Simple print for demonstration
+                 print(f"Feedback for new message {new_message_index}: {feedback}")
             
     except Exception as e:
         st.error(f"Error generating response: {str(e)}")
