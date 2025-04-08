@@ -487,6 +487,26 @@ with st.sidebar:
         memory_turns = len(st.session_state.conversation_history) // 2
         st.info(f"Conversation memory: {memory_turns} turns")
 
+    # --- Export Conversation Logic ---
+    st.header("Export")
+    if st.session_state.messages:
+        # Format the conversation history for export
+        export_data = ""
+        for message in st.session_state.messages:
+            role = message["role"].capitalize()
+            content = message["content"]
+            export_data += f"{role}: {content}\n{'-'*20}\n"
+        
+        st.download_button(
+            label="Export Conversation",
+            data=export_data.encode('utf-8'), # Encode data to bytes
+            file_name="conversation_history.txt",
+            mime="text/plain"
+        )
+    else:
+        st.info("No conversation history to export yet.")
+    # --- End Export Conversation Logic ---
+
 # Update document context when new documents are loaded (using session state)
 if st.session_state.document_texts and "document_context" in st.session_state:
     # Combine all document texts from session state with document names as headers
