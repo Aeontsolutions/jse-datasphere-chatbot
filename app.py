@@ -27,6 +27,11 @@ if "document_context" not in st.session_state:
     st.session_state.document_context = ""
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
+# Add state for feedback comments
+if "pending_feedback_comment" not in st.session_state:
+    st.session_state.pending_feedback_comment = None # Stores index of message needing comment
+if "current_feedback_value" not in st.session_state:
+    st.session_state.current_feedback_value = None # Stores the 0 or 1 from the initial click
 
 # Configure logging
 logging.basicConfig(
@@ -502,10 +507,31 @@ for i, message in enumerate(st.session_state.messages):
         if role == "assistant":
             st.code(content)
             # Add feedback for historical assistant messages
-            feedback = st.feedback(options="thumbs", key=f"feedback_{i}")
+            feedback_key = f"feedback_{i}"
+            feedback = st.feedback(options="thumbs", key=feedback_key)
+            
+            # --- New Comment Form Logic (History) ---
+            # Check if this message needs a comment
+            if st.session_state.pending_feedback_comment == i:
+                comment_key = f"comment_{i}"
+                comment = st.text_area("Why this rating?", key=comment_key)
+                submit_key = f"submit_{i}"
+                if st.button("Submit Comment", key=submit_key):
+                    original_feedback = st.session_state.current_feedback_value
+                    print(f"Feedback for message {i}: Value={original_feedback}, Comment='{comment}'")
+                    # Reset state to hide form
+                    st.session_state.pending_feedback_comment = None
+                    st.session_state.current_feedback_value = None
+                    st.rerun()
+
+            # Handle initial feedback click
             if feedback:
-                # Simple print for demonstration, replace with logging/storage
-                print(f"Feedback for message {i}: {feedback}") 
+                # Store feedback value and index, then rerun to show comment box
+                st.session_state.current_feedback_value = feedback
+                st.session_state.pending_feedback_comment = i
+                # print(f"Feedback for message {i}: {feedback}") # Original print removed
+                st.rerun()
+            # --- End Comment Form Logic --- 
         else:
             st.write(content)
 
@@ -643,10 +669,31 @@ if user_input:
         # Display the new message and add feedback
         with st.chat_message("assistant"):
             st.code(ai_message)
-            feedback = st.feedback(options="thumbs", key=f"feedback_{new_message_index}")
+            feedback_key = f"feedback_{new_message_index}"
+            feedback = st.feedback(options="thumbs", key=feedback_key)
+
+            # --- New Comment Form Logic (New Message) ---
+            # Check if this new message needs a comment
+            if st.session_state.pending_feedback_comment == new_message_index:
+                comment_key = f"comment_{new_message_index}"
+                comment = st.text_area("Why this rating?", key=comment_key)
+                submit_key = f"submit_{new_message_index}"
+                if st.button("Submit Comment", key=submit_key):
+                    original_feedback = st.session_state.current_feedback_value
+                    print(f"Feedback for new message {new_message_index}: Value={original_feedback}, Comment='{comment}'")
+                    # Reset state to hide form
+                    st.session_state.pending_feedback_comment = None
+                    st.session_state.current_feedback_value = None
+                    st.rerun()
+            
+            # Handle initial feedback click for the new message
             if feedback:
-                 # Simple print for demonstration
-                 print(f"Feedback for new message {new_message_index}: {feedback}")
+                 # Store feedback value and index, then rerun to show comment box
+                 st.session_state.current_feedback_value = feedback
+                 st.session_state.pending_feedback_comment = new_message_index
+                 # print(f"Feedback for new message {new_message_index}: {feedback}") # Original print removed
+                 st.rerun()
+            # --- End Comment Form Logic ---
             
     except Exception as e:
         st.error(f"Error generating response: {str(e)}")
