@@ -298,21 +298,22 @@ class QueryEnhancer:
                 )
             
             enhancement_prompt = f"""
-            You are a financial analyst assistant. Your task is to enhance the user's query to make it more effective for retrieving and analyzing financial document information.
+            You are a financial analyst assistant. Your task is to enhance the user's query to make it more effective for retrieving and analyzing financial and non-financial document information.
             
             Consider the following:
-            1. The query will be used to search through financial statements and reports
-            2. The response should maintain the original intent while being more specific about financial metrics and time periods
+            1. The query will be used to search through financial and non-financial statements and reports
+            2. The response should maintain the original intent while being more specific about financial metrics, time periods, and non-financial information
             3. Include relevant financial terminology when appropriate
             4. If the query is about company performance, specify which metrics would be most relevant
+            5. If the query is about non-financial information, such as ESG initiatives, leadership tone, risks, or narrative insights, specify which non-financial information would be most relevant
             
             Previous conversation context:
             {conversation_context}
             
             Original query: {query}
             
-            Please provide an enhanced version of this query that would be more effective for financial document analysis.
-            Focus on making it more specific and relevant to financial statement analysis.
+            Please provide an enhanced version of this query that would be more effective for financial and non-financial document analysis.
+            Focus on making it more specific and relevant to financial and non-financial statement analysis.
             """
             
             response = client.models.generate_content(
