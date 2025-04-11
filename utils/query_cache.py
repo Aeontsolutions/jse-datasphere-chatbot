@@ -32,7 +32,7 @@ class Config:
     FUZZY_MATCH_THRESHOLD: int = 80
     DEFAULT_N_RESULTS: int = 5
     GEMINI_MODEL: str = "gemini-2.0-flash-lite-001"
-    GEMINI_PRO_MODEL: str = "gemini-2.5-pro-exp-03-25"
+    GEMINI_PRO_MODEL: str = "gemini-2.0-flash-001"
 
 class CompanyMatcher:
     """Handles company name matching and lookup."""
@@ -420,6 +420,6 @@ qa_workflow = QAWorkflow().qa_workflow
 answer_found = AnswerValidator(Config()).answer_found
 
 if __name__ == "__main__":
-    query = "Who is on Edufocal's board of directors?"
+    query = "Compare Edufocal and One on One."
     answer = qa_workflow(query)
     print(answer)
