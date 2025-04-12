@@ -8,3 +8,8 @@ PyPDF2
 vertexai
 spacy==3.8.3
 uvicorn
+fastapi
+rapidfuzz
+chromadb
+google-genai
+google-generativeai

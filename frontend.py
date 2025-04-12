@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import json
+import os
 from typing import List, Dict
 
 # Configure the page
@@ -16,7 +17,7 @@ if "messages" not in st.session_state:
 
 # Initialize session state for API URL
 if "api_url" not in st.session_state:
-    st.session_state.api_url = "http://localhost:8000"
+    st.session_state.api_url = os.getenv("API_URL", "http://localhost:8000")
 
 # Sidebar for settings
 with st.sidebar:
