@@ -1,114 +1,135 @@
-# JSE Datasphere Chatbot
+# JSE Document Chat
 
-A Streamlit application that allows users to chat with PDF documents stored in AWS S3 buckets using Google's Vertex AI Gemini models.
+A sophisticated chat interface for querying and analyzing Jamaica Stock Exchange (JSE) documents using AI and vector-based semantic search.
 
 ## Features
 
-- PDF document processing from uploads or S3 storage
-- Semantic document selection based on user queries
-- Conversation memory to maintain context across queries
-- Integration with Google Vertex AI Gemini models
-- Docker support for easy deployment
+- Natural language queries about JSE documents using advanced AI models
+- Vector-based semantic search powered by ChromaDB
+- AI-powered document analysis and recommendations
+- Conversation memory for contextual understanding
+- View actual document content used for answers
+- Document recommendations based on queries
+- PDF processing and text extraction capabilities
+- Integration with Google Cloud's Vertex AI and AWS S3
 
 ## Prerequisites
 
-- AWS account with S3 access
-- Google Cloud account with Vertex AI access
+- Python 3.10 or higher
+- AWS credentials configured in environment variables:
+  - `AWS_ACCESS_KEY_ID`
+  - `AWS_SECRET_ACCESS_KEY`
+  - `AWS_DEFAULT_REGION`
+  - `DOCUMENT_METADATA_S3_BUCKET`
+- Google Cloud credentials:
+  - `GOOGLE_APPLICATION_CREDENTIALS` pointing to your service account key file
 - Docker and Docker Compose (for containerized deployment)
 
-## Environment Setup
+## Installation
 
-The application requires the following environment variables to be set in a `.env` file:
-
-```
-AWS_ACCESS_KEY_ID=your_aws_access_key
-AWS_SECRET_ACCESS_KEY=your_aws_secret_key
-AWS_DEFAULT_REGION=your_aws_region
-DOCUMENT_METADATA_S3_BUCKET=jse-metadata-bucket
-GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd jse-datasphere-chatbot
 ```
 
-An example file `.env.example` is provided as a template.
-
-## Service Account
-
-A Google Cloud service account JSON file is required for Vertex AI authentication. Save this file as `service-account.json` in the project root directory.
-
-## Metadata Structure
-
-The application expects a metadata.json file in the S3 bucket that provides information about available documents. The structure should be:
-
-```json
-{
-  "company1": [
-    {
-      "filename": "document1.pdf",
-      "document_type": "Annual Report",
-      "period": "2023",
-      "document_link": "s3://jse-renamed-docs/organized/path/to/document1.pdf"
-    },
-    ...
-  ],
-  "company2": [
-    ...
-  ]
-}
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-## Running Locally
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-1. Clone the repository
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Set up environment variables in `.env` file
-4. Run the application:
-   ```
-   streamlit run app.py
-   ```
+4. Set up environment variables:
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+```
 
-## Docker Deployment
+## Running the Application
 
-1. Build and start the container:
-   ```
-   docker-compose up -d
-   ```
+The application consists of two components that need to be run separately:
 
-2. To stop the container:
-   ```
-   docker-compose down
-   ```
+### 1. API Backend
 
-## Usage
+The API backend provides the core functionality for document processing, vector search, and AI interactions.
 
-1. Access the application at http://localhost:8501
-2. Select a document source (Upload, Manual Selection, or Automatic)
-3. Ask questions about the documents
-4. The application will automatically select relevant documents based on your queries
+#### Local Development
+```bash
+# Start the API server
+uvicorn api:app --host 0.0.0.0 --port 8000
+```
 
-## File Structure
+The API will be available at `http://localhost:8000`. You can access the API documentation at `http://localhost:8000/docs`.
 
-- `app.py` - Main Streamlit application
-- `requirements.txt` - Python dependencies
-- `.dockerignore` - Files to exclude from Docker image
-- `.env.example` - Example environment variables
-- `Dockerfile` - Docker configuration
-- `docker-compose.yml` - Docker Compose configuration
-- `create_docker_files.bat` - Windows batch script to generate Docker files
+#### Docker Deployment
+1. Ensure your `.env` file is properly configured with all required environment variables.
 
-## Dependencies
+2. Place your Google Cloud service account key file as `service-account.json` in the project root.
 
-- streamlit - Web application framework
-- boto3 - AWS SDK for Python
-- python-dotenv - Environment variable management
-- google-auth, google-cloud-aiplatform - Google Cloud authentication and Vertex AI
-- PyPDF2 - PDF processing
-- vertexai - Google Vertex AI client
-- pycryptodome - Cryptographic library
+3. Build and start the container:
+```bash
+docker-compose up -d
+```
 
-## Security Notes
+4. To stop the container:
+```bash
+docker-compose down
+```
 
-- Never commit sensitive files like `.env` or `service-account.json` to version control
-- Use environment variables for all sensitive credentials
-- Keep AWS and Google Cloud credentials secure
+The API will be available at `http://localhost:8000` when running in Docker.
+
+### 2. Streamlit Frontend
+
+The Streamlit frontend provides a user-friendly interface for interacting with the API.
+
+```bash
+# In a new terminal, start the Streamlit interface
+streamlit run frontend.py
+```
+
+The frontend will be available at `http://localhost:8501`.
+
+## Project Structure
+
+- `api.py` - FastAPI backend with document processing and AI integration
+- `frontend.py` - Streamlit-based user interface
+- `app.py` - Core application logic and utilities
+- `utils/` - Utility functions and helper modules
+- `chroma/` - Vector database storage for semantic search
+- `pdfs/` - Directory for storing and processing PDF documents
+
+## Development
+
+- The API backend is built with FastAPI
+- The frontend is built with Streamlit
+- AI capabilities are powered by Google's Vertex AI and Google Generative AI
+- Document storage and retrieval uses AWS S3
+- Vector search is implemented using ChromaDB
+- PDF processing uses PyPDF2
+- Natural Language Processing uses spaCy 3.8.3
+
+## Troubleshooting
+
+If you encounter issues:
+
+1. Check that all required environment variables are set in your `.env` file
+2. Verify that both the API and frontend are running
+3. Ensure you have the correct AWS and Google Cloud credentials
+4. Check the logs in both terminal windows for error messages
+5. For Docker issues:
+   - Check Docker logs: `docker-compose logs api`
+   - Verify environment variables are set correctly
+   - Ensure the service account file is present and valid
+6. For ChromaDB issues:
+   - Verify the `chroma/` directory exists and has proper permissions
+   - Check if the vector database is properly initialized
+7. For PDF processing issues:
+   - Ensure PDF files are not corrupted
+   - Check if PyPDF2 can properly read the files
+
+## License

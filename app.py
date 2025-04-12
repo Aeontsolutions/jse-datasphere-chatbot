@@ -11,6 +11,34 @@ import tempfile
 import PyPDF2
 from io import BytesIO
 import time
+import logging
+from utils.query_cache import qa_workflow, answer_found
+
+st.set_page_config(page_title="JSE Document Chat", page_icon=":material/chat:", layout="wide")
+
+# Initialize session state variables (moved to top)
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "metadata" not in st.session_state:
+    st.session_state.metadata = None
+if "document_texts" not in st.session_state:
+    st.session_state.document_texts = {}
+if "document_context" not in st.session_state:
+    st.session_state.document_context = ""
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+# Add state for feedback comments
+if "pending_feedback_comment" not in st.session_state:
+    st.session_state.pending_feedback_comment = None # Stores index of message needing comment
+if "current_feedback_value" not in st.session_state:
+    st.session_state.current_feedback_value = None # Stores the 0 or 1 from the initial click
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -116,6 +144,9 @@ def download_and_extract_from_s3(s3_path):
         bucket_name = path_without_prefix.split('/')[0]
         key = '/'.join(path_without_prefix.split('/')[1:])
         
+        # Log the attempt
+        logger.info(f"Attempting to download S3 object: Bucket='{bucket_name}', Key='{key}' from Path='{s3_path}'")
+        
         with st.spinner(f"Downloading from S3: {key}..."):
             # Create a temporary file to store the PDF
             with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
@@ -132,6 +163,8 @@ def download_and_extract_from_s3(s3_path):
             
             return text
     except Exception as e:
+        # Log the error with details
+        logger.error(f"Error downloading/processing PDF from S3 Path='{s3_path}'. Bucket='{bucket_name}', Key='{key}'. Error: {str(e)}")
         st.error(f"Error downloading/processing PDF from S3: {str(e)}")
         return None
 
@@ -312,22 +345,35 @@ auto_load_documents = st.checkbox("Use semantic document selection", value=True,
 st.header("Metadata Configuration")
 metadata_option = st.radio("Select metadata source:", ["Use metadata from S3", "Upload metadata file"])
 
-metadata = None
+# Use session state for metadata
+# metadata = None # Remove local variable initialization
 if metadata_option == "Use metadata from S3":
-    # Load metadata from the S3 bucket specified in .env
-    metadata = load_metadata_from_s3()
-    if metadata:
-        st.success(f"Metadata loaded from S3 bucket 'jse-metadata-bucket': {len(metadata)} companies found.")
+    # Load metadata from the S3 bucket specified in .env only if not already loaded
+    if st.session_state.metadata is None:
+        st.session_state.metadata = load_metadata_from_s3()
+
+    # Display status based on session state metadata
+    if st.session_state.metadata:
+        st.success(f"Metadata loaded from S3 bucket 'jse-metadata-bucket': {len(st.session_state.metadata)} companies found.")
     else:
         st.warning(f"Failed to load metadata from S3 bucket 'jse-metadata-bucket'. Please check your AWS credentials and bucket name.")
 else:
     # Allow user to upload a metadata file
     uploaded_metadata = st.file_uploader("Upload metadata JSON file", type="json")
     if uploaded_metadata:
-        metadata_content = uploaded_metadata.read().decode('utf-8')
-        metadata = parse_metadata_file(metadata_content)
-        if metadata:
-            st.success(f"Metadata loaded: {len(metadata)} companies found.")
+        # Check if this is a new upload to avoid reprocessing
+        # (Simple check based on file uploader state, might need more robust logic if needed)
+        if st.session_state.get("last_uploaded_metadata_name") != uploaded_metadata.name:
+            metadata_content = uploaded_metadata.read().decode('utf-8')
+            # Store parsed metadata in session state
+            st.session_state.metadata = parse_metadata_file(metadata_content)
+            st.session_state.last_uploaded_metadata_name = uploaded_metadata.name # Track uploaded file
+
+        if st.session_state.metadata:
+            st.success(f"Metadata loaded: {len(st.session_state.metadata)} companies found.")
+        else:
+            # Clear tracker if parsing failed
+             st.session_state.pop("last_uploaded_metadata_name", None)
 
 # Sidebar for PDF upload and settings
 with st.sidebar:
@@ -339,8 +385,8 @@ with st.sidebar:
         ["Upload PDFs", "Manual Document Selection", "Automatic Only"]
     )
     
-    # Initialize document_texts dictionary to store all document contents
-    document_texts = {}
+    # Use session state for document_texts
+    # document_texts = {} # Remove local variable initialization
     
     # Upload PDFs option
     if doc_source in ["Upload PDFs", "Manual Document Selection"]:
@@ -350,30 +396,32 @@ with st.sidebar:
         # Process uploaded PDFs
         if uploaded_files:
             for file in uploaded_files:
-                # Generate a unique key for each file to avoid caching issues
-                file_key = f"{file.name}_{int(time.time())}"
-                
-                with st.spinner(f"Processing {file.name}..."):
-                    text = extract_text_from_pdf(BytesIO(file.getvalue()))
-                    if text:
-                        document_texts[file.name] = text
-                        st.success(f"Processed: {file.name}")
-                    else:
-                        st.error(f"Failed to process: {file.name}")
+                # Check if file is already processed and stored in session state
+                if file.name not in st.session_state.document_texts:
+                    with st.spinner(f"Processing {file.name}..."):
+                        text = extract_text_from_pdf(BytesIO(file.getvalue()))
+                        if text:
+                            # Store extracted text in session state
+                            st.session_state.document_texts[file.name] = text
+                            st.success(f"Processed: {file.name}")
+                        else:
+                            st.error(f"Failed to process: {file.name}")
+                else:
+                     st.info(f"Already processed: {file.name}") # Inform user if already loaded
     
     # Manual document selection option
-    if doc_source == "Manual Document Selection" and metadata:
+    if doc_source == "Manual Document Selection" and st.session_state.metadata:
         st.subheader("Manual Document Selection")
         
-        # Get list of companies
-        companies = list(metadata.keys())
+        # Get list of companies from session state metadata
+        companies = list(st.session_state.metadata.keys())
         
         # Company selection dropdown
         selected_company = st.selectbox("Select Company:", companies)
         
         if selected_company:
-            # Get documents for selected company
-            company_docs = metadata[selected_company]
+            # Get documents for selected company from session state metadata
+            company_docs = st.session_state.metadata[selected_company]
             
             # Create document selection checkboxes
             st.write("Select documents to load (max 3):")
@@ -392,26 +440,31 @@ with st.sidebar:
                     doc_url = doc["document_link"]
                     doc_name = doc["filename"]
                     
-                    with st.spinner(f"Downloading {doc_name}..."):
-                        text = download_and_extract_from_s3(doc_url)
-                        if text:
-                            document_texts[doc_name] = text
-                            st.success(f"Loaded: {doc_name}")
-                        else:
-                            st.error(f"Failed to load: {doc_name}")
-    elif doc_source == "Manual Document Selection" and not metadata:
+                    # Check if document is already loaded in session state
+                    if doc_name not in st.session_state.document_texts:
+                        with st.spinner(f"Downloading {doc_name}..."):
+                            text = download_and_extract_from_s3(doc_url)
+                            if text:
+                                # Store downloaded text in session state
+                                st.session_state.document_texts[doc_name] = text
+                                st.success(f"Loaded: {doc_name}")
+                            else:
+                                st.error(f"Failed to load: {doc_name}")
+                    else:
+                        st.info(f"Already loaded: {doc_name}") # Inform user
+    elif doc_source == "Manual Document Selection" and not st.session_state.metadata:
         st.error("Metadata file not found or contains invalid JSON")
         st.info("Please upload a metadata file or use the example metadata")
     
-    # Show currently loaded documents
-    if document_texts:
+    # Show currently loaded documents from session state
+    if st.session_state.document_texts:
         st.subheader("Currently Loaded Documents")
-        for doc_name in document_texts.keys():
+        for doc_name in st.session_state.document_texts.keys():
             st.info(f"✅ {doc_name}")
             
-        # Add button to clear loaded documents
+        # Add button to clear loaded documents from session state
         if st.button("Clear All Loaded Documents"):
-            document_texts = {}
+            st.session_state.document_texts = {} # Clear session state dict
             st.session_state.document_context = ""
             st.rerun()
     else:
@@ -434,35 +487,73 @@ with st.sidebar:
         memory_turns = len(st.session_state.conversation_history) // 2
         st.info(f"Conversation memory: {memory_turns} turns")
 
-# Initialize session state variables
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+    # --- Export Conversation Logic ---
+    st.header("Export")
+    if st.session_state.messages:
+        # Format the conversation history for export
+        export_data = ""
+        for message in st.session_state.messages:
+            role = message["role"].capitalize()
+            content = message["content"]
+            export_data += f"{role}: {content}\n{'-'*20}\n"
+        
+        st.download_button(
+            label="Export Conversation",
+            data=export_data.encode('utf-8'), # Encode data to bytes
+            file_name="conversation_history.txt",
+            mime="text/plain"
+        )
+    else:
+        st.info("No conversation history to export yet.")
+    # --- End Export Conversation Logic ---
 
-if "document_context" not in st.session_state:
-    st.session_state.document_context = ""
-    
-if "conversation_history" not in st.session_state:
-    st.session_state.conversation_history = []
-
-# Update document context when new documents are loaded
-if document_texts and "document_context" in st.session_state:
-    # Combine all document texts with document names as headers
+# Update document context when new documents are loaded (using session state)
+if st.session_state.document_texts and "document_context" in st.session_state:
+    # Combine all document texts from session state with document names as headers
     combined_text = ""
-    for doc_name, doc_text in document_texts.items():
-        combined_text += f"Document: {doc_name}\n{doc_text}\n\n"
+    for doc_name, doc_text in st.session_state.document_texts.items():
+        combined_text += f"Document: {doc_name}\\n{doc_text}\\n\\n"
     
     st.session_state.document_context = combined_text
 
 # Display chat history
-for message in st.session_state.messages:
+# Use enumerate to get index for feedback keys
+for i, message in enumerate(st.session_state.messages):
     role = message["role"]
     content = message["content"]
-    
-    # Always use code blocks for assistant messages to avoid Markdown issues
-    if role == "assistant":
-        st.chat_message(role).code(content)
-    else:
-        st.chat_message(role).write(content)
+
+    with st.chat_message(role):
+        # Use code block for assistant to avoid markdown issues
+        if role == "assistant":
+            st.code(content)
+            # Add feedback for historical assistant messages
+            feedback_key = f"feedback_{i}"
+            feedback = st.feedback(options="thumbs", key=feedback_key)
+            
+            # --- New Comment Form Logic (History) ---
+            # Check if this message needs a comment
+            if st.session_state.pending_feedback_comment == i:
+                comment_key = f"comment_{i}"
+                comment = st.text_area("Why this rating?", key=comment_key)
+                submit_key = f"submit_{i}"
+                if st.button("Submit Comment", key=submit_key):
+                    original_feedback = st.session_state.current_feedback_value
+                    print(f"Feedback for message {i}: Value={original_feedback}, Comment='{comment}'")
+                    # Reset state to hide form
+                    st.session_state.pending_feedback_comment = None
+                    st.session_state.current_feedback_value = None
+                    st.rerun()
+
+            # Handle initial feedback click
+            if feedback:
+                # Store feedback value and index
+                st.session_state.current_feedback_value = feedback
+                st.session_state.pending_feedback_comment = i
+                # print(f"Feedback for message {i}: {feedback}") # Original print removed
+                # st.rerun() # REMOVE RERUN HERE
+            # --- End Comment Form Logic ---
+        else:
+            st.write(content)
 
 # User input
 user_input = st.chat_input("Ask me about the uploaded documents...")
@@ -473,96 +564,156 @@ if user_input:
 
     # Auto-load relevant documents if enabled (limited to 3)
     auto_load_message = ""
-    if auto_load_documents and metadata:
-        document_texts, auto_load_message = auto_load_relevant_documents(user_input, metadata, document_texts)
+    if auto_load_documents and st.session_state.metadata:
+        # Pass session state document_texts to the function
+        st.session_state.document_texts, auto_load_message = auto_load_relevant_documents(
+            user_input,
+            st.session_state.metadata,
+            st.session_state.document_texts # Pass session state dict
+        )
         
         # If memory is disabled, we should mention this could affect document selection
         if not memory_enabled and "conversation_history" in st.session_state and len(st.session_state.conversation_history) > 0:
             auto_load_message += "\n\nNote: Conversation memory is disabled. Enabling it could improve document selection for follow-up questions."
         
-        # Update document context with any newly loaded documents
+        # Update document context with any newly loaded documents (reading from session state)
         if auto_load_message and "Semantically selected" in auto_load_message:
             combined_text = ""
-            for doc_name, doc_text in document_texts.items():
-                combined_text += f"Document: {doc_name}\n{doc_text}\n\n"
+            for doc_name, doc_text in st.session_state.document_texts.items():
+                combined_text += f"Document: {doc_name}\\n{doc_text}\\n\\n"
             st.session_state.document_context = combined_text
             
     # Store message for later use
     document_recommendation = auto_load_message
 
     try:
-        # Generate response using Vertex AI Gemini
-        model = GenerativeModel("gemini-2.0-flash-001")
-        
-        # Append the new user message to conversation history if memory is enabled
-        if memory_enabled:
-            st.session_state.conversation_history.append({"role": "user", "content": user_input})
+        # First try the structured QA implementation
+        logger.info("Attempting structured QA implementation...")
+        structured_answer = None
+        _answer_found = False  # Initialize to False
+        try:
+            if st.session_state.conversation_history:
+                structured_answer = qa_workflow(user_input, st.session_state.conversation_history[-10:])
+            else:
+                structured_answer = qa_workflow(user_input)
+                
+            # Check if the answer was found only if structured_answer is not None
+            if structured_answer:
+                _answer_found = answer_found(structured_answer, user_input)
+                logger.info(f"Answer found check result: {_answer_found}")
+            else:
+                 logger.info("Structured QA returned None, skipping answer_found check.")
+
+        except Exception as e:
+            logger.error(f"Error during structured QA or answer check: {str(e)}")
+            # Ensure _answer_found remains False if an error occurs
+            _answer_found = False 
             
-            # Construct the conversation context from history (limited to maintain token limits)
-            # Only include the last 10 exchanges to avoid context length issues
-            recent_history = st.session_state.conversation_history[-20:]
-            conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+        # Decide based on whether the answer was found
+        if _answer_found:
+            logger.info("Structured answer considered valid.")
+            ai_message = structured_answer
         else:
-            # Memory is disabled, only use the current question
-            conversation_context = f"user: {user_input}"
+            logger.info("Structured answer not found or invalid, falling back to dynamic QA implementation.")
+            # Fallback logic starts here...
+            model = GenerativeModel("gemini-2.0-flash-001")
         
-        # If we have document context, include it in the prompt
-        if st.session_state.document_context:
-            # Create a prompt that includes document context and conversation history
-            prompt = f"""
-            The following are documents that have been uploaded:
+            # Append the new user message to conversation history if memory is enabled
+            if memory_enabled:
+                st.session_state.conversation_history.append({"role": "user", "content": user_input})
+                
+                # Construct the conversation context from history (limited to maintain token limits)
+                recent_history = st.session_state.conversation_history[-20:] # Keep context length reasonable
+                conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+            else:
+                # If memory is off, just use the current input
+                conversation_context = f"user: {user_input}"
             
-            {st.session_state.document_context}
+            # Prepare prompt for fallback model
+            if st.session_state.document_context:
+                prompt = f"""
+                The following are documents that have been uploaded:
+                
+                {st.session_state.document_context}
+                
+                Previous conversation:
+                {conversation_context}
+                
+                Based on the above documents and our conversation history, please answer the following question:
+                {user_input}
+                
+                If the question relates to our previous conversation, use that context in your answer.
+                
+                IMPORTANT: Use plain text formatting for all financial data. Do not use special formatting for dollar amounts or numbers.
+                """
+                
+                # Add auto-load message if relevant
+                if auto_load_message and "Semantically selected" in auto_load_message:
+                    prompt += f"\n\nNote: {auto_load_message}"
+                
+                response = model.generate_content(prompt)
+            else:
+                # No document context, just use conversation
+                prompt = f"""
+                Previous conversation:
+                {conversation_context}
+                
+                Based on our conversation history, please answer the following question:
+                {user_input}
+                
+                If the question relates to our previous conversation, use that context in your answer.
+                
+                IMPORTANT: Use plain text formatting for all financial data. Do not use special formatting for dollar amounts or numbers.
+                """
+                response = model.generate_content(prompt)
             
-            Previous conversation:
-            {conversation_context}
-            
-            Based on the above documents and our conversation history, please answer the following question:
-            {user_input}
-            
-            If the question relates to our previous conversation, use that context in your answer.
-            
-            IMPORTANT: Use plain text formatting for all financial data. Do not use special formatting for dollar amounts or numbers.
-            """
-            
-            # If auto-loaded documents, add that context
-            if auto_load_message and "Semantically selected" in auto_load_message:
-                prompt += f"\n\nNote: {auto_load_message}"
-            
-            # Generate response with document context and conversation history
-            response = model.generate_content(prompt)
-        else:
-            # No documents uploaded, just use conversation history
-            prompt = f"""
-            Previous conversation:
-            {conversation_context}
-            
-            Based on our conversation history, please answer the following question:
-            {user_input}
-            
-            If the question relates to our previous conversation, use that context in your answer.
-            
-            IMPORTANT: Use plain text formatting for all financial data. Do not use special formatting for dollar amounts or numbers.
-            """
-            response = model.generate_content(prompt)
-        
-        ai_message = response.text
-        
-        # Add document recommendation to the AI response if relevant
+            ai_message = response.text
+
+        # Add document recommendation to the AI response if relevant (outside the if/else block)
         if document_recommendation and "Semantically selected" in document_recommendation:
-            ai_message += f"\n\n{document_recommendation}"
+            # Avoid duplicating the message if it's already part of the fallback prompt
+             if not (not _answer_found and auto_load_message and "Semantically selected" in auto_load_message):
+                 ai_message += f"\n\n{document_recommendation}"
         
         # Add AI response to conversation history if memory is enabled
         if memory_enabled:
-            # Don't include auto-load message in the conversation history to avoid repetition
-            history_message = ai_message
-            if document_recommendation:
-                history_message = history_message.replace(document_recommendation, "")
-            st.session_state.conversation_history.append({"role": "assistant", "content": history_message})
+            # Ensure history is not excessively long (optional limit)
+            # if len(st.session_state.conversation_history) > 50: 
+            #     st.session_state.conversation_history = st.session_state.conversation_history[-50:]
+            st.session_state.conversation_history.append({"role": "assistant", "content": ai_message})
         
         # Display AI message using code block to avoid formatting issues
+        # Store the index before appending for the feedback key
+        new_message_index = len(st.session_state.messages)
         st.session_state.messages.append({"role": "assistant", "content": ai_message})
-        st.chat_message("assistant").code(ai_message)
+        # Display the new message and add feedback
+        with st.chat_message("assistant"):
+            st.code(ai_message)
+            feedback_key = f"feedback_{new_message_index}"
+            feedback = st.feedback(options="thumbs", key=feedback_key)
+
+            # --- New Comment Form Logic (New Message) ---
+            # Check if this new message needs a comment
+            if st.session_state.pending_feedback_comment == new_message_index:
+                comment_key = f"comment_{new_message_index}"
+                comment = st.text_area("Why this rating?", key=comment_key)
+                submit_key = f"submit_{new_message_index}"
+                if st.button("Submit Comment", key=submit_key):
+                    original_feedback = st.session_state.current_feedback_value
+                    print(f"Feedback for new message {new_message_index}: Value={original_feedback}, Comment='{comment}'")
+                    # Reset state to hide form
+                    st.session_state.pending_feedback_comment = None
+                    st.session_state.current_feedback_value = None
+                    st.rerun()
+            
+            # Handle initial feedback click for the new message
+            if feedback:
+                 # Store feedback value and index
+                 st.session_state.current_feedback_value = feedback
+                 st.session_state.pending_feedback_comment = new_message_index
+                 # print(f"Feedback for new message {new_message_index}: {feedback}") # Original print removed
+                 # st.rerun() # REMOVE RERUN HERE
+            # --- End Comment Form Logic ---
             
     except Exception as e:
         st.error(f"Error generating response: {str(e)}")

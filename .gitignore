@@ -4,6 +4,7 @@
 # Google Cloud service account
 *.json
 !metadata-example.json
+!companies.json
 
 # Python
 __pycache__/
@@ -48,3 +49,8 @@ Thumbs.db
 
 # PDF files uploaded by users
 *.pdf
+*.txt
+
+# Chroma DB 
+./chroma_db/*
+./chroma/*
