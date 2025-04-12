@@ -1,6 +1,6 @@
 # JSE Document Chat
 
-A chat interface for querying and analyzing JSE (Johannesburg Stock Exchange) documents using AI.
+A chat interface for querying and analyzing JSE (Jamaica Stock Exchange) documents using AI.
 
 ## Features
 
@@ -103,5 +103,3 @@ If you encounter issues:
 4. Check the logs in both terminal windows for error messages
 
 ## License
-
-[Your License Here]
