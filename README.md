@@ -1,114 +1,107 @@
-# JSE Datasphere Chatbot
+# JSE Document Chat
 
-A Streamlit application that allows users to chat with PDF documents stored in AWS S3 buckets using Google's Vertex AI Gemini models.
+A chat interface for querying and analyzing JSE (Johannesburg Stock Exchange) documents using AI.
 
 ## Features
 
-- PDF document processing from uploads or S3 storage
-- Semantic document selection based on user queries
-- Conversation memory to maintain context across queries
-- Integration with Google Vertex AI Gemini models
-- Docker support for easy deployment
+- Natural language queries about JSE documents
+- AI-powered document analysis and recommendations
+- Conversation memory for contextual understanding
+- View actual document content used for answers
+- Document recommendations based on queries
 
 ## Prerequisites
 
-- AWS account with S3 access
-- Google Cloud account with Vertex AI access
-- Docker and Docker Compose (for containerized deployment)
+- Python 3.10 or higher
+- AWS credentials configured in environment variables:
+  - `AWS_ACCESS_KEY_ID`
+  - `AWS_SECRET_ACCESS_KEY`
+  - `AWS_DEFAULT_REGION`
+  - `DOCUMENT_METADATA_S3_BUCKET`
+- Google Cloud credentials:
+  - `GOOGLE_APPLICATION_CREDENTIALS` pointing to your service account key file
 
-## Environment Setup
+## Installation
 
-The application requires the following environment variables to be set in a `.env` file:
-
-```
-AWS_ACCESS_KEY_ID=your_aws_access_key
-AWS_SECRET_ACCESS_KEY=your_aws_secret_key
-AWS_DEFAULT_REGION=your_aws_region
-DOCUMENT_METADATA_S3_BUCKET=jse-metadata-bucket
-GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
-```
-
-An example file `.env.example` is provided as a template.
-
-## Service Account
-
-A Google Cloud service account JSON file is required for Vertex AI authentication. Save this file as `service-account.json` in the project root directory.
-
-## Metadata Structure
-
-The application expects a metadata.json file in the S3 bucket that provides information about available documents. The structure should be:
-
-```json
-{
-  "company1": [
-    {
-      "filename": "document1.pdf",
-      "document_type": "Annual Report",
-      "period": "2023",
-      "document_link": "s3://jse-renamed-docs/organized/path/to/document1.pdf"
-    },
-    ...
-  ],
-  "company2": [
-    ...
-  ]
-}
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd jse-datasphere-chatbot
 ```
 
-## Running Locally
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
-1. Clone the repository
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Set up environment variables in `.env` file
-4. Run the application:
-   ```
-   streamlit run app.py
-   ```
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-## Docker Deployment
+## Running the Application
 
-1. Build and start the container:
-   ```
-   docker-compose up -d
-   ```
+The application consists of two components that need to be run separately:
 
-2. To stop the container:
-   ```
-   docker-compose down
-   ```
+### 1. API Backend
 
-## Usage
+The API backend provides the core functionality for document processing and AI interactions.
 
-1. Access the application at http://localhost:8501
-2. Select a document source (Upload, Manual Selection, or Automatic)
-3. Ask questions about the documents
-4. The application will automatically select relevant documents based on your queries
+```bash
+# Start the API server
+uvicorn api:app --host 0.0.0.0 --port 8000
+```
 
-## File Structure
+The API will be available at `http://localhost:8000`. You can access the API documentation at `http://localhost:8000/docs`.
 
-- `app.py` - Main Streamlit application
-- `requirements.txt` - Python dependencies
-- `.dockerignore` - Files to exclude from Docker image
-- `.env.example` - Example environment variables
-- `Dockerfile` - Docker configuration
-- `docker-compose.yml` - Docker Compose configuration
-- `create_docker_files.bat` - Windows batch script to generate Docker files
+### 2. Streamlit Frontend
 
-## Dependencies
+The Streamlit frontend provides a user-friendly interface for interacting with the API.
 
-- streamlit - Web application framework
-- boto3 - AWS SDK for Python
-- python-dotenv - Environment variable management
-- google-auth, google-cloud-aiplatform - Google Cloud authentication and Vertex AI
-- PyPDF2 - PDF processing
-- vertexai - Google Vertex AI client
-- pycryptodome - Cryptographic library
+```bash
+# In a new terminal, start the Streamlit interface
+streamlit run frontend.py
+```
 
-## Security Notes
+The frontend will be available at `http://localhost:8501`.
 
-- Never commit sensitive files like `.env` or `service-account.json` to version control
-- Use environment variables for all sensitive credentials
-- Keep AWS and Google Cloud credentials secure
+## Testing the Application
+
+1. Start the API backend first:
+```bash
+uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
+2. In a separate terminal, start the Streamlit frontend:
+```bash
+streamlit run frontend.py
+```
+
+3. Open your browser to `http://localhost:8501`
+
+4. Use the chat interface to:
+   - Ask questions about JSE documents
+   - View the actual documents used for answers
+   - See document recommendations
+   - Configure settings in the sidebar
+
+## Development
+
+- The API backend is built with FastAPI
+- The frontend is built with Streamlit
+- AI capabilities are powered by Google's Vertex AI
+- Document storage and retrieval uses AWS S3
+
+## Troubleshooting
+
+If you encounter issues:
+
+1. Check that all required environment variables are set
+2. Verify that both the API and frontend are running
+3. Ensure you have the correct AWS and Google Cloud credentials
+4. Check the logs in both terminal windows for error messages
+
+## License
+
+[Your License Here]
