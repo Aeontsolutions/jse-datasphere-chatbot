@@ -14,8 +14,8 @@ st.set_page_config(
 # Initialize session state for conversation history
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
-# Initialize session state for API URL
+if "google_ai_messages" not in st.session_state:
+    st.session_state.google_ai_messages = []
 if "api_url" not in st.session_state:
     st.session_state.api_url = os.getenv("API_URL", "http://localhost:8000")
 
