@@ -54,3 +54,5 @@ Thumbs.db
 # Chroma DB 
 ./chroma_db/*
 ./chroma/*
+
+summarizer.ipynb
