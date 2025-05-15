@@ -72,36 +72,22 @@ except Exception as e:
     st.error(f"Error connecting to AWS S3: {str(e)}")
     st.stop()
 
-# Get service account file path from environment variables
-service_account_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-if not service_account_path:
-    st.error("GOOGLE_APPLICATION_CREDENTIALS not found in environment variables. Please add it to your .env file.")
-    st.stop()
-
-# Check if the service account file exists
-if not os.path.exists(service_account_path):
-    st.error(f"Service account file not found at: {service_account_path}")
-    st.stop()
-
+# Get service account credentials from Streamlit secrets
 try:
-    # Load service account info to get project details
-    with open(service_account_path, 'r') as f:
-        service_account_info = json.load(f)
+    # Get the service account info from Streamlit secrets
+    service_account_info = st.secrets["gcp_service_account"]
     
-    # Extract project ID from service account
-    project_id = service_account_info.get("project_id")
-    if not project_id:
-        st.error("Could not find project_id in service account file")
-        st.stop()
-    
-    # Create credentials object from service account file
-    credentials = service_account.Credentials.from_service_account_file(
-        service_account_path,
+    # Create credentials object from service account info
+    credentials = service_account.Credentials.from_service_account_info(
+        service_account_info,
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
     
-    # Set the environment variable for other Google libraries
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = service_account_path
+    # Extract project ID from service account info
+    project_id = service_account_info.get("project_id")
+    if not project_id:
+        st.error("Could not find project_id in service account info")
+        st.stop()
     
     # Initialize Vertex AI with project details and credentials
     aiplatform.init(
@@ -114,6 +100,7 @@ try:
     
 except Exception as e:
     st.error(f"Error setting up Vertex AI: {str(e)}")
+    st.info("Please make sure you've added your service account JSON to Streamlit secrets under the key 'gcp_service_account'")
     st.stop()
 
 # Function to extract text from PDF
