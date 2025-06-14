@@ -1,0 +1,43 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# FastAPI Backend Structure Guide
+
+The production FastAPI service lives inside the `fastapi_app` folder. The following files are the most relevant entry-points and helpers when working on this API:
+
+1. **Service bootstrap**  
+   • [`fastapi_app/main.py`](mdc:fastapi_app/main.py) – Thin launcher that imports the FastAPI application object and starts Uvicorn when the module is executed directly.  
+   • [`fastapi_app/Dockerfile`](mdc:fastapi_app/Dockerfile) & [`fastapi_app/docker-compose.yml`](mdc:fastapi_app/docker-compose.yml) – Container setup for running the service locally or in CI/CD.
+
+2. **Core application**  
+   • [`fastapi_app/app/main.py`](mdc:fastapi_app/app/main.py) – Defines the `FastAPI` instance, startup/​shutdown `lifespan`, CORS middleware and three HTTP endpoints:  
+     – `GET /` root sanity check  
+     – `GET /health` health probe reporting S3 & metadata status  
+     – `POST /chat` conversational endpoint that delegates to the utils helpers described below.  
+     The module also wires dependencies `get_s3_client()` and `get_metadata()`.
+
+3. **Data models**  
+   • [`fastapi_app/app/models.py`](mdc:fastapi_app/app/models.py) – Pydantic models for request/response bodies (`ChatRequest`, `ChatResponse`, `DocumentInfo`, …).
+
+4. **Business / utility layer**  
+   • [`fastapi_app/app/utils.py`](mdc:fastapi_app/app/utils.py) – Contains all heavy-lifting helpers:
+     – AWS S3 handling (`init_s3_client`, `download_and_extract_from_s3`, …)  
+     – Google Vertex AI setup (`init_vertex_ai`)  
+     – Document selection with Gemini (`semantic_document_selection`, `auto_load_relevant_documents`)  
+     – Final answer generation (`generate_chat_response`).
+
+5. **Tests & example client**  
+   • [`fastapi_app/test_api.py`](mdc:fastapi_app/test_api.py) – Simple script hitting the `/health` and `/chat` endpoints locally.  
+   • [`fastapi_app/test_client.py`](mdc:fastapi_app/test_client.py) – Streamlit front-end that consumes the `/chat` endpoint.
+
+6. **Environment / configuration**  
+   • [`fastapi_app/.env`](mdc:fastapi_app/.env) and [`fastapi_app/.env.example`](mdc:fastapi_app/.env.example) list required environment variables (AWS creds, Vertex AI SA JSON, etc.).  
+   • `PORT` and `HOST` are read in the launcher to configure Uvicorn.
+
+Use this guide to quickly locate API entry points, data contracts, and helper functions when navigating the backend.
+
+*New RAG / vector-store endpoints*
+• `POST /chroma/update` – upserts documents into a Chroma vector store (see [`app/chroma_utils.py`](mdc:fastapi_app/app/chroma_utils.py)).
+• `POST /chroma/query` – retrieves most similar docs from Chroma.
