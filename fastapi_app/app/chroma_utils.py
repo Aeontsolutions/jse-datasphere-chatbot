@@ -11,6 +11,9 @@ import chromadb
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 
+from dotenv import load_dotenv
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 json_file = "companies.json"
@@ -192,7 +195,7 @@ def query_collection(
     collection: "chromadb.Collection",
     query: str,
     n_results: int = 5,
-    where: Optional[Dict[str, Any]] = None,
+    # where: Optional[Dict[str, Any]] = None,
 ):
     """Query a Chroma collection and return the raw result dict."""
 

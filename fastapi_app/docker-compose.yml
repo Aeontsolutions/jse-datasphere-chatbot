@@ -15,4 +15,13 @@ services:
       - CHATBOT_API_KEY=${CHATBOT_API_KEY}
       - CHROMA_PERSIST_DIRECTORY=/app/chroma_db
     volumes:
+      # Persist ChromaDB Parquet files outside the container
+      - chroma_data:/app/chroma_db
+      # Mount the .env file for application secrets
       - ./.env:/app/.env
+
+# ------------------------------------------------------
+# Named Volumes (declared at the root of the compose file)
+# ------------------------------------------------------
+volumes:
+  chroma_data:

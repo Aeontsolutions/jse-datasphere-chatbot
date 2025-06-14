@@ -24,6 +24,9 @@ from app.chroma_utils import (
     qa_bot,
 )
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Configure logging
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
@@ -251,7 +254,7 @@ async def chroma_query(
             collection,
             query=request.query,
             n_results=request.n_results,
-            where=request.where,
+            # where=request.where,
         )
 
         # Build separate lists for the response schema
@@ -298,7 +301,7 @@ async def fast_chat(
             collection,
             query=request.query,
             n_results=5,
-            where=None,
+            # where=None,
         )
 
         # -----------------------------
