@@ -1,0 +1,26 @@
+[
+    {
+        "security_name": "NCB FINANCIAL GROUP LIMITED",
+        "short_name": "NCB",
+        "ticker_symbol": "NCBFG",
+        "ISIN":"JME201700064"
+    },
+    {
+        "security_name": "SAGICOR GROUP JAMAICA LIMITED",
+        "short_name": "Sagicor",
+        "ticker_symbol": "SJ",
+        "ISIN":"JME201300139"
+    },
+    {
+        "security_name": "EDUFOCAL LIMITED",
+        "short_name": "EduFocal",
+        "ticker_symbol": "LEARN",
+        "ISIN":"JME202200031"
+    },
+    {
+        "security_name": "ONE ON ONE EDUCATIONAL SERVICES LIMITED",
+        "short_name": "ONE",
+        "ticker_symbol": "ONE",
+        "ISIN":"JME202200106"
+    }
+]

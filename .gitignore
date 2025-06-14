@@ -56,3 +56,6 @@ Thumbs.db
 ./chroma/*
 
 summarizer.ipynb
+
+# FastAPI app
+fastapi_app/.env
