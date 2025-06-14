@@ -246,19 +246,27 @@ async def chroma_query(
     """Query the ChromaDB vector store and retrieve most similar documents."""
     logger.info(f"/chroma/query called. query='{request.query}', n_results={request.n_results}")
     try:
-        results = chroma_query_collection(
+        # Our helper returns (sorted_results, context)
+        sorted_results, _ = chroma_query_collection(
             collection,
             query=request.query,
             n_results=request.n_results,
             where=request.where,
         )
-        docs_list = results.get('documents', [])
-        returned_docs = len(docs_list[0]) if docs_list and isinstance(docs_list[0], list) else len(docs_list)
-        logger.info(f"/chroma/query completed. documents_returned={returned_docs}")
+
+        # Build separate lists for the response schema
+        ids = [meta.get("id") for meta, _ in sorted_results if meta.get("id")]
+        documents = [doc for _, doc in sorted_results]
+        metadatas = [meta for meta, _ in sorted_results] if sorted_results else None
+
+        logger.info(
+            f"/chroma/query completed. documents_returned={len(documents)}"
+        )
+
         return ChromaQueryResponse(
-            ids=results.get("ids", [])[0] if results.get("ids") else [],
-            documents=results.get("documents", [])[0] if results.get("documents") else [],
-            metadatas=results.get("metadatas", [])[0] if results.get("metadatas") else None,
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
         )
     except Exception as e:
         logger.error(f"Error querying ChromaDB: {str(e)}")
