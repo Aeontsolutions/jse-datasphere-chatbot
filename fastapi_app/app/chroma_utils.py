@@ -182,22 +182,39 @@ def query_collection(
 ):
     """Query a Chroma collection and return the raw result dict."""
 
-    # Step 1: Get Company Matches
+    # ------------------------------------------------------------------
+    # Step 1: Build dynamic filter
+    # ------------------------------------------------------------------
     company_matches = get_companies_from_query(query)
     doctype = get_doctype_from_query(query)
 
-    # Step 2: Get Document Matches
+    where_clauses = []
+    if company_matches:
+        where_clauses.append({"company_name": {"$in": company_matches}})
+    if doctype and doctype[0] != "unknown":
+        where_clauses.append({"file_type": {"$in": doctype}})
+
+    where_filter = {"$and": where_clauses} if where_clauses else None
+
+    logger.debug(
+        "Chroma query filter built | company_matches=%s | doctype=%s | where=%s",
+        company_matches,
+        doctype,
+        where_filter,
+    )
+
+    # ------------------------------------------------------------------
+    # Step 2: Execute vector search
+    # ------------------------------------------------------------------
+
     results = collection.query(
         query_texts=[query],
         n_results=n_results,
-        where={
-            "$and": [
-                {"company_name": {"$in": company_matches}},
-                {"file_type": {"$in": doctype}}
-            ]
-        }
+        where=where_filter,
     )
-    
+
+    logger.debug("Chroma returned ids=%s", results.get("ids"))
+
     # Step 3: Flatten Nested Metadata & Document Lists
     metadata_results = results.get('metadatas', [])
     document_results = results.get('documents', [])
