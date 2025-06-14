@@ -18,7 +18,11 @@ env = st.sidebar.selectbox("Environment", ["Remote", "Local"])
 BASE_URL = REMOTE_BASE_URL if env == "Remote" else LOCAL_BASE_URL
 
 # Primary mode (chat or vector upload)
-mode = st.sidebar.radio("Mode", ["Chat", "Add Document"], horizontal=True)
+mode = st.sidebar.radio(
+    "Mode",
+    ["Chat", "Add Document", "Query Vector DB"],
+    horizontal=True,
+)
 
 # -------------------
 # Chat Mode
@@ -139,3 +143,54 @@ elif mode == "Add Document":
                 st.success(f"✅ Success: {res.json()}")
         except requests.exceptions.RequestException as e:
             st.error(f"❌ Request failed: {e}")
+
+# -------------------
+# Query Vector DB Mode
+# -------------------
+elif mode == "Query Vector DB":
+    st.subheader("🔎 Query Vector Database")
+
+    # Input fields for the query
+    query_text = st.text_input("Query Text", placeholder="e.g. What is Company X's revenue in 2023?")
+    n_results = st.number_input(
+        "Number of Results",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1,
+    )
+
+    where_default = "{}"  # empty filter by default
+    where_raw = st.text_area(
+        "Optional 'where' JSON filter (leave blank for none)",
+        value=where_default,
+        height=100,
+    )
+
+    if st.button("🔍 Run Query"):
+        if not query_text.strip():
+            st.error("Query text cannot be empty.")
+            st.stop()
+
+        payload = {"query": query_text, "n_results": n_results}
+
+        # Attempt to parse the optional where filter
+        if where_raw.strip() and where_raw.strip() != "{}":
+            try:
+                where_parsed = json.loads(where_raw)
+                payload["where"] = where_parsed
+            except Exception as parse_err:
+                st.error(f"Invalid where JSON: {parse_err}")
+                st.stop()
+
+        # Call the Chroma query endpoint
+        try:
+            res = requests.post(f"{BASE_URL}/chroma/query", json=payload, timeout=60)
+            res.raise_for_status()
+            result = res.json()
+
+            # Pretty-print results
+            st.write("### Results:")
+            st.json(result)
+        except requests.exceptions.RequestException as req_err:
+            st.error(f"❌ Request failed: {req_err}")
