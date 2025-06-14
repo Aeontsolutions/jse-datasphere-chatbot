@@ -255,7 +255,7 @@ def query_collection(
 # ---------------------------------------------------------------------------
 
 
-def qa_bot(query: str, contexts: str):
+def qa_bot(query: str, contexts: str, conversation_history: Optional[List[Dict[str, str]]] = None):
     """Answer a user question using only the supplied `contexts` string.
 
     Parameters
@@ -291,7 +291,15 @@ def qa_bot(query: str, contexts: str):
     """
     )
 
-    prompt = f"Question: {query}\nContext: {contexts}"
+    # Include recent conversation history (up to 20 turns) in the prompt, if provided
+    convo_context = ""
+    if conversation_history:
+        # Keep only the last 20 messages to keep the context short
+        recent_history = conversation_history[-20:]
+        convo_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+        convo_context = f"Conversation history:\n{convo_context}\n\n"
+
+    prompt = f"{convo_context}Question: {query}\nContext: {contexts}"
 
     response = client.models.generate_content(
         model="gemini-2.5-pro-preview-03-25",

@@ -291,23 +291,29 @@ async def fast_chat(
     search every turn and builds a larger context for the model.
     """
 
-    logger.info(f"/fast_chat called. query='{request.query[:200]}'")
+    logger.info(f"/fast_chat called. query='{request.query[:200]}' | memory_enabled={request.memory_enabled}")
     
     try:
         # -----------------------------
-        # Step 1: Retrieve documents
+        # Step 1: Build enhanced query (if conversation history is available)
+        # -----------------------------
+        retrieval_query = request.query
+        if request.memory_enabled and request.conversation_history:
+            # Combine recent user messages with the current query for better retrieval
+            recent_history = [
+                msg["content"] for msg in request.conversation_history[-10:] if msg.get("role") == "user"
+            ]
+            retrieval_query = " ".join(recent_history + [request.query])
+
+        # -----------------------------
+        # Step 2: Retrieve documents from ChromaDB
         # -----------------------------
         sorted_results, context = chroma_query_collection(
             collection,
-            query=request.query,
+            query=retrieval_query,
             n_results=5,
             # where=None,
         )
-
-        # -----------------------------
-        # Step 2: Let LLM answer
-        # -----------------------------
-        response_text = qa_bot(request.query, context)
 
         # Prepare helpful metadata for the caller
         loaded_docs = [
@@ -322,14 +328,42 @@ async def fast_chat(
         )
 
         logger.info(
-            f"/fast_chat completed successfully. documents_retrieved={len(sorted_results)}, response_chars={len(response_text)}"
+            f"/fast_chat retrieval complete. documents_retrieved={len(sorted_results)}, context_chars={len(context)}"
         )
+
+        # -----------------------------
+        # Step 3: Let LLM answer (include conversation history if provided)
+        # -----------------------------
+        response_text = qa_bot(
+            request.query,
+            context,
+            conversation_history=request.conversation_history if request.memory_enabled else None,
+        )
+
+        # Additional log after generating the response
+        logger.info(
+            f"/fast_chat LLM answer generated. response_chars={len(response_text)}"
+        )
+
+        # -----------------------------
+        # Step 4: Update conversation history (if memory is enabled)
+        # -----------------------------
+        updated_conversation_history = None
+        if request.memory_enabled and request.conversation_history:
+            updated_conversation_history = request.conversation_history.copy()
+            updated_conversation_history.append({"role": "user", "content": request.query})
+            updated_conversation_history.append({"role": "assistant", "content": response_text})
+        elif request.memory_enabled:
+            updated_conversation_history = [
+                {"role": "user", "content": request.query},
+                {"role": "assistant", "content": response_text},
+            ]
 
         return ChatResponse(
             response=response_text,
             documents_loaded=loaded_docs,
             document_selection_message=doc_selection_message,
-            conversation_history=None,
+            conversation_history=updated_conversation_history,
         )
     except Exception as e:
         logger.error(f"Error in slow_chat endpoint: {str(e)}")
