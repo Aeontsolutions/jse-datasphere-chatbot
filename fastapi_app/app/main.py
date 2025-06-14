@@ -1,8 +1,10 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import json
 import logging
+import time
+import uuid
 from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
 
@@ -52,7 +54,16 @@ async def lifespan(app: FastAPI):
         try:
             app.state.chroma_client = init_chroma_client()
             app.state.chroma_collection = get_or_create_collection(app.state.chroma_client)
-            logger.info("ChromaDB initialised and collection ready")
+            try:
+                collection_size = app.state.chroma_collection.count()
+            except Exception:
+                collection_size = "unknown"
+                logger.warning("Could not retrieve Chroma collection size during startup.")
+
+            logger.info(
+                "ChromaDB initialised and collection ready | collection_size=%s",
+                collection_size,
+            )
         except Exception as chroma_err:
             logger.error(f"Failed to initialise ChromaDB: {chroma_err}")
         yield
@@ -76,6 +87,27 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
+
+# ----------------------------------------------------------
+# Middleware: Log every request & response with latency
+# ----------------------------------------------------------
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Logs incoming requests and their responses including latency and status."""
+    request_id = uuid.uuid4().hex
+    logger.info(f"[{request_id}] {request.method} {request.url.path} - Start")
+    start_time = time.time()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        logger.exception(f"[{request_id}] {request.method} {request.url.path} - Unhandled error: {exc}")
+        raise
+    duration_ms = (time.time() - start_time) * 1000
+    logger.info(
+        f"[{request_id}] {request.method} {request.url.path} - Completed in {duration_ms:.2f}ms with status {response.status_code}"
+    )
+    return response
 
 # Dependency to get S3 client
 def get_s3_client():
@@ -125,6 +157,9 @@ async def chat(
     If memory_enabled is enabled, it will use the conversation history to provide context
     for the response.
     """
+    logger.info(
+        f"/chat called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
+    )
     try:
         # Check if metadata is available
         if not metadata:
@@ -172,6 +207,10 @@ async def chat(
         # if document_selection_message and "Semantically selected" in document_selection_message:
         #     response_text += f"\n\n{document_selection_message}"
         
+        logger.info(
+            f"/chat completed successfully. response_chars={len(response_text)}, documents_loaded={len(loaded_docs)}"
+        )
+
         # Return response
         return ChatResponse(
             response=response_text,
@@ -190,8 +229,10 @@ async def chroma_update(
     collection: Any = Depends(get_chroma_collection),
 ):
     """Add or upsert documents into the ChromaDB vector store."""
+    logger.info(f"/chroma/update called. num_documents={len(request.documents)}")
     try:
         ids = chroma_add_documents(collection, request.documents, request.metadatas, request.ids)
+        logger.info(f"/chroma/update completed. ids={ids}")
         return ChromaAddResponse(status="success", ids=ids)
     except Exception as e:
         logger.error(f"Error updating ChromaDB: {str(e)}")
@@ -203,6 +244,7 @@ async def chroma_query(
     collection: Any = Depends(get_chroma_collection),
 ):
     """Query the ChromaDB vector store and retrieve most similar documents."""
+    logger.info(f"/chroma/query called. query='{request.query}', n_results={request.n_results}")
     try:
         results = chroma_query_collection(
             collection,
@@ -210,6 +252,9 @@ async def chroma_query(
             n_results=request.n_results,
             where=request.where,
         )
+        docs_list = results.get('documents', [])
+        returned_docs = len(docs_list[0]) if docs_list and isinstance(docs_list[0], list) else len(docs_list)
+        logger.info(f"/chroma/query completed. documents_returned={returned_docs}")
         return ChromaQueryResponse(
             ids=results.get("ids", [])[0] if results.get("ids") else [],
             documents=results.get("documents", [])[0] if results.get("documents") else [],
@@ -235,6 +280,8 @@ async def fast_chat(
     search every turn and builds a larger context for the model.
     """
 
+    logger.info(f"/fast_chat called. query='{request.query[:200]}'")
+    
     try:
         # -----------------------------
         # Step 1: Retrieve documents
@@ -261,6 +308,10 @@ async def fast_chat(
 
         doc_selection_message = (
             f"{len(sorted_results)} documents retrieved from vector database."
+        )
+
+        logger.info(
+            f"/fast_chat completed successfully. documents_retrieved={len(sorted_results)}, response_chars={len(response_text)}"
         )
 
         return ChatResponse(

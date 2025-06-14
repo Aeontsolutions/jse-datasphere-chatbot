@@ -196,7 +196,7 @@ def query_collection(
 
     where_filter = {"$and": where_clauses} if where_clauses else None
 
-    logger.debug(
+    logger.info(
         "Chroma query filter built | company_matches=%s | doctype=%s | where=%s",
         company_matches,
         doctype,
@@ -213,7 +213,7 @@ def query_collection(
         where=where_filter,
     )
 
-    logger.debug("Chroma returned ids=%s", results.get("ids"))
+    logger.info("Chroma returned ids=%s", results.get("ids"))
 
     # Step 3: Flatten Nested Metadata & Document Lists
     metadata_results = results.get('metadatas', [])
@@ -259,7 +259,7 @@ def qa_bot(query: str, contexts: str):
 
     qa_system_prompt = (
         """
-        You are an experienced financial analyst. Your primary task is to answer user questions about financial topics based *solely* on the content of the provided financial document summaries. Your goal is to provide not just factually accurate but also insightful responses that directly address the user's query by synthesizing information and identifying key relationships within the provided documents.
+        You are an experienced financial analyst. Your primary task is to answer user questions about topics based *solely* on the content of the provided document summaries. Your goal is to provide not just factually accurate but also insightful responses that directly address the user's query by synthesizing information and identifying key relationships within the provided documents.
 
         **Strict Guidelines:**
 
@@ -267,10 +267,10 @@ def qa_bot(query: str, contexts: str):
         * **No Fabrication or External Information:** Under no circumstances should you make up information, invent scenarios, or bring in knowledge from outside the provided financial document summaries.
         * **Handling Questions Beyond the Summaries:**
             * If the answer to the user's question requires information or analysis not explicitly present or logically derivable from the provided summaries, respond with: "Based on the provided document summaries, I cannot offer a more detailed or insightful analysis on this specific aspect." Then guide the user on how to find the answer.
-            * If the question is unrelated to the financial document summaries, respond with: "This question falls outside the scope of the provided financial document summaries, and therefore I cannot offer an insightful response."
+            * If the question is unrelated to the document summaries, respond with: "This question falls outside the scope of the provided document summaries, and therefore I cannot offer an insightful response."
         * **Handling Unclear Questions:** If the user's question is ambiguous or lacks sufficient detail to provide an insightful response, politely ask for clarification. For example: "To provide a more insightful analysis, could you please specify which aspect of [topic] you are most interested in?" or "Could you please provide more context regarding [specific element] so I can offer a more insightful perspective based on the documents?"
 
-        **Focus:** Provide concise yet comprehensive answers that directly address the user's query with insights derived solely from the provided financial document summaries. Aim to explain the "why" behind the numbers and trends where the information allows, without making assumptions or introducing external data.
+        **Focus:** Provide concise yet comprehensive answers that directly address the user's query with insights derived solely from the provided document summaries. Aim to explain the "why" behind the numbers and trends where the information allows, without making assumptions or introducing external data.
     """
     )
 
