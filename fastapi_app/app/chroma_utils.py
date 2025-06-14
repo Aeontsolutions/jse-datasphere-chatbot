@@ -68,7 +68,21 @@ def add_documents(
         # Log a warning but do not fail the request – data is still in memory
         logger.warning(f"Could not persist Chroma collection to disk: {persist_err}")
 
-    logger.info(f"Added {len(ids)} documents to Chroma collection '{collection.name}'")
+    # Log new collection size
+    try:
+        new_count = collection.count()
+    except Exception as count_err:
+        new_count = "unknown"
+        logger.warning(
+            "Could not retrieve collection count after add: %s", count_err
+        )
+
+    logger.info(
+        "Added %s documents to Chroma collection '%s' | new_collection_size=%s",
+        len(ids),
+        collection.name,
+        new_count,
+    )
     return ids
     
 # Create a lookup dictionary
