@@ -17,12 +17,22 @@ st.title("💬 JSE Datasphere Chat")
 env = st.sidebar.selectbox("Environment", ["Remote", "Local"])
 BASE_URL = REMOTE_BASE_URL if env == "Remote" else LOCAL_BASE_URL
 
+# Primary mode (chat or vector upload)
 mode = st.sidebar.radio("Mode", ["Chat", "Add Document"], horizontal=True)
 
 # -------------------
 # Chat Mode
 # -------------------
 if mode == "Chat":
+    # Choose which chat endpoint to hit
+    chat_variant = st.sidebar.radio(
+        "Chat Endpoint",
+        ["Standard", "Fast"],
+        horizontal=True,
+        help="Standard = original /chat (S3-based); Fast = new /fast_chat (vector-based)",
+    )
+    endpoint_path = "/fast_chat" if chat_variant == "Fast" else "/chat"
+
     # Initialize session state (chat history)
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
@@ -41,7 +51,7 @@ if mode == "Chat":
         # Call the chat endpoint
         try:
             response = requests.post(
-                f"{BASE_URL}/chat",
+                f"{BASE_URL}{endpoint_path}",
                 json={
                     "query": prompt,
                     "conversation_history": st.session_state.chat_history,

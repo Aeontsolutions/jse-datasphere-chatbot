@@ -22,11 +22,6 @@ def init_chroma_client(persist_directory: Optional[str] = None):
     if persist_directory is None:
         persist_directory = os.getenv("CHROMA_PERSIST_DIRECTORY", "/app/chroma_db")
 
-    # settings = Settings(
-    #     chroma_db_impl="duckdb+parquet",
-    #     persist_directory=persist_directory,
-    # )
-
     client = chromadb.PersistentClient(
         path=persist_directory, 
         # settings=settings
@@ -195,10 +190,11 @@ def query_collection(
     results = collection.query(
         query_texts=[query],
         n_results=n_results,
-        where=where or {},
-        where_document={
-            "company_name": {"$in": company_matches},
-            "doctype": doctype
+        where={
+            "$and": [
+                {"company_name": {"$in": company_matches}},
+                {"file_type": {"$in": doctype}}
+            ]
         }
     )
     
@@ -219,3 +215,57 @@ def query_collection(
     context = "\n\n".join([doc for _, doc in sorted_results])
 
     return sorted_results, context
+
+# ---------------------------------------------------------------------------
+# QA Bot Helper (Gemini LLM)
+# ---------------------------------------------------------------------------
+
+
+def qa_bot(query: str, contexts: str):
+    """Answer a user question using only the supplied `contexts` string.
+
+    Parameters
+    ----------
+    query : str
+        The question from the user.
+    contexts : str
+        Concatenated context extracted from ChromaDB that should be the *only*
+        source material for the answer.
+
+    Returns
+    -------
+    str
+        The model-generated answer.
+    """
+
+    client = genai.Client(api_key=os.getenv("CHATBOT_API_KEY"))
+
+    qa_system_prompt = (
+        """
+        You are an experienced financial analyst. Your primary task is to answer user questions about financial topics based *solely* on the content of the provided financial document summaries. Your goal is to provide not just factually accurate but also insightful responses that directly address the user's query by synthesizing information and identifying key relationships within the provided documents.
+
+        **Strict Guidelines:**
+
+        * **Insightful Analysis Based on Facts:** You must base your insights and analysis *exclusively* on the information explicitly stated or logically implied within the provided summaries. Aim to connect different pieces of information, identify trends, and explain the significance of the data in relation to the user's question.
+        * **No Fabrication or External Information:** Under no circumstances should you make up information, invent scenarios, or bring in knowledge from outside the provided financial document summaries.
+        * **Handling Questions Beyond the Summaries:**
+            * If the answer to the user's question requires information or analysis not explicitly present or logically derivable from the provided summaries, respond with: "Based on the provided document summaries, I cannot offer a more detailed or insightful analysis on this specific aspect." Then guide the user on how to find the answer.
+            * If the question is unrelated to the financial document summaries, respond with: "This question falls outside the scope of the provided financial document summaries, and therefore I cannot offer an insightful response."
+        * **Handling Unclear Questions:** If the user's question is ambiguous or lacks sufficient detail to provide an insightful response, politely ask for clarification. For example: "To provide a more insightful analysis, could you please specify which aspect of [topic] you are most interested in?" or "Could you please provide more context regarding [specific element] so I can offer a more insightful perspective based on the documents?"
+
+        **Focus:** Provide concise yet comprehensive answers that directly address the user's query with insights derived solely from the provided financial document summaries. Aim to explain the "why" behind the numbers and trends where the information allows, without making assumptions or introducing external data.
+    """
+    )
+
+    prompt = f"Question: {query}\nContext: {contexts}"
+
+    response = client.models.generate_content(
+        model="gemini-2.5-pro-preview-03-25",
+        config=types.GenerateContentConfig(
+            system_instruction=qa_system_prompt,
+            temperature=0,
+        ),
+        contents=[prompt],
+    )
+
+    return response.text

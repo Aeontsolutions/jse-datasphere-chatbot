@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 
 # Copy companies.json
-COPY app/companies.json ./companies.json
+COPY ./companies.json ./companies.json
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt

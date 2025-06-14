@@ -19,6 +19,7 @@ from app.chroma_utils import (
     get_or_create_collection,
     add_documents as chroma_add_documents,
     query_collection as chroma_query_collection,
+    qa_bot,
 )
 
 # Configure logging
@@ -216,3 +217,57 @@ async def chroma_query(
     except Exception as e:
         logger.error(f"Error querying ChromaDB: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error querying ChromaDB: {str(e)}")
+
+# ---------------------------------------------------------------------------
+# Fast Chat Endpoint (Vector DB → Gemini QA)
+# ---------------------------------------------------------------------------
+
+@app.post("/fast_chat", response_model=ChatResponse)
+async def fast_chat(
+    request: ChatRequest,
+    collection: Any = Depends(get_chroma_collection),
+):
+    """A retrieval-augmented chat endpoint that first fetches documents from
+    ChromaDB and then lets Gemini answer strictly based on that context.
+
+    It is *faster* than the normal /chat endpoint because it performs vector
+    search every turn and builds a larger context for the model.
+    """
+
+    try:
+        # -----------------------------
+        # Step 1: Retrieve documents
+        # -----------------------------
+        sorted_results, context = chroma_query_collection(
+            collection,
+            query=request.query,
+            n_results=5,
+            where=None,
+        )
+
+        # -----------------------------
+        # Step 2: Let LLM answer
+        # -----------------------------
+        response_text = qa_bot(request.query, context)
+
+        # Prepare helpful metadata for the caller
+        loaded_docs = [
+            meta.get("source")
+            or meta.get("filename")
+            or meta.get("id")
+            for meta, _ in sorted_results
+        ]
+
+        doc_selection_message = (
+            f"{len(sorted_results)} documents retrieved from vector database."
+        )
+
+        return ChatResponse(
+            response=response_text,
+            documents_loaded=loaded_docs,
+            document_selection_message=doc_selection_message,
+            conversation_history=None,
+        )
+    except Exception as e:
+        logger.error(f"Error in slow_chat endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
