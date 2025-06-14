@@ -62,7 +62,16 @@ def add_documents(
         ids = [str(uuid4()) for _ in documents]
 
     collection.add(documents=documents, metadatas=metadatas, ids=ids)
-    collection.persist()  # Ensure data is flushed to disk
+
+    # Persist changes (only the PersistentClient has `persist`, not the Collection)
+    try:
+        # Access the underlying client if available
+        client = getattr(collection, "_client", None)
+        if client and hasattr(client, "persist"):
+            client.persist()
+    except Exception as persist_err:
+        # Log a warning but do not fail the request – data is still in memory
+        logger.warning(f"Could not persist Chroma collection to disk: {persist_err}")
 
     logger.info(f"Added {len(ids)} documents to Chroma collection '{collection.name}'")
     return ids
