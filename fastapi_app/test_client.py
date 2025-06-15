@@ -5,7 +5,8 @@ import json
 # -------------------
 # Configuration
 # -------------------
-REMOTE_BASE_URL = "http://jse-da-Publi-YNJSNI96davV-367279008.us-east-1.elb.amazonaws.com"
+REMOTE_PROD_BASE_URL = "http://jse-da-Publi-YNJSNI96davV-367279008.us-east-1.elb.amazonaws.com"
+REMOTE_STAGE_BASE_URL = "http://jse-da-Publi-wupYrzJkbRrm-92790362.us-east-1.elb.amazonaws.com"
 LOCAL_BASE_URL = "http://localhost:8000"
 
 st.set_page_config(page_title="JSE Datasphere Chat", page_icon="💬")
@@ -14,8 +15,8 @@ st.title("💬 JSE Datasphere Chat")
 # -------------------
 # Sidebar controls
 # -------------------
-env = st.sidebar.selectbox("Environment", ["Remote", "Local"])
-BASE_URL = REMOTE_BASE_URL if env == "Remote" else LOCAL_BASE_URL
+env = st.sidebar.selectbox("Environment", [ "Local", "Remote Prod", "Remote Stage"])
+BASE_URL = LOCAL_BASE_URL if env == "Local" else REMOTE_STAGE_BASE_URL if env == "Remote Stage" else REMOTE_PROD_BASE_URL
 
 # Primary mode (chat or vector upload)
 mode = st.sidebar.radio(

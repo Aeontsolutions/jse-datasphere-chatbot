@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Jacie",
     description="API for chatting with Jacie, the JSE DataSphere Chatbot.",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan
 )
 
