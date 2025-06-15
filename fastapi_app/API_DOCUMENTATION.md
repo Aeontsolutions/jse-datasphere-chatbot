@@ -61,6 +61,83 @@ Chat with documents using Gemini AI.
 | document_selection_message | string | Message about document selection process |
 | conversation_history | array | Updated conversation history |
 
+### Fast Chat
+
+```
+POST /fast_chat
+```
+
+A retrieval-augmented chat endpoint that first fetches documents from ChromaDB and then lets Gemini answer strictly based on that context. It is *faster* than the normal `/chat` endpoint because it performs vector search every turn and builds a larger context for the model.
+
+This endpoint uses the `ChatRequest` and `ChatResponse` models. The `auto_load_documents` parameter from `ChatRequest` is not used.
+
+**Request Parameters:**
+
+| Parameter              | Type    | Required | Description                                                              |
+| ---------------------- | ------- | -------- | ------------------------------------------------------------------------ |
+| query                  | string  | Yes      | User query/question                                                      |
+| conversation_history   | array   | No       | Previous conversation history as a list of role-content pairs            |
+| memory_enabled         | boolean | No       | Whether to use conversation memory (default: true)                       |
+
+**Response Parameters:**
+
+| Parameter                  | Type   | Description                                                        |
+| -------------------------- | ------ | ------------------------------------------------------------------ |
+| response                   | string | AI response to the query                                           |
+| documents_loaded           | array  | List of documents that were loaded to answer the query             |
+| document_selection_message | string | Message about document selection process                           |
+| conversation_history       | array  | Updated conversation history                                       |
+
+### ChromaDB Endpoints
+
+These endpoints allow for direct interaction with the ChromaDB vector store.
+
+#### Add/Update Documents
+
+```
+POST /chroma/update
+```
+
+Add or upsert documents into the ChromaDB vector store.
+
+**Request Parameters:**
+
+| Parameter | Type              | Required | Description                                  |
+| --------- | ----------------- | -------- | -------------------------------------------- |
+| documents | array of strings  | Yes      | The document contents to add or update.      |
+| metadatas | array of objects  | No       | Metadata associated with each document.      |
+| ids       | array of strings  | No       | Unique IDs for each document.                |
+
+**Response Parameters:**
+
+| Parameter | Type             | Description                                          |
+| --------- | ---------------- | ---------------------------------------------------- |
+| status    | string           | "success" if the operation was successful.           |
+| ids       | array of strings | List of ids for the added/updated documents.         |
+
+#### Query Documents
+
+```
+POST /chroma/query
+```
+
+Query the ChromaDB vector store to retrieve the most similar documents based on a query string.
+
+**Request Parameters:**
+
+| Parameter | Type    | Required | Description                                  |
+| --------- | ------- | -------- | -------------------------------------------- |
+| query     | string  | Yes      | The query text to search for.                |
+| n_results | integer | No       | The number of results to return (default: 5).|
+
+**Response Parameters:**
+
+| Parameter | Type             | Description                        |
+| --------- | ---------------- | ---------------------------------- |
+| ids       | array of strings | List of retrieved document IDs.    |
+| documents | array of strings | List of retrieved document contents. |
+| metadatas | array of objects | List of retrieved document metadatas.|
+
 ## Environment Setup
 
 The API requires the following environment variables:
@@ -124,6 +201,96 @@ Create a `.env` file based on the provided `.env.example` file.
       "content": "According to the 2023 annual report, Company X reported a revenue of $10.5 billion, which represents a 15% increase from the previous year."
     }
   ]
+}
+```
+
+### Fast Chat Request
+
+```json
+{
+  "query": "What is the revenue for Company X in 2023?",
+  "conversation_history": [
+    {
+      "role": "user",
+      "content": "Tell me about Company X"
+    },
+    {
+      "role": "assistant",
+      "content": "Company X is a technology company founded in..."
+    }
+  ],
+  "memory_enabled": true
+}
+```
+
+### Fast Chat Response
+
+```json
+{
+  "response": "According to the 2023 annual report, Company X reported a revenue of $10.5 billion, which represents a 15% increase from the previous year.",
+  "documents_loaded": [
+    "Company_X_Annual_Report_2023.pdf"
+  ],
+  "document_selection_message": "Semantically selected 1 documents based on your query:\n• Company_X_Annual_Report_2023.pdf - Contains financial information for Company X for the year 2023",
+  "conversation_history": [
+    {
+      "role": "user",
+      "content": "Tell me about Company X"
+    },
+    {
+      "role": "assistant",
+      "content": "Company X is a technology company founded in..."
+    },
+    {
+      "role": "user",
+      "content": "What is the revenue for Company X in 2023?"
+    },
+    {
+      "role": "assistant",
+      "content": "According to the 2023 annual report, Company X reported a revenue of $10.5 billion, which represents a 15% increase from the previous year."
+    }
+  ]
+}
+```
+
+### ChromaAddRequest
+
+```json
+{
+  "documents": [
+    "This is a document about ChromaDB.",
+    "This is another document about vector stores."
+  ],
+  "metadatas": [
+    {"source": "doc1.txt"},
+    {"source": "doc2.txt"}
+  ],
+  "ids": ["id1", "id2"]
+}
+```
+
+### ChromaAddResponse
+```json
+{
+  "status": "success",
+  "ids": ["id1", "id2"]
+}
+```
+
+### ChromaQueryRequest
+```json
+{
+  "query": "What is ChromaDB?",
+  "n_results": 1
+}
+```
+
+### ChromaQueryResponse
+```json
+{
+  "ids": ["id1"],
+  "documents": ["This is a document about ChromaDB."],
+  "metadatas": [{"source": "doc1.txt"}]
 }
 ```
 
