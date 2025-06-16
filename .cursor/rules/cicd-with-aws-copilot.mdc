@@ -1,0 +1,39 @@
+---
+description: this layout is helpful whenever the assistant is asked questions about "deploy", "environment", or "pipeline"
+globs: 
+alwaysApply: false
+---
+# CICD with AWS Copilot
+
+This project is deployed to AWS using the **AWS Copilot CLI**.  Understanding this layout is helpful whenever the assistant is asked questions about "deploy", "environment", or "pipeline".
+
+## Key paths
+* Manifests live under `[copilot/](mdc:copilot)`; the main service is the load-balanced web service at `[copilot/api/manifest.yml](mdc:copilot/api/manifest.yml)`.
+* Each environment has its own CloudFormation stack automatically managed by Copilot.
+
+## Environments
+* **test** – the staging playground. Deployed with `copilot env deploy --name test` and updated via `copilot svc deploy --name api --env test`.
+* **prod** – the live production environment.  Once created (`copilot env init --name prod`), promote by redeploying the same image/tag to prod:  `copilot svc deploy --name api --env prod --tag <sha>`.
+
+## Typical workflow
+1. Develop locally → commit.
+2. Deploy to *test*:
+   ```bash
+   AWS_PROFILE=jse-datasphere-elroy copilot svc deploy --name api --env test
+   ```
+3. Validate in test (`/health`, `/chat`, etc.).
+4. Promote to *prod* (same tag or rebuild):
+   ```bash
+   AWS_PROFILE=jse-datasphere-elroy copilot svc deploy --name api --env prod --tag <sha>
+   ```
+
+## Pipelines
+* A Copilot CodePipeline can be generated with `copilot pipeline init` placing files in `[copilot/pipelines/](mdc:copilot)` (none committed yet).
+* Pipeline stages usually map **Source → Build → deploy to test → manual approval → deploy to prod**.
+
+## Tips & conventions
+* The ALB URLs differ per environment; use custom `alias` entries in `manifest.yml` to give stable domain names.
+* Keep secrets out of the manifest—store in AWS Secrets Manager and reference via the `secrets:` block.
+* Use `copilot svc logs`, `copilot svc status`, and `copilot svc show` to debug deployments.
+
+When questions about deployment, CI/CD, environment promotion, or AWS credentials arise, reference this rule.

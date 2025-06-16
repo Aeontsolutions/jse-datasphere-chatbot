@@ -13,3 +13,5 @@ rapidfuzz
 chromadb
 google-genai
 google-generativeai
+aioboto3
+tenacity
