@@ -233,8 +233,8 @@ import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 
 
-def get_first_n_pdfs(bucket: str, n: int = 3) -> List[str]:
-    """Return at most *n* PDF object URIs (s3://bucket/key) from the bucket."""
+def get_first_n_pdfs(bucket: str, n: int = 0) -> List[str]:
+    """Return at most *n* PDF object URIs from the bucket. If *n* is 0 (or <1) return **all** PDFs."""
     s3 = boto3.client("s3")
     paginator = s3.get_paginator("list_objects_v2")
     page_iter = paginator.paginate(Bucket=bucket, Prefix="organized/")
@@ -245,7 +245,7 @@ def get_first_n_pdfs(bucket: str, n: int = 3) -> List[str]:
             key = obj["Key"]
             if key.lower().endswith(".pdf"):
                 found.append(f"s3://{bucket}/{key}")
-                if len(found) >= n:
+                if n and n > 0 and len(found) >= n:
                     return found
     return found
 
@@ -309,6 +309,7 @@ async def process_uri(
     uri: str,
     processed: set[str],
     new_paths: list[pathlib.Path],
+    completed_uris: list[str],
     *,
     upload_bucket: Optional[str] = None,
     upload_prefix: str = "summaries/",
@@ -327,10 +328,8 @@ async def process_uri(
             out_path = pathlib.Path(out_path_str)
             logging.info("✅  Completed → %s", out_path)
 
-            # bookkeeping
-            processed.add(uri)
+            # bookkeeping (vector-store & processed tracking deferred)
             new_paths.append(out_path)
-            _save_processed(processed)
 
             # optional upload of summary back to S3
             if upload_bucket:
@@ -341,6 +340,9 @@ async def process_uri(
                     Key=key,
                 )
                 logging.info("☁️  Uploaded summary to s3://%s/%s", upload_bucket, key)
+
+            # record uri as successfully summarised **after** optional S3 upload
+            completed_uris.append(uri)
         except Exception as exc:
             logging.exception("❌  Failed on %s: %s", uri, exc)
 
@@ -385,6 +387,7 @@ async def async_main(bucket: str, num_files: int, max_conc: int, symbols: Option
 
     # keep track of new summaries
     new_summary_paths: list[pathlib.Path] = []
+    completed_uris: list[str] = []
 
     async with session.client("s3") as s3:
         tasks = [
@@ -395,6 +398,7 @@ async def async_main(bucket: str, num_files: int, max_conc: int, symbols: Option
                     u,
                     processed,
                     new_summary_paths,
+                    completed_uris,
                     upload_bucket=summary_bucket if upload_summaries else None,
                 )
             )
@@ -405,13 +409,22 @@ async def async_main(bucket: str, num_files: int, max_conc: int, symbols: Option
     # -------------------------------------------------------------
     # 🚀  After all summaries are written, push them to the vector DB
     # -------------------------------------------------------------
-    try:
-        if new_summary_paths:
+    vector_upload_success = True
+    if new_summary_paths:
+        try:
             _upload_summaries_to_vectordb(new_summary_paths)
-        else:
-            logging.info("No new summaries to upload – skipping vector-store call.")
-    except Exception as exc:
-        logging.exception("Vector-DB upload failed: %s", exc)
+        except Exception as exc:
+            vector_upload_success = False
+            logging.exception("Vector-DB upload failed: %s", exc)
+    else:
+        logging.info("No new summaries to upload – skipping vector-store call.")
+
+    # -------------------------------------------------------------
+    # 📝  Persist checkpoint only if ALL downstream steps succeeded
+    # -------------------------------------------------------------
+    if vector_upload_success and completed_uris:
+        processed.update(completed_uris)
+        _save_processed(processed)
 
 
 # -------------------------------------------------------------
@@ -476,7 +489,7 @@ def _upload_summaries_to_vectordb(paths: list[pathlib.Path]):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Asynchronous smoke-test for Gemini summariser.")
     parser.add_argument("--bucket", default="jse-renamed-docs", help="S3 bucket name")
-    parser.add_argument("--num-files", type=int, default=3, help="How many PDFs to process (per symbol or total)")
+    parser.add_argument("--num-files", type=int, default=0, help="Max PDFs to process (0 = no limit)")
     parser.add_argument("--concurrency", type=int, default=3, help="Max concurrent Gemini calls")
     parser.add_argument("--symbols", type=str, help="Comma-separated list of ticker symbols to process")
 

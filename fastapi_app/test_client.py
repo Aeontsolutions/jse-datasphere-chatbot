@@ -94,10 +94,10 @@ elif mode == "Add Document":
     metadata_default = \
 """{
   "company_name": "",
-  "doctype": "",
+  "file_type": "",
   "year": "",
   "source": ""
-+}"""
+}"""
     metadata_raw = st.text_area(
         "Metadata JSON (optional – must be valid JSON and align 1-to-1 with documents)",
         value=metadata_default,

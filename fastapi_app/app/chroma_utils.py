@@ -12,6 +12,7 @@ from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -20,16 +21,41 @@ json_file = "companies.json"
 with open(json_file, "r") as f:
     companies = json.load(f)
 
+
 def init_chroma_client(persist_directory: Optional[str] = None):
-    """Initialise and return a Chroma client backed by DuckDB+Parquet."""
+    """Initialise and return a Chroma client.
+
+    Chooses between a remote HTTP Chroma server (if `CHROMA_HOST` is set)
+    and a local on-disk PersistentClient (default).
+    """
+
+    chroma_host = os.getenv("CHROMA_HOST")
+
+    # ------------------------------------------------------------------
+    # Remote HTTP client
+    # ------------------------------------------------------------------
+    if chroma_host:
+        # Allow users to pass either full URL or just host name (e.g. "chroma")
+        import urllib.parse as _urlparse
+
+        parsed = _urlparse.urlparse(chroma_host)
+        host = parsed.hostname or parsed.path or chroma_host  # fallback to raw
+        port = parsed.port or int(os.getenv("CHROMA_PORT", 8000))
+
+        client = chromadb.HttpClient(host=host, port=port)
+        logger.info(
+            "Chroma HTTP client initialised (host=%s, port=%s)", host, port
+        )
+        return client
+
+    # ------------------------------------------------------------------
+    # Local persistent client (default)
+    # ------------------------------------------------------------------
     if persist_directory is None:
         persist_directory = os.getenv("CHROMA_PERSIST_DIRECTORY", "/app/chroma_db")
 
-    client = chromadb.PersistentClient(
-        path=persist_directory, 
-        # settings=settings
-        )
-    logger.info(f"Chroma client initialised (persist dir='{persist_directory}')")
+    client = chromadb.PersistentClient(path=persist_directory)
+    logger.info("Chroma client initialised (persist dir='%s')", persist_directory)
     return client
 
 
@@ -76,9 +102,7 @@ def add_documents(
         new_count = collection.count()
     except Exception as count_err:
         new_count = "unknown"
-        logger.warning(
-            "Could not retrieve collection count after add: %s", count_err
-        )
+        logger.warning("Could not retrieve collection count after add: %s", count_err)
 
     logger.info(
         "Added %s documents to Chroma collection '%s' | new_collection_size=%s",
@@ -87,13 +111,19 @@ def add_documents(
         new_count,
     )
     return ids
-    
+
+
 # Create a lookup dictionary
 lookup = {}
 for company in companies:
-    for name in [company["security_name"], company["short_name"], company["ticker_symbol"]]:
+    for name in [
+        company["security_name"],
+        company["short_name"],
+        company["ticker_symbol"],
+    ]:
         lookup[name.lower()] = company["short_name"]  # Normalize case
-        
+
+
 def fuzzy_match_company(query):
     """Try to match company names using fuzzy matching."""
     matches = {}
@@ -101,23 +131,24 @@ def fuzzy_match_company(query):
         score = fuzz.partial_ratio(query.lower(), name)
         if score > 80:  # Tune threshold
             matches[name] = lookup[name]
-    
+
     return list(set(matches.values()))
+
 
 def extract_companies_with_llm(query):
     """Fallback method: Use an LLM to extract company names."""
     client = genai.Client(api_key=os.getenv("CHATBOT_API_KEY"))
-    
+
     response = client.models.generate_content(
         model="gemini-2.0-flash-lite-001",
         config=types.GenerateContentConfig(
             system_instruction="Your task is to retrun a comma separated list of the companies mentioned in the user's prompt.",
             temperature=0,
         ),
-        contents=[query]
+        contents=[query],
     )
     extracted_names = response.text
-    
+
     # convert the extracted names to a list
     extracted_names = extracted_names.split(", ")
     return extracted_names
@@ -130,9 +161,12 @@ def get_companies_from_query(query):
     if not companies_found:  # If no match, try LLM
         print("No fuzzy match found, trying LLM")
         llm_extracted = extract_companies_with_llm(query)
-        companies_found = [lookup.get(name.lower()) for name in llm_extracted if name.lower() in lookup]
+        companies_found = [
+            lookup.get(name.lower()) for name in llm_extracted if name.lower() in lookup
+        ]
 
     return companies_found
+
 
 def get_doctype_from_query(query):
     """Get the document type from the query.
@@ -142,7 +176,7 @@ def get_doctype_from_query(query):
     Returns:
         str: The document type.
     """
-    
+
     client = genai.Client(api_key=os.getenv("CHATBOT_API_KEY"))
     response = client.models.generate_content(
         model="gemini-2.0-flash-lite-001",
@@ -181,7 +215,7 @@ def get_doctype_from_query(query):
                 """,
             temperature=0,
         ),
-        contents=[query]
+        contents=[query],
     )
     last_line = response.text.lower().strip().split("\n")[-1].strip('"')
     doctype_map = {
@@ -190,6 +224,7 @@ def get_doctype_from_query(query):
         "label: financial": ["financial"]
     }
     return doctype_map.get(last_line, ["unknown"])
+
 
 def query_collection(
     collection: "chromadb.Collection",
@@ -230,18 +265,43 @@ def query_collection(
         where=where_filter,
     )
 
+    def _no_hits(res: dict):
+        return not res.get("ids") or all(len(row) == 0 for row in res.get("ids", []))
+
+    if _no_hits(results):
+        # Tier-1 fallback: keep company filter, drop doctype (often too strict)
+        if company_matches:
+            relaxed_filter = {"company_name": {"$in": company_matches}}
+            logger.info(
+                "Filtered query returned no results – retrying with company_name only"
+            )
+            results = collection.query(
+                query_texts=[query],
+                n_results=n_results,
+                where=relaxed_filter,
+            )
+
+    # Tier-2 fallback: no metadata filter at all
+    if _no_hits(results):
+        logger.info(
+            "Relaxed company filter also returned no results – retrying without any metadata filter"
+        )
+        results = collection.query(query_texts=[query], n_results=n_results)
+
     logger.info("Chroma returned ids=%s", results.get("ids"))
 
     # Step 3: Flatten Nested Metadata & Document Lists
-    metadata_results = results.get('metadatas', [])
-    document_results = results.get('documents', [])
+    metadata_results = results.get("metadatas", [])
+    document_results = results.get("documents", [])
     flattened_metadata = [item for sublist in metadata_results for item in sublist]
     flattened_documents = [item for sublist in document_results for item in sublist]
-    
+
     # Step 4: Sort Metadata & Documents by Year (Descending)
     sorted_results = sorted(
         zip(flattened_metadata, flattened_documents),
-        key=lambda pair: int(pair[0]["year"]),  # Convert 'year' to int for correct sorting
+        key=lambda pair: int(
+            pair[0]["year"]
+        ),  # Convert 'year' to int for correct sorting
         reverse=True,
     )
 
@@ -250,12 +310,17 @@ def query_collection(
 
     return sorted_results, context
 
+
 # ---------------------------------------------------------------------------
 # QA Bot Helper (Gemini LLM)
 # ---------------------------------------------------------------------------
 
 
-def qa_bot(query: str, contexts: str, conversation_history: Optional[List[Dict[str, str]]] = None):
+def qa_bot(
+    query: str,
+    contexts: str,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+):
     """Answer a user question using only the supplied `contexts` string.
 
     Parameters
@@ -274,8 +339,7 @@ def qa_bot(query: str, contexts: str, conversation_history: Optional[List[Dict[s
 
     client = genai.Client(api_key=os.getenv("CHATBOT_API_KEY"))
 
-    qa_system_prompt = (
-        """
+    qa_system_prompt = """
         You are an experienced financial analyst. Your primary task is to answer user questions about topics based *solely* on the content of the provided document summaries. Your goal is to provide not just factually accurate but also insightful responses that directly address the user's query by synthesizing information and identifying key relationships within the provided documents.
 
         **Strict Guidelines:**
@@ -289,14 +353,15 @@ def qa_bot(query: str, contexts: str, conversation_history: Optional[List[Dict[s
 
         **Focus:** Provide concise yet comprehensive answers that directly address the user's query with insights derived solely from the provided document summaries. Aim to explain the "why" behind the numbers and trends where the information allows, without making assumptions or introducing external data.
     """
-    )
 
     # Include recent conversation history (up to 20 turns) in the prompt, if provided
     convo_context = ""
     if conversation_history:
         # Keep only the last 20 messages to keep the context short
         recent_history = conversation_history[-20:]
-        convo_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+        convo_context = "\n".join(
+            [f"{msg['role']}: {msg['content']}" for msg in recent_history]
+        )
         convo_context = f"Conversation history:\n{convo_context}\n\n"
 
     prompt = f"{convo_context}Question: {query}\nContext: {contexts}"

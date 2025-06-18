@@ -13,15 +13,21 @@ services:
       - GCP_SERVICE_ACCOUNT_INFO=${GCP_SERVICE_ACCOUNT_INFO}
       - SUMMARIZER_API_KEY=${SUMMARIZER_API_KEY}
       - CHATBOT_API_KEY=${CHATBOT_API_KEY}
-      - CHROMA_PERSIST_DIRECTORY=/app/chroma_db
+      - CHROMA_HOST=http://chroma:8000
     volumes:
-      # Persist ChromaDB Parquet files outside the container
-      - chroma_data:/app/chroma_db
       # Mount the .env file for application secrets
       - ./.env:/app/.env
 
-# ------------------------------------------------------
-# Named Volumes (declared at the root of the compose file)
-# ------------------------------------------------------
+  chroma:
+    image: ghcr.io/chroma-core/chroma:latest
+    environment:
+      - PERSIST_DIRECTORY=/app/chroma_db
+      - CHROMA_DB_IMPL=duckdb+parquet
+    volumes:
+      - chroma_data:/app/chroma_db
+    ports:
+      # Expose on host 8001 for debugging; internal port 8000
+      - "8001:8000"
+
 volumes:
   chroma_data:
