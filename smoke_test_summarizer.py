@@ -492,6 +492,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-files", type=int, default=0, help="Max PDFs to process (0 = no limit)")
     parser.add_argument("--concurrency", type=int, default=3, help="Max concurrent Gemini calls")
     parser.add_argument("--symbols", type=str, help="Comma-separated list of ticker symbols to process")
+    parser.add_argument("--update-url", help="Override CHROMA_UPDATE_URL for vector DB upload")
 
     # Boolean flag: --upload-summaries / --no-upload-summaries (Python ≥3.9)
     try:
@@ -523,4 +524,6 @@ if __name__ == "__main__":
             args.upload_summaries,
             args.summary_bucket or args.bucket,
         )
-    ) 
+    )
+    if args.update_url:
+        os.environ["CHROMA_UPDATE_URL"] = args.update_url 
