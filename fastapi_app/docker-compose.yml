@@ -1,0 +1,33 @@
+version: '3'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - DOCUMENT_METADATA_S3_BUCKET=${DOCUMENT_METADATA_S3_BUCKET}
+      - GCP_SERVICE_ACCOUNT_INFO=${GCP_SERVICE_ACCOUNT_INFO}
+      - SUMMARIZER_API_KEY=${SUMMARIZER_API_KEY}
+      - CHATBOT_API_KEY=${CHATBOT_API_KEY}
+      - CHROMA_HOST=http://chroma:8000
+    volumes:
+      # Mount the .env file for application secrets
+      - ./.env:/app/.env
+
+  chroma:
+    image: ghcr.io/chroma-core/chroma:latest
+    environment:
+      - PERSIST_DIRECTORY=/app/chroma_db
+      - CHROMA_DB_IMPL=duckdb+parquet
+    volumes:
+      - chroma_data:/app/chroma_db
+    ports:
+      # Expose on host 8001 for debugging; internal port 8000
+      - "8001:8000"
+
+volumes:
+  chroma_data:

@@ -1,0 +1,64 @@
+---
+description: When trying to explain or understand how to deploy the app
+globs: 
+alwaysApply: false
+---
+# Deployment & Vector DB Management Guide
+
+This project ships with a containerised setup that is defined inside the following files:
+
+* [Dockerfile](mdc:fastapi_app/Dockerfile) – builds the image for the FastAPI service.
+* [docker-compose.yml](mdc:fastapi_app/docker-compose.yml) – runs the service locally and wires up a **named Docker volume** for vector-store persistence (`chroma_data`).
+
+---
+## 🐳 Local Development Workflow
+
+1. **Build & Run**
+   ```bash
+   docker compose up --build       # rebuilds the image and starts the API on http://localhost:8000
+   ```
+
+2. **Hot Iteration**
+   * **Code changes**: trigger `docker compose up --build` again – the named volume keeps your vectors.
+   * **Env changes**: update `.env` (mounted into the container) and restart.
+
+3. **Stop / Remove**
+   ```bash
+   docker compose down             # stops & removes the container, keeps the volume
+   ```
+
+---
+## 💾 Vector-Store (ChromaDB) Persistence
+
+* The FastAPI app creates a `chromadb.PersistentClient` pointing to `CHROMA_PERSIST_DIRECTORY` (defaults to `/app/chroma_db`).
+* [docker-compose.yml](mdc:fastapi_app/docker-compose.yml) mounts that path to the **named volume** `chroma_data`:
+  ```yaml
+  volumes:
+    - chroma_data:/app/chroma_db
+  ```
+* Because it is a *named volume*, the data lives under Docker's storage root (usually `/var/lib/docker/volumes/…`) and survives container rebuilds or image deletions.
+
+### Common Tasks
+
+| Task | Command |
+|------|---------|
+| Inspect volume location | `docker volume inspect chroma_data` |
+| Backup the Parquet files | copy the host dir shown in the inspect output |
+| Reset / wipe the DB | `docker volume rm chroma_data && docker compose up --build` |
+
+---
+## 🌐 Useful Endpoints After Startup
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /chroma/update` | Add / upsert documents into the vector store |
+| `POST /chroma/query`  | Query the store for similar documents |
+| `GET  /health`        | Simple health check for S3 + metadata availability |
+
+---
+### Reminder: Environment Variables
+
+The compose file passes sensitive credentials via environment variables and mounts `.env` for local usage. When deploying elsewhere (e.g., ECS, Kubernetes), replicate **all** variables listed in `docker-compose.yml` and ensure a persistent volume is mounted at the same `CHROMA_PERSIST_DIRECTORY`. For AWS EFS, GCP Filestore, or similar, mount the network share at `/app/chroma_db` inside the container.
+
+---
+**Rule Usage**: Refer to this guide whenever you need to spin up the service or diagnose vector-store persistence issues.
