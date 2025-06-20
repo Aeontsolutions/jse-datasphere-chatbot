@@ -646,5 +646,465 @@
         "currency": "JMD",
         "sector": "MANUFACTURING",
         "type": "ORDINARY"
+    },
+    {
+        "security_name": "ACCESS FINANCIAL SERVICES LIMITED",
+        "short_name": "AFS",
+        "ticker_symbol": "AFS",
+        "ISIN": "JMP004681012",
+        "currency": "JMD",
+        "sector": "FINANCE",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "AMG PACKAGING & PAPER COMPANY LIMITED",
+        "short_name": "AMG",
+        "ticker_symbol": "AMG",
+        "ISIN": "JMP4171A1054",
+        "currency": "JMD",
+        "sector": "MANUFACTURING",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "ATLANTIC HARDWARE AND PLUMBING COMPANY LIMITED",
+        "short_name": "AHPC",
+        "ticker_symbol": "AHPC",
+        "ISIN": "JME202500075",
+        "currency": "JMD",
+        "sector": "MANUFACTURING",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "BLUE POWER GROUP LIMITED",
+        "short_name": "BPOW",
+        "ticker_symbol": "BPOW",
+        "ISIN": "JMP170271069",
+        "currency": "JMD",
+        "sector": "MANUFACTURING",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "CAC 2000 LIMITED",
+        "short_name": "CAC",
+        "ticker_symbol": "CAC",
+        "ISIN": "JME201500084",
+        "currency": "JMD",
+        "sector": "RETAIL",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "CARGO HANDLERS LIMITED",
+        "short_name": "CHL",
+        "ticker_symbol": "CHL",
+        "ISIN": "JMP210381076",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "CARIBBBEAN ASSURANCE BROKERS LIMITED",
+        "short_name": "CABROKERS",
+        "ticker_symbol": "CABROKERS",
+        "ISIN": "JME202000035",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "CARIBBEAN CREAM LIMITED",
+        "short_name": "KREMI",
+        "ticker_symbol": "KREMI",
+        "ISIN": "JME201300014",
+        "currency": "JMD",
+        "sector": "MANUFACTURING",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "CARIBBEAN FLAVOURS & FRAGRANCES LIMITED",
+        "short_name": "CFF",
+        "ticker_symbol": "CFF",
+        "ISIN": "JME201300063",
+        "currency": "JMD",
+        "sector": "MANUFACTURING",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "CONSOLIDATED BAKERIES (JAMAICA) LIMITED",
+        "short_name": "PURITY",
+        "ticker_symbol": "PURITY",
+        "ISIN": "JME201200024",
+        "currency": "JMD",
+        "sector": "MANUFACTURING",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "DERRIMON TRADING COMPANY LIMITED",
+        "short_name": "DTL",
+        "ticker_symbol": "DTL",
+        "ISIN": "JME201300147",
+        "currency": "JMD",
+        "sector": "RETAIL",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "DOLLA FINANCIAL SERVICES LIMITED",
+        "short_name": "DOLLA",
+        "ticker_symbol": "DOLLA",
+        "ISIN": "JME202200080",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "DOLPHIN COVE LIMITED",
+        "short_name": "DCOVE",
+        "ticker_symbol": "DCOVE",
+        "ISIN": "JMP360321039",
+        "currency": "JMD",
+        "sector": "TOURISM",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "ELITE DIAGNOSTIC LIMITED",
+        "short_name": "ELITE",
+        "ticker_symbol": "ELITE",
+        "ISIN": "JME201800047",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "EVERYTHING FRESH LIMITED",
+        "short_name": "EFRESH",
+        "ticker_symbol": "EFRESH",
+        "ISIN": "JME201800146",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "EXPRESS CATERING LIMITED",
+        "short_name": "ECL",
+        "ticker_symbol": "ECL",
+        "ISIN": "JME201700130",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "FONTANA LIMITED",
+        "short_name": "FTNA",
+        "ticker_symbol": "FTNA",
+        "ISIN": "JME201900011",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "FOSRICH COMPANY LIMITED",
+        "short_name": "FOSRICH",
+        "ticker_symbol": "FOSRICH",
+        "ISIN": "JME201700197",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "FUTURE ENERGY SOURCE COMPANY LTD ORDINARY SHARES",
+        "short_name": "FESCO",
+        "ticker_symbol": "FESCO",
+        "ISIN": "JME202100074",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "GWEST CORPORATION LIMITED ORDINARY SHARES",
+        "short_name": "GWEST",
+        "ticker_symbol": "GWEST",
+        "ISIN": "JME201700213",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "HONEY BUN (1982) LIMITED",
+        "short_name": "HONBUN",
+        "ticker_symbol": "HONBUN",
+        "ISIN": "JMP5178T1046",
+        "currency": "JMD",
+        "sector": "MANUFACTURING",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "IMAGE PLUS CONSULTANTS LIMITED",
+        "short_name": "IPCL",
+        "ticker_symbol": "IPCL",
+        "ISIN": "JME202200296",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "INDIES PHARMA JAMAICA LIMITED ORDINARY SHARES",
+        "short_name": "INDIES",
+        "ticker_symbol": "INDIES",
+        "ISIN": "JME201800161",
+        "currency": "JMD",
+        "sector": "RETAIL",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "IRONROCK INSURANCE COMPANY LIMITED",
+        "short_name": "ROC",
+        "ticker_symbol": "ROC",
+        "ISIN": "JME201600066",
+        "currency": "JMD",
+        "sector": "INSURANCE",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "ISP FINANCE SERVICES LIMITED",
+        "short_name": "ISP",
+        "ticker_symbol": "ISP",
+        "ISIN": "JME201600074",
+        "currency": "JMD",
+        "sector": "FINANCE",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "JAMAICAN TEAS LIMITED",
+        "short_name": "JAMT",
+        "ticker_symbol": "JAMT",
+        "ISIN": "JMP5894D1021",
+        "currency": "JMD",
+        "sector": "MANUFACTURING",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "JETCON CORPORATION LIMITED",
+        "short_name": "JETCON",
+        "ticker_symbol": "JETCON",
+        "ISIN": "JME201600082",
+        "currency": "JMD",
+        "sector": "RETAIL",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "JFP LIMITED",
+        "short_name": "JFP",
+        "ticker_symbol": "JFP",
+        "ISIN": "JME202200023",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "K.L.E. GROUP LIMITED",
+        "short_name": "KLE",
+        "ticker_symbol": "KLE",
+        "ISIN": "JME201200016",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "KINTYRE HOLDINGS (JA) LIMITED",
+        "short_name": "KNTYR",
+        "ticker_symbol": "KNTYR",
+        "ISIN": "JME201900052",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "KNUTSFORD EXPRESS SERVICES LIMITED",
+        "short_name": "KEX",
+        "ticker_symbol": "KEX",
+        "ISIN": "JME201300170",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "LASCO FINANCIAL SERVICES LIMITED",
+        "short_name": "LASF",
+        "ticker_symbol": "LASF",
+        "ISIN": "JMP620981010",
+        "currency": "JMD",
+        "sector": "FINANCE",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "LUMBER DEPOT LIMITED",
+        "short_name": "LUMBER",
+        "ticker_symbol": "LUMBER",
+        "ISIN": "JME201900243",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "MAILPAC GROUP LIMITED",
+        "short_name": "MAILPAC",
+        "ticker_symbol": "MAILPAC",
+        "ISIN": "JME201900235",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "MAIN EVENT ENTERTAINMENT GROUP",
+        "short_name": "MEEG",
+        "ticker_symbol": "MEEG",
+        "ISIN": "JME201700023",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "MEDICAL DISPOSABLES & SUPPLIES LIMITED",
+        "short_name": "MDS",
+        "ticker_symbol": "MDS",
+        "ISIN": "JME201300154",
+        "currency": "JMD",
+        "sector": "RETAIL",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "MFS CAPITAL PARTNERS LIMITED",
+        "short_name": "MFS",
+        "ticker_symbol": "MFS",
+        "ISIN": "JME201900029",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "OMNI INDUSTRIES LIMITED",
+        "short_name": "OMNI",
+        "ticker_symbol": "OMNI",
+        "ISIN": "JME202400037",
+        "currency": "JMD",
+        "sector": "MANUFACTURING",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "ONE GREAT STUDIO COMPANY LIMITED",
+        "short_name": "1GS",
+        "ticker_symbol": "1GS",
+        "ISIN": "JME202300096",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "PARAMOUNT TRADING (JAMAICA) LIMITED",
+        "short_name": "PTL",
+        "ticker_symbol": "PTL",
+        "ISIN": "JME201200032",
+        "currency": "JMD",
+        "sector": "MANUFACTURING",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "R.A. WILLIAMS DISTRIBUTORS LIMITED",
+        "short_name": "RAWILL",
+        "ticker_symbol": "RAWILL",
+        "ISIN": "JME202400078",
+        "currency": "JMD",
+        "sector": "RETAIL",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "REGENCY PETROLEUM CO. LIMITED",
+        "short_name": "RPL",
+        "ticker_symbol": "RPL",
+        "ISIN": "JME202200288",
+        "currency": "JMD",
+        "sector": "RETAIL",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "SPUR TREE SPICES JAMAICA LIMITED",
+        "short_name": "SPURTREE",
+        "ticker_symbol": "SPURTREE",
+        "ISIN": "JME202200015",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "STATIONERY AND OFFICE SUPPLIES LIMITED",
+        "short_name": "SOS",
+        "ticker_symbol": "SOS",
+        "ISIN": "JME201700148",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
+    },
+    {
+        "security_name": "THE LIMNERS AND BARDS LIMITED",
+        "short_name": "LAB",
+        "ticker_symbol": "LAB",
+        "ISIN": "JME201900102",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "Visit website"
+    },
+    {
+        "security_name": "TROPICAL BATTERY COMPANY LIMITED",
+        "short_name": "TROPICAL",
+        "ticker_symbol": "TROPICAL",
+        "ISIN": "JME202000092",
+        "currency": "JMD",
+        "sector": "OTHER",
+        "type": "ORDINARY",
+        "website": "-"
     }
 ]
