@@ -282,6 +282,8 @@ async def chroma_query(
 @app.post("/fast_chat", response_model=ChatResponse)
 async def fast_chat(
     request: ChatRequest,
+    s3_client: Any = Depends(get_s3_client),
+    metadata: Dict = Depends(get_metadata),
     collection: Any = Depends(get_chroma_collection),
 ):
     """A retrieval-augmented chat endpoint that first fetches documents from
@@ -291,7 +293,9 @@ async def fast_chat(
     search every turn and builds a larger context for the model.
     """
 
-    logger.info(f"/fast_chat called. query='{request.query[:200]}' | memory_enabled={request.memory_enabled}")
+    logger.info(
+        f"/fast_chat called. query='{request.query[:200]}' | memory_enabled={request.memory_enabled} | auto_load_documents={request.auto_load_documents}"
+    )
     
     try:
         # -----------------------------
@@ -306,33 +310,56 @@ async def fast_chat(
             retrieval_query = " ".join(recent_history + [request.query])
 
         # -----------------------------
-        # Step 2: Retrieve documents from ChromaDB
+        # Step 2: (Optional) Semantic pre-selection of documents
+        # -----------------------------
+        auto_load_message: Optional[str] = None
+        semantic_filenames: list[str] = []
+
+        if request.auto_load_documents:
+            _, auto_load_message, semantic_filenames = auto_load_relevant_documents(
+                s3_client,
+                request.query,
+                metadata,
+                {},  # no cached docs needed; we only need the filenames
+                request.conversation_history,
+            )
+
+        # Build "where" filter for the vector query
+        where_filter = {"filename": {"$in": semantic_filenames}} if semantic_filenames else None
+
+        # -----------------------------
+        # Step 3: Retrieve documents from ChromaDB (filtered if filenames found)
         # -----------------------------
         sorted_results, context = chroma_query_collection(
             collection,
             query=retrieval_query,
             n_results=5,
-            # where=None,
+            where=where_filter,
         )
 
-        # Prepare helpful metadata for the caller
-        loaded_docs = [
-            meta.get("source")
-            or meta.get("filename")
+        # Prepare helpful metadata for the caller (from retrieval step)
+        retrieved_doc_names = [
+            meta.get("filename")
+            or meta.get("source")
             or meta.get("id")
             for meta, _ in sorted_results
         ]
 
-        doc_selection_message = (
-            f"{len(sorted_results)} documents retrieved from vector database."
-        )
+        retrieval_message = f"{len(sorted_results)} documents retrieved from vector database."
+
+        # Combine messages
+        doc_selection_message_parts = []
+        if auto_load_message:
+            doc_selection_message_parts.append(auto_load_message.strip())
+        doc_selection_message_parts.append(retrieval_message)
+        doc_selection_message = " " .join(doc_selection_message_parts)
 
         logger.info(
-            f"/fast_chat retrieval complete. documents_retrieved={len(sorted_results)}, context_chars={len(context)}"
+            f"/fast_chat retrieval complete. documents_retrieved={len(sorted_results)}, context_chars={len(context)}, semantic_filter_docs={semantic_filenames}"
         )
 
         # -----------------------------
-        # Step 3: Let LLM answer (include conversation history if provided)
+        # Step 4: Let LLM answer (include conversation history if provided)
         # -----------------------------
         response_text = qa_bot(
             request.query,
@@ -346,7 +373,7 @@ async def fast_chat(
         )
 
         # -----------------------------
-        # Step 4: Update conversation history (if memory is enabled)
+        # Step 5: Update conversation history (if memory is enabled)
         # -----------------------------
         updated_conversation_history = None
         if request.memory_enabled and request.conversation_history:
@@ -361,7 +388,7 @@ async def fast_chat(
 
         return ChatResponse(
             response=response_text,
-            documents_loaded=loaded_docs,
+            documents_loaded=retrieved_doc_names,
             document_selection_message=doc_selection_message,
             conversation_history=updated_conversation_history,
         )

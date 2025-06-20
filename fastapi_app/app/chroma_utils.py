@@ -230,30 +230,36 @@ def query_collection(
     collection: "chromadb.Collection",
     query: str,
     n_results: int = 5,
-    # where: Optional[Dict[str, Any]] = None,
+    where: Optional[Dict[str, Any]] = None,
 ):
     """Query a Chroma collection and return the raw result dict."""
 
     # ------------------------------------------------------------------
-    # Step 1: Build dynamic filter
+    # Step 1: Determine metadata filter
     # ------------------------------------------------------------------
-    company_matches = get_companies_from_query(query)
-    doctype = get_doctype_from_query(query)
+    if where is not None:
+        # Caller provided an explicit filter (e.g. by filename) – use it as-is
+        where_filter = where
+        logger.info("Chroma query using caller-supplied filter: %s", where_filter)
+    else:
+        # Build dynamic filter from company + document-type heuristics
+        company_matches = get_companies_from_query(query)
+        doctype = get_doctype_from_query(query)
 
-    where_clauses = []
-    if company_matches:
-        where_clauses.append({"company_name": {"$in": company_matches}})
-    if doctype and doctype[0] != "unknown":
-        where_clauses.append({"file_type": {"$in": doctype}})
+        where_clauses = []
+        if company_matches:
+            where_clauses.append({"company_name": {"$in": company_matches}})
+        if doctype and doctype[0] != "unknown":
+            where_clauses.append({"file_type": {"$in": doctype}})
 
-    where_filter = {"$and": where_clauses} if where_clauses else None
+        where_filter = {"$and": where_clauses} if where_clauses else None
 
-    logger.info(
-        "Chroma query filter built | company_matches=%s | doctype=%s | where=%s",
-        company_matches,
-        doctype,
-        where_filter,
-    )
+        logger.info(
+            "Chroma query filter built | company_matches=%s | doctype=%s | where=%s",
+            company_matches,
+            doctype,
+            where_filter,
+        )
 
     # ------------------------------------------------------------------
     # Step 2: Execute vector search
@@ -268,9 +274,9 @@ def query_collection(
     def _no_hits(res: dict):
         return not res.get("ids") or all(len(row) == 0 for row in res.get("ids", []))
 
-    if _no_hits(results):
-        # Tier-1 fallback: keep company filter, drop doctype (often too strict)
-        if company_matches:
+    if _no_hits(results) and where is None:
+        # Tier-1 fallback (only for auto-built filter): keep company filter, drop doctype
+        if 'company_matches' in locals() and company_matches:
             relaxed_filter = {"company_name": {"$in": company_matches}}
             logger.info(
                 "Filtered query returned no results – retrying with company_name only"
@@ -284,7 +290,7 @@ def query_collection(
     # Tier-2 fallback: no metadata filter at all
     if _no_hits(results):
         logger.info(
-            "Relaxed company filter also returned no results – retrying without any metadata filter"
+            "Metadata filter returned no results – retrying without any metadata filter"
         )
         results = collection.query(query_texts=[query], n_results=n_results)
 

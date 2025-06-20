@@ -362,7 +362,16 @@ def _list_pdfs_for_symbols(bucket: str, symbols: list[str]) -> List[str]:
     return uris
 
 
-async def async_main(bucket: str, num_files: int, max_conc: int, symbols: Optional[List[str]], upload_summaries: bool, summary_bucket: Optional[str]):
+async def async_main(
+    bucket: str,
+    num_files: int,
+    max_conc: int,
+    symbols: Optional[List[str]],
+    upload_summaries: bool,
+    summary_bucket: Optional[str],
+    *,
+    reset: bool = False,
+):
     if symbols:
         uris = _list_pdfs_for_symbols(bucket, symbols)
         if num_files:
@@ -373,7 +382,7 @@ async def async_main(bucket: str, num_files: int, max_conc: int, symbols: Option
         logging.error("No PDFs found in bucket %s", bucket)
         return
 
-    processed = _load_processed()
+    processed: set[str] = set() if reset else _load_processed()
 
     # filter uris down to those not processed unless user explicitly wants all via num_files param
     unprocessed_uris = [u for u in uris if u not in processed]
@@ -493,6 +502,8 @@ if __name__ == "__main__":
     parser.add_argument("--concurrency", type=int, default=3, help="Max concurrent Gemini calls")
     parser.add_argument("--symbols", type=str, help="Comma-separated list of ticker symbols to process")
     parser.add_argument("--update-url", help="Override CHROMA_UPDATE_URL for vector DB upload")
+    parser.add_argument("--checkpoint-path", help="Path to checkpoint file (defaults to processed.json or $CHECKPOINT_PATH)")
+    parser.add_argument("--reset", action="store_true", help="Ignore existing checkpoint file and start fresh")
 
     # Boolean flag: --upload-summaries / --no-upload-summaries (Python ≥3.9)
     try:
@@ -514,7 +525,19 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+    # -------------------------------------------------------------
+    # Configure checkpoint path (CLI > ENV > default)
+    # -------------------------------------------------------------
+    checkpoint_path = (
+        args.checkpoint_path
+        or os.getenv("CHECKPOINT_PATH")
+        or "processed.json"
+    )
+    globals()["PROCESSED_PATH"] = pathlib.Path(checkpoint_path)
+
     symbol_list = [s.strip().upper() for s in args.symbols.split(",")] if args.symbols else None
+
     asyncio.run(
         async_main(
             args.bucket,
@@ -523,6 +546,7 @@ if __name__ == "__main__":
             symbol_list,
             args.upload_summaries,
             args.summary_bucket or args.bucket,
+            reset=args.reset,
         )
     )
     if args.update_url:
