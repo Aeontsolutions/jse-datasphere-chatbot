@@ -59,3 +59,5 @@ summarizer.ipynb
 
 # FastAPI app
 fastapi_app/.env
+fastapi_app/copilot/*
+fastapi_app/fastapi_app/*
