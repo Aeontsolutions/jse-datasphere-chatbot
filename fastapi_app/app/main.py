@@ -316,11 +316,20 @@ async def fast_chat(
         auto_load_message: Optional[str] = None
         semantic_filenames: list[str] = []
 
-        semantic_filenames = semantic_document_selection(
+        selected_docs = semantic_document_selection(
             request.query,
             metadata,
             request.conversation_history,
         )
+        
+        if selected_docs:
+            auto_load_message = f"The user has mentioned the following companies: {', '.join(selected_docs['companies_mentioned'])}"
+            # Normalise filenames: some LLM responses include full S3 paths – we only
+            # store the *basename* (e.g. "my_report.pdf") in Chroma metadata.
+            # Strip any directory components before building the filter.
+            semantic_filenames = [
+                os.path.basename(doc["filename"]) for doc in selected_docs["documents_to_load"]
+            ]
 
         # Build "where" filter for the vector query
         where_filter = {"filename": {"$in": semantic_filenames}} if semantic_filenames else None
