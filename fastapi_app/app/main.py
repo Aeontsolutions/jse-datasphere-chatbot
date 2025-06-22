@@ -14,7 +14,8 @@ from app.utils import (
     init_vertex_ai, 
     load_metadata_from_s3, 
     auto_load_relevant_documents, 
-    generate_chat_response
+    generate_chat_response,
+    semantic_document_selection,
 )
 from app.chroma_utils import (
     init_chroma_client,
@@ -315,14 +316,11 @@ async def fast_chat(
         auto_load_message: Optional[str] = None
         semantic_filenames: list[str] = []
 
-        if request.auto_load_documents:
-            _, auto_load_message, semantic_filenames = auto_load_relevant_documents(
-                s3_client,
-                request.query,
-                metadata,
-                {},  # no cached docs needed; we only need the filenames
-                request.conversation_history,
-            )
+        semantic_filenames = semantic_document_selection(
+            request.query,
+            metadata,
+            request.conversation_history,
+        )
 
         # Build "where" filter for the vector query
         where_filter = {"filename": {"$in": semantic_filenames}} if semantic_filenames else None
