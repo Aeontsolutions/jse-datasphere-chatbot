@@ -1,10 +1,10 @@
 """
-Unit tests for chroma_utils.py focusing on the single-clause $and filter fix.
+Unit tests for chroma_utils.py focusing on the refactored filename-only filtering.
 
 These tests verify that the query_collection function correctly handles:
-1. Zero filter clauses (no metadata filters)
-2. One filter clause (single metadata filter - should not use $and)
-3. Two+ filter clauses (multiple metadata filters - should use $and)
+1. No metadata filters (where=None)
+2. Explicit filename filters (where parameter)
+3. Fallback behavior when filtered queries return no results
 """
 
 import pytest
@@ -12,14 +12,14 @@ from unittest.mock import Mock, patch, MagicMock
 import os
 import sys
 
-# Add the app directory to Python path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'app'))
+# Add the fastapi_app directory to Python path so we can import modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from app.chroma_utils import query_collection
 
 
-class TestQueryCollectionFilterLogic:
-    """Test the core filter logic for ChromaDB queries."""
+class TestQueryCollectionFilenameFiltering:
+    """Test the refactored filename-only filtering logic for ChromaDB queries."""
     
     def setup_method(self):
         """Set up test fixtures."""
@@ -28,17 +28,11 @@ class TestQueryCollectionFilterLogic:
         self.mock_collection.query.return_value = {
             "ids": [["doc1", "doc2"]],
             "documents": [["Document 1 content", "Document 2 content"]],
-            "metadatas": [[{"year": "2023", "company_name": "Test Co"}, {"year": "2022", "company_name": "Test Co"}]]
+            "metadatas": [[{"year": "2023", "filename": "test1.pdf"}, {"year": "2022", "filename": "test2.pdf"}]]
         }
         
-    @patch('app.chroma_utils.get_companies_from_query')
-    @patch('app.chroma_utils.get_doctype_from_query')
-    def test_zero_clause_filter(self, mock_get_doctype, mock_get_companies):
-        """Test that zero filter clauses result in where_filter=None."""
-        # Setup: No company matches, no document type
-        mock_get_companies.return_value = []
-        mock_get_doctype.return_value = ["unknown"]
-        
+    def test_no_where_filter(self):
+        """Test that no where filter results in where_filter=None."""
         # Execute
         query_collection(self.mock_collection, "test query", n_results=5)
         
@@ -47,146 +41,192 @@ class TestQueryCollectionFilterLogic:
         call_args = self.mock_collection.query.call_args
         assert call_args[1]['where'] is None
         
-    @patch('app.chroma_utils.get_companies_from_query')
-    @patch('app.chroma_utils.get_doctype_from_query')
-    def test_one_clause_filter_company_only(self, mock_get_doctype, mock_get_companies):
-        """Test that one filter clause (company only) is passed directly without $and."""
-        # Setup: One company match, no document type
-        mock_get_companies.return_value = ["Test Company"]
-        mock_get_doctype.return_value = ["unknown"]
+    def test_explicit_filename_filter(self):
+        """Test that explicit filename filter is passed through correctly."""
+        filename_filter = {"filename": {"$in": ["test.pdf", "report.pdf"]}}
         
         # Execute
-        query_collection(self.mock_collection, "test query", n_results=5)
+        query_collection(self.mock_collection, "test query", n_results=5, where=filename_filter)
         
-        # Verify: Should call collection.query with single filter clause (no $and)
+        # Verify: Should call collection.query with the exact filter provided
         self.mock_collection.query.assert_called()
         call_args = self.mock_collection.query.call_args
-        expected_filter = {"company_name": {"$in": ["Test Company"]}}
-        assert call_args[1]['where'] == expected_filter
-        assert '$and' not in call_args[1]['where']
+        assert call_args[1]['where'] == filename_filter
         
-    @patch('app.chroma_utils.get_companies_from_query')
-    @patch('app.chroma_utils.get_doctype_from_query')
-    def test_one_clause_filter_doctype_only(self, mock_get_doctype, mock_get_companies):
-        """Test that one filter clause (doctype only) is passed directly without $and."""
-        # Setup: No company matches, one document type
-        mock_get_companies.return_value = []
-        mock_get_doctype.return_value = ["financial"]
+    def test_explicit_custom_filter(self):
+        """Test that any custom filter is passed through correctly."""
+        custom_filter = {"custom_field": {"$eq": "custom_value"}}
         
         # Execute
-        query_collection(self.mock_collection, "test query", n_results=5)
-        
-        # Verify: Should call collection.query with single filter clause (no $and)
-        self.mock_collection.query.assert_called()
-        call_args = self.mock_collection.query.call_args
-        expected_filter = {"file_type": {"$in": ["financial"]}}
-        assert call_args[1]['where'] == expected_filter
-        assert '$and' not in call_args[1]['where']
-        
-    @patch('app.chroma_utils.get_companies_from_query')
-    @patch('app.chroma_utils.get_doctype_from_query')
-    def test_two_clause_filter_with_and(self, mock_get_doctype, mock_get_companies):
-        """Test that two filter clauses are properly wrapped in $and."""
-        # Setup: One company match and one document type
-        mock_get_companies.return_value = ["Test Company"]
-        mock_get_doctype.return_value = ["financial"]
-        
-        # Execute
-        query_collection(self.mock_collection, "test query", n_results=5)
-        
-        # Verify: Should call collection.query with $and wrapping both clauses
-        self.mock_collection.query.assert_called()
-        call_args = self.mock_collection.query.call_args
-        expected_filter = {
-            "$and": [
-                {"company_name": {"$in": ["Test Company"]}},
-                {"file_type": {"$in": ["financial"]}}
-            ]
-        }
-        assert call_args[1]['where'] == expected_filter
-        assert '$and' in call_args[1]['where']
-        assert len(call_args[1]['where']['$and']) == 2
-        
-    def test_explicit_where_filter_bypasses_logic(self):
-        """Test that providing explicit 'where' parameter bypasses filter building logic."""
-        explicit_filter = {"custom_field": {"$eq": "custom_value"}}
-        
-        # Execute
-        query_collection(self.mock_collection, "test query", n_results=5, where=explicit_filter)
+        query_collection(self.mock_collection, "test query", n_results=5, where=custom_filter)
         
         # Verify: Should use the explicit filter as-is
         self.mock_collection.query.assert_called()
         call_args = self.mock_collection.query.call_args
-        assert call_args[1]['where'] == explicit_filter
+        assert call_args[1]['where'] == custom_filter
         
-    @patch('app.chroma_utils.get_companies_from_query')
-    @patch('app.chroma_utils.get_doctype_from_query')  
-    def test_fallback_behavior_no_results(self, mock_get_doctype, mock_get_companies):
-        """Test fallback behavior when no results are found."""
-        # Setup: Both company and doctype filters
-        mock_get_companies.return_value = ["Test Company"]
-        mock_get_doctype.return_value = ["financial"]
+    def test_fallback_behavior_with_filter(self):
+        """Test fallback behavior when filtered query returns no results."""
+        filename_filter = {"filename": {"$in": ["nonexistent.pdf"]}}
         
         # Mock collection to return no results initially, then results on fallback
         self.mock_collection.query.side_effect = [
-            {"ids": [[]], "documents": [[]], "metadatas": [[]]},  # No results with full filter
-            {"ids": [["doc1"]], "documents": [["Content"]], "metadatas": [[{"year": "2023"}]]}  # Results with company-only
+            {"ids": [[]], "documents": [[]], "metadatas": [[]]},  # No results with filter
+            {"ids": [["doc1"]], "documents": [["Content"]], "metadatas": [[{"year": "2023", "filename": "test.pdf"}]]}  # Results without filter
         ]
+        
+        # Execute
+        query_collection(self.mock_collection, "test query", n_results=5, where=filename_filter)
+        
+        # Verify: Should make two calls - first with filter, then without
+        assert self.mock_collection.query.call_count == 2
+        
+        # First call should have the filter
+        first_call = self.mock_collection.query.call_args_list[0]
+        assert first_call[1]['where'] == filename_filter
+        
+        # Second call should have no filter (fallback)
+        second_call = self.mock_collection.query.call_args_list[1]
+        assert second_call[1]['where'] is None
+        
+    def test_no_fallback_when_no_filter_provided(self):
+        """Test that no fallback occurs when no filter is provided and no results found."""
+        # Mock collection to return no results
+        self.mock_collection.query.return_value = {
+            "ids": [[]],
+            "documents": [[]],
+            "metadatas": [[]]
+        }
         
         # Execute
         query_collection(self.mock_collection, "test query", n_results=5)
         
-        # Verify: Should make two calls - first with $and, then with company-only fallback
-        assert self.mock_collection.query.call_count == 2
-        
-        # First call should have $and filter
-        first_call = self.mock_collection.query.call_args_list[0]
-        assert '$and' in first_call[1]['where']
-        
-        # Second call should have company-only filter
-        second_call = self.mock_collection.query.call_args_list[1]
-        assert second_call[1]['where'] == {"company_name": {"$in": ["Test Company"]}}
+        # Verify: Should make only one call since no filter was provided
+        assert self.mock_collection.query.call_count == 1
+        call_args = self.mock_collection.query.call_args
+        assert call_args[1]['where'] is None
 
 
-class TestQueryCollectionEdgeCases:
-    """Test edge cases and error conditions."""
+class TestQueryCollectionSorting:
+    """Test the document sorting functionality."""
     
     def setup_method(self):
         """Set up test fixtures."""
         self.mock_collection = Mock()
+        
+    def test_document_sorting_by_year(self):
+        """Test that documents are sorted by year in descending order."""
+        # Setup: Return documents with different years
         self.mock_collection.query.return_value = {
-            "ids": [["doc1"]],
-            "documents": [["Document content"]],
-            "metadatas": [[{"year": "2023", "company_name": "Test Co"}]]
+            "ids": [["doc1", "doc2", "doc3"]],
+            "documents": [["2021 content", "2023 content", "2022 content"]],
+            "metadatas": [[
+                {"year": "2021", "filename": "old.pdf"},
+                {"year": "2023", "filename": "new.pdf"},
+                {"year": "2022", "filename": "mid.pdf"}
+            ]]
         }
         
-    @patch('app.chroma_utils.get_companies_from_query')
-    @patch('app.chroma_utils.get_doctype_from_query')
-    def test_empty_company_list_handling(self, mock_get_doctype, mock_get_companies):
-        """Test handling of empty company list."""
-        mock_get_companies.return_value = []
-        mock_get_doctype.return_value = ["financial"]
+        # Execute
+        sorted_results, context = query_collection(self.mock_collection, "test query", n_results=5)
         
-        query_collection(self.mock_collection, "test query", n_results=5)
+        # Verify: Results should be sorted by year (2023, 2022, 2021)
+        assert len(sorted_results) == 3
+        assert sorted_results[0][0]["year"] == "2023"  # Most recent first
+        assert sorted_results[1][0]["year"] == "2022"
+        assert sorted_results[2][0]["year"] == "2021"  # Oldest last
         
-        # Should only have doctype filter
-        call_args = self.mock_collection.query.call_args
-        expected_filter = {"file_type": {"$in": ["financial"]}}
-        assert call_args[1]['where'] == expected_filter
+        # Verify context string is properly formed
+        assert "2023 content" in context
+        assert "2022 content" in context
+        assert "2021 content" in context
+
+
+class TestQueryCollectionRobustness:
+    """Test robustness for multiple sequential queries."""
+    
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.mock_collection = Mock()
         
-    @patch('app.chroma_utils.get_companies_from_query')
-    @patch('app.chroma_utils.get_doctype_from_query')
-    def test_unknown_doctype_handling(self, mock_get_doctype, mock_get_companies):
-        """Test handling of unknown document type."""
-        mock_get_companies.return_value = ["Test Company"]
-        mock_get_doctype.return_value = ["unknown"]
+    def test_multiple_sequential_queries(self):
+        """Test that multiple queries work correctly without side effects."""
+        # Setup: Different responses for different queries
+        self.mock_collection.query.side_effect = [
+            {
+                "ids": [["doc1"]],
+                "documents": [["First query content"]],
+                "metadatas": [[{"year": "2023", "filename": "first.pdf"}]]
+            },
+            {
+                "ids": [["doc2"]],
+                "documents": [["Second query content"]],
+                "metadatas": [[{"year": "2022", "filename": "second.pdf"}]]
+            },
+            {
+                "ids": [["doc3"]],
+                "documents": [["Third query content"]],
+                "metadatas": [[{"year": "2021", "filename": "third.pdf"}]]
+            }
+        ]
         
-        query_collection(self.mock_collection, "test query", n_results=5)
+        # Execute: Multiple queries in sequence
+        result1, context1 = query_collection(self.mock_collection, "first query", n_results=5)
+        result2, context2 = query_collection(self.mock_collection, "second query", n_results=5)
+        result3, context3 = query_collection(self.mock_collection, "third query", n_results=5)
         
-        # Should only have company filter (unknown doctype ignored)
-        call_args = self.mock_collection.query.call_args
-        expected_filter = {"company_name": {"$in": ["Test Company"]}}
-        assert call_args[1]['where'] == expected_filter
+        # Verify: Each query should work independently
+        assert len(result1) == 1
+        assert "First query content" in context1
+        assert result1[0][0]["filename"] == "first.pdf"
+        
+        assert len(result2) == 1
+        assert "Second query content" in context2
+        assert result2[0][0]["filename"] == "second.pdf"
+        
+        assert len(result3) == 1
+        assert "Third query content" in context3
+        assert result3[0][0]["filename"] == "third.pdf"
+        
+        # Verify all three calls were made
+        assert self.mock_collection.query.call_count == 3
+        
+    def test_query_with_changing_filters(self):
+        """Test queries with different filename filters work correctly."""
+        # Setup: Return different results based on the filter
+        def mock_query_side_effect(*args, **kwargs):
+            where_filter = kwargs.get('where')
+            if where_filter and 'filename' in where_filter:
+                filenames = where_filter['filename']['$in']
+                if 'test1.pdf' in filenames:
+                    return {
+                        "ids": [["doc1"]],
+                        "documents": [["Test1 content"]],
+                        "metadatas": [[{"year": "2023", "filename": "test1.pdf"}]]
+                    }
+                elif 'test2.pdf' in filenames:
+                    return {
+                        "ids": [["doc2"]],
+                        "documents": [["Test2 content"]],
+                        "metadatas": [[{"year": "2022", "filename": "test2.pdf"}]]
+                    }
+            return {"ids": [[]], "documents": [[]], "metadatas": [[]]}
+        
+        self.mock_collection.query.side_effect = mock_query_side_effect
+        
+        # Execute: Different filename filters
+        filter1 = {"filename": {"$in": ["test1.pdf"]}}
+        filter2 = {"filename": {"$in": ["test2.pdf"]}}
+        
+        result1, context1 = query_collection(self.mock_collection, "query", n_results=5, where=filter1)
+        result2, context2 = query_collection(self.mock_collection, "query", n_results=5, where=filter2)
+        
+        # Verify: Each filter works correctly
+        assert "Test1 content" in context1
+        assert result1[0][0]["filename"] == "test1.pdf"
+        
+        assert "Test2 content" in context2
+        assert result2[0][0]["filename"] == "test2.pdf"
 
 
 if __name__ == "__main__":

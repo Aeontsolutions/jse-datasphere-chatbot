@@ -248,14 +248,14 @@ async def chroma_query(
     collection: Any = Depends(get_chroma_collection),
 ):
     """Query the ChromaDB vector store and retrieve most similar documents."""
-    logger.info(f"/chroma/query called. query='{request.query}', n_results={request.n_results}")
+    logger.info(f"/chroma/query called. query='{request.query}', n_results={request.n_results}, where={request.where}")
     try:
         # Our helper returns (sorted_results, context)
         sorted_results, _ = chroma_query_collection(
             collection,
             query=request.query,
             n_results=request.n_results,
-            # where=request.where,
+            where=request.where,
         )
 
         # Build separate lists for the response schema
@@ -287,11 +287,10 @@ async def fast_chat(
     metadata: Dict = Depends(get_metadata),
     collection: Any = Depends(get_chroma_collection),
 ):
-    """A retrieval-augmented chat endpoint that first fetches documents from
-    ChromaDB and then lets Gemini answer strictly based on that context.
+    """A retrieval-augmented chat endpoint that reuses the ChromaDB query logic
+    from the /chroma/query endpoint and then lets Gemini answer based on that context.
 
-    It is *faster* than the normal /chat endpoint because it performs vector
-    search every turn and builds a larger context for the model.
+    This endpoint is DRY - it reuses the same ChromaDB query logic as /chroma/query.
     """
 
     logger.info(
@@ -311,32 +310,33 @@ async def fast_chat(
             retrieval_query = " ".join(recent_history + [request.query])
 
         # -----------------------------
-        # Step 2: (Optional) Semantic pre-selection of documents
+        # Step 2: (Optional) Semantic pre-selection of documents by filename
         # -----------------------------
         auto_load_message: Optional[str] = None
         semantic_filenames: list[str] = []
 
-        selected_docs = semantic_document_selection(
-            request.query,
-            metadata,
-            request.conversation_history,
-        )
-        
-        if selected_docs:
-            auto_load_message = f"The user has mentioned the following companies: {', '.join(selected_docs['companies_mentioned'])}"
-            # Normalise filenames: some LLM responses include full S3 paths – we only
-            # store the *basename* (e.g. "my_report.pdf") in Chroma metadata.
-            # Strip any directory components before building the filter.
-            semantic_filenames = [
-                os.path.basename(doc["filename"]) for doc in selected_docs["documents_to_load"]
-            ]
+        if request.auto_load_documents:
+            selected_docs = semantic_document_selection(
+                request.query,
+                metadata,
+                request.conversation_history,
+            )
+            
+            if selected_docs:
+                auto_load_message = f"The user has mentioned the following companies: {', '.join(selected_docs['companies_mentioned'])}"
+                # Normalise filenames: some LLM responses include full S3 paths – we only
+                # store the *basename* (e.g. "my_report.pdf") in Chroma metadata.
+                # Strip any directory components before building the filter.
+                semantic_filenames = [
+                    os.path.basename(doc["filename"]) for doc in selected_docs["documents_to_load"]
+                ]
 
-        # Build "where" filter for the vector query
+        # -----------------------------
+        # Step 3: Query ChromaDB using the same logic as /chroma/query endpoint
+        # -----------------------------
         where_filter = {"filename": {"$in": semantic_filenames}} if semantic_filenames else None
 
-        # -----------------------------
-        # Step 3: Retrieve documents from ChromaDB (filtered if filenames found)
-        # -----------------------------
+        # Use the same query logic as the /chroma/query endpoint
         sorted_results, context = chroma_query_collection(
             collection,
             query=retrieval_query,
@@ -344,13 +344,13 @@ async def fast_chat(
             where=where_filter,
         )
 
-        # Prepare helpful metadata for the caller (from retrieval step)
+        # Prepare helpful metadata for the caller
         retrieved_doc_names = [
             meta.get("filename")
             or meta.get("source")
             or meta.get("id")
             for meta, _ in sorted_results
-        ]
+        ] if sorted_results else []
 
         retrieval_message = f"{len(sorted_results)} documents retrieved from vector database."
 
@@ -359,7 +359,7 @@ async def fast_chat(
         if auto_load_message:
             doc_selection_message_parts.append(auto_load_message.strip())
         doc_selection_message_parts.append(retrieval_message)
-        doc_selection_message = " " .join(doc_selection_message_parts)
+        doc_selection_message = " ".join(doc_selection_message_parts)
 
         logger.info(
             f"/fast_chat retrieval complete. documents_retrieved={len(sorted_results)}, context_chars={len(context)}, semantic_filter_docs={semantic_filenames}"
@@ -400,5 +400,5 @@ async def fast_chat(
             conversation_history=updated_conversation_history,
         )
     except Exception as e:
-        logger.error(f"Error in slow_chat endpoint: {str(e)}")
+        logger.error(f"Error in fast_chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
