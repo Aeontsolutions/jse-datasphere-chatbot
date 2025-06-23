@@ -8,12 +8,13 @@ import sys
 import os
 
 # Add the fastapi_app directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'fastapi_app'))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(BASE_DIR, 'fastapi_app'))
 
 def test_query_collection_import():
     """Test that we can import the refactored query_collection function."""
     try:
-        from app.chroma_utils import query_collection
+        from fastapi_app.app.chroma_utils import query_collection
         print("✅ Successfully imported query_collection function")
         return True
     except ImportError as e:
@@ -23,7 +24,7 @@ def test_query_collection_import():
 def test_function_signature():
     """Test that the function has the expected signature."""
     try:
-        from app.chroma_utils import query_collection
+        from fastapi_app.app.chroma_utils import query_collection
         import inspect
         
         sig = inspect.signature(query_collection)
@@ -45,7 +46,7 @@ def test_main_api_imports():
     """Test that main API file can import successfully."""
     try:
         # This will test if our changes broke any imports
-        from app.main import app
+        from fastapi_app.app.main import app
         print("✅ Successfully imported FastAPI app")
         return True
     except ImportError as e:
@@ -55,7 +56,7 @@ def test_main_api_imports():
 def test_models_import():
     """Test that models can be imported."""
     try:
-        from app.models import ChromaQueryRequest, ChromaQueryResponse
+        from fastapi_app.app.models import ChromaQueryRequest, ChromaQueryResponse
         
         # Test that where parameter is now available
         import inspect
