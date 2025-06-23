@@ -252,7 +252,17 @@ def query_collection(
         if doctype and doctype[0] != "unknown":
             where_clauses.append({"file_type": {"$in": doctype}})
 
-        where_filter = {"$and": where_clauses} if where_clauses else None
+        # ChromaDB requires at least two sub-clauses for an "$and" expression. If we
+        # only have a single filter clause (e.g. just document type or just
+        # company name) we should pass that clause directly instead of wrapping it
+        # in an "$and" list to avoid the runtime error:
+        #   "Expected where value for $and or $or to be a list with at least two where expressions"
+        if len(where_clauses) > 1:
+            where_filter = {"$and": where_clauses}
+        elif len(where_clauses) == 1:
+            where_filter = where_clauses[0]
+        else:
+            where_filter = None
 
         logger.info(
             "Chroma query filter built | company_matches=%s | doctype=%s | where=%s",
