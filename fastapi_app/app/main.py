@@ -340,7 +340,7 @@ async def fast_chat(
         sorted_results, context = chroma_query_collection(
             collection,
             query=retrieval_query,
-            n_results=5,
+            n_results=3,
             where=where_filter,
         )
 
