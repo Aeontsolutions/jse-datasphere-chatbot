@@ -1,0 +1,45 @@
+---
+description: Use this rule when you are creating Github Issues
+globs: 
+  - '.github/ISSUE_TEMPLATE/*.md'
+alwaysApply: false
+---
+# GitHub Issue Template Guide
+
+When a user asks to create or draft a **GitHub Issue** for this repository, structure the response exactly as follows (replace bracketed content):
+
+**Title**  
+<short imperative summary>
+
+---
+
+### 📝 Background  
+<concise context-setting paragraph(s)>
+
+### 🎯 Objective  
+<what success looks like in one or two sentences>
+
+### 📐 Proposed Schema / Solution  
+<high-level technical approach, schemas, or design>
+
+### 🔨 Tasks
+- [ ] Task 1
+- [ ] Task 2
+- [ ] …
+
+### ✅ Acceptance Criteria
+1. Condition A
+2. Condition B
+
+### ⏳ Estimated Effort
+| Phase | Rough Time |
+|-------|------------|
+| Phase 1 | X d |
+| Phase 2 | Y d |
+
+### 📎 Additional Notes  
+<any extra pointers, links, or caveats>
+
+---
+
+Use emoji section headers (📝 🎯 📐 🔨 ✅ ⏳ 📎) exactly as shown so all issues look consistent.
