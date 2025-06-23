@@ -1,6 +1,7 @@
 ---
 description: Use this rule when you are creating Github Issues
 globs: 
+  - '.github/ISSUE_TEMPLATE/*.md'
 alwaysApply: false
 ---
 # GitHub Issue Template Guide
