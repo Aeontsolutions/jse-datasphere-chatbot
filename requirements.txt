@@ -15,3 +15,5 @@ google-genai
 google-generativeai
 aioboto3
 tenacity
+pytest
+pytest-asyncio
