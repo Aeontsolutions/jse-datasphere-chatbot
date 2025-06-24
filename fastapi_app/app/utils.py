@@ -12,9 +12,6 @@ from google.oauth2 import service_account
 from google.cloud import aiplatform
 from vertexai.preview.generative_models import GenerativeModel
 
-# Import chroma helper function - will be available at runtime when called from main.py
-# from app.chroma_utils import query_meta_collection
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,

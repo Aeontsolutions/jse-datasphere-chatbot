@@ -169,5 +169,133 @@ class TestChromaQueryEndpoint:
         assert response.status_code == 422
 
 
+class TestChromaMetaEndpoints:
+    """Integration tests for the new metadata collection endpoints."""
+    
+    def setup_method(self):
+        """Set up test client and mocks."""
+        self.client = TestClient(app)
+        
+        # Mock the metadata collection
+        self.mock_meta_collection = Mock()
+        self.mock_meta_collection.query.return_value = {
+            "ids": [["doc1.txt", "doc2.txt"]],
+            "documents": [["Company A - financial - 2023", "Company B - non-financial - 2022"]],
+            "metadatas": [[
+                {
+                    "filename": "doc1.txt",
+                    "company": "Company A", 
+                    "period": "2023",
+                    "type": "financial"
+                },
+                {
+                    "filename": "doc2.txt",
+                    "company": "Company B",
+                    "period": "2022", 
+                    "type": "non-financial"
+                }
+            ]]
+        }
+    
+    @patch('app.main.get_meta_collection')
+    @patch('app.chroma_utils.add_documents')
+    def test_meta_update_returns_200(self, mock_add_documents, mock_get_meta_collection):
+        """Test that meta update endpoint returns 200."""
+        # Mock dependencies
+        mock_get_meta_collection.return_value = self.mock_meta_collection
+        mock_add_documents.return_value = ["doc1.txt", "doc2.txt"]
+        
+        # Test data
+        request_data = {
+            "documents": [
+                {
+                    "filename": "doc1.txt",
+                    "company": "Company A",
+                    "period": "2023",
+                    "type": "financial",
+                    "description": "Company A - financial - 2023"
+                },
+                {
+                    "filename": "doc2.txt", 
+                    "company": "Company B",
+                    "period": "2022",
+                    "type": "non-financial",
+                    "description": "Company B - non-financial - 2022"
+                }
+            ]
+        }
+        
+        # Make request
+        response = self.client.post("/chroma/meta/update", json=request_data)
+        
+        # Verify response
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["status"] == "success"
+        assert len(response_data["ids"]) == 2
+        
+        # Verify add_documents was called correctly
+        mock_add_documents.assert_called_once()
+        call_args = mock_add_documents.call_args
+        assert len(call_args[0][1]) == 2  # documents list
+        assert len(call_args[0][2]) == 2  # metadatas list
+        assert len(call_args[0][3]) == 2  # ids list
+    
+    @patch('app.main.get_meta_collection')
+    @patch('app.chroma_utils.query_collection')
+    def test_meta_query_returns_200(self, mock_query_collection, mock_get_meta_collection):
+        """Test that meta query endpoint returns 200."""
+        # Mock dependencies
+        mock_get_meta_collection.return_value = self.mock_meta_collection
+        mock_query_collection.return_value = (
+            [
+                ({"filename": "doc1.txt", "company": "Company A"}, "Company A - financial - 2023"),
+                ({"filename": "doc2.txt", "company": "Company B"}, "Company B - non-financial - 2022")
+            ],
+            "context"
+        )
+        
+        # Test data
+        request_data = {
+            "query": "financial reports for Company A",
+            "n_results": 5
+        }
+        
+        # Make request
+        response = self.client.post("/chroma/meta/query", json=request_data)
+        
+        # Verify response
+        assert response.status_code == 200
+        response_data = response.json()
+        assert "ids" in response_data
+        assert "documents" in response_data
+        assert "metadatas" in response_data
+        assert len(response_data["documents"]) == 2
+    
+    def test_meta_update_missing_required_fields_returns_422(self):
+        """Test that meta update with missing fields returns 422."""
+        request_data = {
+            "documents": [
+                {
+                    "filename": "doc1.txt",
+                    # Missing required fields
+                }
+            ]
+        }
+        
+        response = self.client.post("/chroma/meta/update", json=request_data)
+        assert response.status_code == 422
+    
+    def test_meta_query_missing_query_returns_422(self):
+        """Test that meta query without query field returns 422."""
+        request_data = {
+            "n_results": 5
+            # Missing "query" field
+        }
+        
+        response = self.client.post("/chroma/meta/query", json=request_data)
+        assert response.status_code == 422
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

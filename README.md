@@ -50,6 +50,31 @@ cp .env.example .env
 # Edit .env with your credentials
 ```
 
+## Initial Setup
+
+### Populate Document Metadata Collection
+
+For optimal performance with the new embedding-based document selection, populate the metadata collection:
+
+```bash
+# Run the population script to set up metadata collection
+python scripts/populate_doc_meta.py
+```
+
+This script:
+- Reads document metadata from your S3 bucket
+- Creates embeddings for each document's metadata
+- Populates the `doc_meta` ChromaDB collection
+- Enables sub-second document selection (~300ms vs ~20s)
+
+The metadata collection contains document information like:
+- Company name
+- Document type (financial, non-financial)
+- Reporting period
+- Filename
+
+**Note:** This step is optional but highly recommended for production deployments to achieve the best performance.
+
 ## Running the Application
 
 The application consists of two components that need to be run separately:
@@ -65,6 +90,25 @@ uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
 The API will be available at `http://localhost:8000`. You can access the API documentation at `http://localhost:8000/docs`.
+
+#### Key API Endpoints
+
+**Semantic Document Selection** (New - High Performance)
+- `POST /fast_chat` - Enhanced chat endpoint with embedding-based document selection
+  - Uses vector embeddings for sub-second document selection (~300ms vs ~20s)
+  - Falls back to LLM-based selection if embedding search fails
+  - Significantly reduces overall latency
+
+**Metadata Collection Management** (New)
+- `POST /chroma/meta/update` - Add/update document metadata for embedding search
+- `POST /chroma/meta/query` - Query document metadata collection directly
+
+**Document Management**
+- `POST /chroma/update` - Add documents to the vector database
+- `POST /chroma/query` - Query documents using semantic search
+- `POST /chat` - Original chat endpoint with full document loading
+
+For detailed API documentation, visit `http://localhost:8000/docs` when the server is running.
 
 #### Docker Deployment
 1. Ensure your `.env` file is properly configured with all required environment variables.
