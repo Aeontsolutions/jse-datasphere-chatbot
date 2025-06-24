@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from google.oauth2 import service_account
 from google.cloud import aiplatform
 from vertexai.preview.generative_models import GenerativeModel
+from app.chroma_utils import query_meta_collection
 
 # Configure logging
 logging.basicConfig(
@@ -198,7 +199,6 @@ def semantic_document_selection(query, metadata, conversation_history=None, meta
     if meta_collection is not None:
         try:
             logger.info("Attempting embedding-based document selection")
-            from app.chroma_utils import query_meta_collection
             
             result = query_meta_collection(
                 meta_collection=meta_collection,
