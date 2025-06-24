@@ -74,10 +74,10 @@ class ChromaQueryRequest(BaseModel):
     """Request model for querying ChromaDB"""
     query: str = Field(..., description="Search query or user question")
     n_results: int = Field(5, description="Number of most similar documents to return")
-    # where: Optional[Dict[str, Any]] = Field(
-    #     default=None,
-    #     description="Optional metadata filter for the query (Chroma `where` syntax)",
-    # )
+    where: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional metadata filter for the query (Chroma `where` syntax)",
+    )
 
 class ChromaQueryResponse(BaseModel):
     """Response model for ChromaDB query results"""

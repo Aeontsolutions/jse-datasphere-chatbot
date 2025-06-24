@@ -113,7 +113,7 @@ def add_documents(
     return ids
 
 
-# Create a lookup dictionary
+# Create a lookup dictionary for backward compatibility (not used in query_collection anymore)
 lookup = {}
 for company in companies:
     for name in [
@@ -232,44 +232,26 @@ def query_collection(
     n_results: int = 5,
     where: Optional[Dict[str, Any]] = None,
 ):
-    """Query a Chroma collection and return the raw result dict."""
+    """Query a Chroma collection using filename-based filtering only.
+    
+    Args:
+        collection: The ChromaDB collection to query
+        query: The search query text
+        n_results: Number of results to return
+        where: Optional metadata filter (e.g., for filename filtering)
+    
+    Returns:
+        Tuple of (sorted_results, context_string)
+    """
 
     # ------------------------------------------------------------------
-    # Step 1: Determine metadata filter
+    # Step 1: Use provided metadata filter or no filter
     # ------------------------------------------------------------------
-    if where is not None:
-        # Caller provided an explicit filter (e.g. by filename) – use it as-is
-        where_filter = where
+    where_filter = where
+    if where_filter:
         logger.info("Chroma query using caller-supplied filter: %s", where_filter)
     else:
-        # Build dynamic filter from company + document-type heuristics
-        company_matches = get_companies_from_query(query)
-        doctype = get_doctype_from_query(query)
-
-        where_clauses = []
-        if company_matches:
-            where_clauses.append({"company_name": {"$in": company_matches}})
-        if doctype and doctype[0] != "unknown":
-            where_clauses.append({"file_type": {"$in": doctype}})
-
-        # ChromaDB requires at least two sub-clauses for an "$and" expression. If we
-        # only have a single filter clause (e.g. just document type or just
-        # company name) we should pass that clause directly instead of wrapping it
-        # in an "$and" list to avoid the runtime error:
-        #   "Expected where value for $and or $or to be a list with at least two where expressions"
-        if len(where_clauses) > 1:
-            where_filter = {"$and": where_clauses}
-        elif len(where_clauses) == 1:
-            where_filter = where_clauses[0]
-        else:
-            where_filter = None
-
-        logger.info(
-            "Chroma query filter built | company_matches=%s | doctype=%s | where=%s",
-            company_matches,
-            doctype,
-            where_filter,
-        )
+        logger.info("Chroma query without metadata filter")
 
     # ------------------------------------------------------------------
     # Step 2: Execute vector search
@@ -284,21 +266,8 @@ def query_collection(
     def _no_hits(res: dict):
         return not res.get("ids") or all(len(row) == 0 for row in res.get("ids", []))
 
-    if _no_hits(results) and where is None:
-        # Tier-1 fallback (only for auto-built filter): keep company filter, drop doctype
-        if 'company_matches' in locals() and company_matches:
-            relaxed_filter = {"company_name": {"$in": company_matches}}
-            logger.info(
-                "Filtered query returned no results – retrying with company_name only"
-            )
-            results = collection.query(
-                query_texts=[query],
-                n_results=n_results,
-                where=relaxed_filter,
-            )
-
-    # Tier-2 fallback: no metadata filter at all
-    if _no_hits(results):
+    # Fallback: no metadata filter at all (for robustness)
+    if _no_hits(results) and where_filter is not None:
         logger.info(
             "Metadata filter returned no results – retrying without any metadata filter"
         )
