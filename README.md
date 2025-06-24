@@ -56,6 +56,40 @@ cp .env.example .env
 
 For optimal performance with the new embedding-based document selection, populate the metadata collection:
 
+#### Prerequisites for Metadata Population
+
+1. **Environment Variables**: Ensure all required variables are set:
+   ```bash
+   export AWS_ACCESS_KEY_ID="your_key"
+   export AWS_SECRET_ACCESS_KEY="your_secret" 
+   export AWS_DEFAULT_REGION="your_region"
+   export DOCUMENT_METADATA_S3_BUCKET="your_bucket"
+   export SUMMARIZER_API_KEY="your_google_api_key"
+   ```
+
+2. **ChromaDB Setup** - Choose one option:
+
+   **Option A: Local Storage (Recommended for Development)**
+   ```bash
+   # Use local file-based storage
+   unset CHROMA_HOST
+   unset CHROMA_PORT
+   export CHROMA_PERSIST_DIRECTORY="./chroma_db"
+   ```
+
+   **Option B: ChromaDB Server**
+   ```bash
+   # Start ChromaDB server (in separate terminal)
+   pip install chromadb[server]
+   chroma run --host localhost --port 8000
+   
+   # Set connection variables
+   export CHROMA_HOST="localhost"
+   export CHROMA_PORT="8000"
+   ```
+
+#### Run Population Script
+
 ```bash
 # Run the population script to set up metadata collection
 python scripts/populate_doc_meta.py

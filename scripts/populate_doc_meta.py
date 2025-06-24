@@ -4,6 +4,26 @@ Script to populate the doc_meta ChromaDB collection from S3 metadata.
 
 This script reads the metadata from S3 and populates the doc_meta collection
 with document metadata for embedding-based semantic document selection.
+
+SETUP REQUIREMENTS:
+1. Environment variables must be set:
+   - AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
+   - DOCUMENT_METADATA_S3_BUCKET
+   - SUMMARIZER_API_KEY (Google API key for embeddings)
+
+2. ChromaDB setup - choose one:
+   Option A (Local storage - recommended for development):
+     unset CHROMA_HOST
+     export CHROMA_PERSIST_DIRECTORY="./chroma_db"
+   
+   Option B (Remote server):
+     pip install chromadb[server]
+     chroma run --host localhost --port 8000  # in separate terminal
+     export CHROMA_HOST="localhost"
+     export CHROMA_PORT="8000"
+
+USAGE:
+    python scripts/populate_doc_meta.py
 """
 
 import os
@@ -115,9 +135,38 @@ def populate_meta_collection(doc_entries: List[Dict[str, str]], meta_collection)
         raise
 
 
+def check_required_env_vars():
+    """Check that all required environment variables are set."""
+    required_vars = [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY", 
+        "AWS_DEFAULT_REGION",
+        "DOCUMENT_METADATA_S3_BUCKET",
+        "SUMMARIZER_API_KEY"
+    ]
+    
+    missing_vars = []
+    for var in required_vars:
+        if not os.getenv(var):
+            missing_vars.append(var)
+    
+    if missing_vars:
+        logger.error("Missing required environment variables:")
+        for var in missing_vars:
+            logger.error(f"  - {var}")
+        logger.error("\nPlease set these environment variables and try again.")
+        return False
+    
+    return True
+
+
 def main():
     """Main function to populate the doc_meta collection."""
     logger.info("Starting doc_meta collection population")
+    
+    # Check environment variables first
+    if not check_required_env_vars():
+        return 1
     
     try:
         # Initialize clients
@@ -125,7 +174,31 @@ def main():
         s3_client = init_s3_client()
         
         logger.info("Initializing ChromaDB client...")
-        chroma_client = init_chroma_client()
+        try:
+            chroma_client = init_chroma_client()
+        except Exception as chroma_error:
+            logger.error(f"Failed to initialize ChromaDB client: {chroma_error}")
+            logger.error("\n" + "="*60)
+            logger.error("CHROMADB CONNECTION ERROR - SETUP REQUIRED")
+            logger.error("="*60)
+            chroma_host = os.getenv("CHROMA_HOST")
+            if chroma_host:
+                logger.error(f"Trying to connect to ChromaDB server at: {chroma_host}")
+                logger.error("SOLUTION 1 - Start ChromaDB server:")
+                logger.error("  pip install chromadb[server]")
+                logger.error("  chroma run --host localhost --port 8000")
+                logger.error("")
+                logger.error("SOLUTION 2 - Use local storage instead:")
+                logger.error("  unset CHROMA_HOST")
+                logger.error("  unset CHROMA_PORT")
+                logger.error("  export CHROMA_PERSIST_DIRECTORY='./chroma_db'")
+            else:
+                logger.error("Using local ChromaDB storage but connection failed")
+                logger.error("Make sure you have write permissions to the chroma directory")
+                persist_dir = os.getenv("CHROMA_PERSIST_DIRECTORY", "/app/chroma_db")
+                logger.error(f"ChromaDB persist directory: {persist_dir}")
+            logger.error("="*60)
+            return 1
         
         # Get or create the metadata collection
         logger.info("Getting or creating doc_meta collection...")
