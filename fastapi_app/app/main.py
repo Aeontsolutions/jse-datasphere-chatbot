@@ -8,7 +8,13 @@ import uuid
 from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
 
-from app.models import ChatRequest, ChatResponse, ChromaAddRequest, ChromaAddResponse, ChromaQueryRequest, ChromaQueryResponse
+from app.models import (
+    ChatRequest, ChatResponse, 
+    ChromaAddRequest, ChromaAddResponse, 
+    ChromaQueryRequest, ChromaQueryResponse,
+    ChromaMetaUpdateRequest, ChromaMetaUpdateResponse,
+    ChromaMetaQueryRequest, ChromaMetaQueryResponse
+)
 from app.utils import (
     init_s3_client, 
     init_vertex_ai, 
@@ -68,6 +74,19 @@ async def lifespan(app: FastAPI):
                 "ChromaDB initialised and collection ready | collection_size=%s",
                 collection_size,
             )
+            
+            # Initialize the metadata collection for semantic document selection
+            app.state.meta_collection = get_or_create_collection(app.state.chroma_client, "doc_meta")
+            try:
+                meta_collection_size = app.state.meta_collection.count()
+            except Exception:
+                meta_collection_size = "unknown"
+                logger.warning("Could not retrieve metadata collection size during startup.")
+            
+            logger.info(
+                "Metadata collection initialised | collection_size=%s",
+                meta_collection_size,
+            )
         except Exception as chroma_err:
             logger.error(f"Failed to initialise ChromaDB: {chroma_err}")
         yield
@@ -124,6 +143,10 @@ def get_metadata():
 # Dependency to get Chroma collection
 def get_chroma_collection():
     return app.state.chroma_collection
+
+# Dependency to get metadata collection
+def get_meta_collection():
+    return app.state.meta_collection
 
 @app.get("/")
 async def root():
@@ -276,6 +299,78 @@ async def chroma_query(
         logger.error(f"Error querying ChromaDB: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error querying ChromaDB: {str(e)}")
 
+@app.post("/chroma/meta/update", response_model=ChromaMetaUpdateResponse)
+async def chroma_meta_update(
+    request: ChromaMetaUpdateRequest,
+    meta_collection: Any = Depends(get_meta_collection),
+):
+    """Add or upsert document metadata into the metadata collection."""
+    logger.info(f"/chroma/meta/update called. num_documents={len(request.documents)}")
+    try:
+        # Build the documents list for embedding
+        documents = []
+        metadatas = []
+        ids = []
+        
+        for doc_info in request.documents:
+            # Create description text for embedding: "company - doc_type - period"
+            description = f"{doc_info.company} - {doc_info.type} - {doc_info.period}"
+            documents.append(description)
+            
+            # Create metadata with all fields
+            metadata = {
+                "filename": doc_info.filename,
+                "company": doc_info.company,
+                "period": doc_info.period,
+                "type": doc_info.type
+            }
+            metadatas.append(metadata)
+            
+            # Use filename as ID (could be made more unique if needed)
+            ids.append(doc_info.filename)
+        
+        # Add to collection
+        result_ids = chroma_add_documents(meta_collection, documents, metadatas, ids)
+        logger.info(f"/chroma/meta/update completed. ids={result_ids}")
+        return ChromaMetaUpdateResponse(status="success", ids=result_ids)
+    except Exception as e:
+        logger.error(f"Error updating metadata collection: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating metadata collection: {str(e)}")
+
+@app.post("/chroma/meta/query", response_model=ChromaMetaQueryResponse)
+async def chroma_meta_query(
+    request: ChromaMetaQueryRequest,
+    meta_collection: Any = Depends(get_meta_collection),
+):
+    """Query the metadata collection to find relevant documents."""
+    logger.info(f"/chroma/meta/query called. query='{request.query}', n_results={request.n_results}")
+    try:
+        # Query the metadata collection
+        sorted_results, _ = chroma_query_collection(
+            meta_collection,
+            query=request.query,
+            n_results=request.n_results,
+            where=request.where,
+        )
+
+        # Build separate lists for the response schema
+        ids = [meta.get("filename") for meta, _ in sorted_results if meta.get("filename")]
+        documents = [doc for _, doc in sorted_results]
+        metadatas = [meta for meta, _ in sorted_results] if sorted_results else None
+
+        logger.info(
+            f"/chroma/meta/query completed. documents_returned={len(documents)}"
+        )
+
+        return ChromaMetaQueryResponse(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
+        )
+    except Exception as e:
+        logger.error(f"Error querying metadata collection: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error querying metadata collection: {str(e)}")
+
 # ---------------------------------------------------------------------------
 # Fast Chat Endpoint (Vector DB → Gemini QA)
 # ---------------------------------------------------------------------------
@@ -286,6 +381,7 @@ async def fast_chat(
     s3_client: Any = Depends(get_s3_client),
     metadata: Dict = Depends(get_metadata),
     collection: Any = Depends(get_chroma_collection),
+    meta_collection: Any = Depends(get_meta_collection),
 ):
     """A retrieval-augmented chat endpoint that reuses the ChromaDB query logic
     from the /chroma/query endpoint and then lets Gemini answer based on that context.
@@ -320,6 +416,7 @@ async def fast_chat(
                 request.query,
                 metadata,
                 request.conversation_history,
+                meta_collection,
             )
             
             if selected_docs:

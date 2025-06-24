@@ -87,3 +87,38 @@ class ChromaQueryResponse(BaseModel):
         default=None,
         description="Metadata associated with the retrieved documents",
     )
+
+class MetaDocumentInfo(BaseModel):
+    """Information about a document in the metadata collection"""
+    filename: str = Field(..., description="Document filename")
+    company: str = Field(..., description="Company name")
+    period: str = Field(..., description="Reporting period")
+    type: str = Field(..., description="Document type (e.g., financial, non-financial)")
+    description: str = Field(..., description="Document description for embedding")
+
+class ChromaMetaUpdateRequest(BaseModel):
+    """Request model for updating the metadata collection"""
+    documents: List[MetaDocumentInfo] = Field(..., description="Metadata documents to add/update")
+
+class ChromaMetaUpdateResponse(BaseModel):
+    """Response after updating the metadata collection"""
+    status: str = Field(..., description="Operation status message")
+    ids: List[str] = Field(..., description="IDs of the metadata documents that were added")
+
+class ChromaMetaQueryRequest(BaseModel):
+    """Request model for querying the metadata collection"""
+    query: str = Field(..., description="Search query for document selection")
+    n_results: int = Field(5, description="Number of most similar documents to return")
+    where: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional metadata filter for the query",
+    )
+
+class ChromaMetaQueryResponse(BaseModel):
+    """Response model for metadata collection query results"""
+    ids: List[str] = Field(..., description="IDs of the retrieved document metadata")
+    documents: List[str] = Field(..., description="Description text of the retrieved documents")
+    metadatas: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Metadata associated with the retrieved documents",
+    )

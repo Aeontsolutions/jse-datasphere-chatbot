@@ -296,6 +296,62 @@ def query_collection(
     return sorted_results, context
 
 
+def query_meta_collection(
+    meta_collection: "chromadb.Collection",
+    query: str,
+    n_results: int = 5,
+    where: Optional[Dict[str, Any]] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+):
+    """
+    Query the metadata collection for semantic document selection.
+    Returns results in the format expected by the existing semantic_document_selection interface.
+    """
+    # Optionally enhance query with conversation context
+    retrieval_query = query
+    if conversation_history:
+        # Combine recent user messages with the current query for better retrieval
+        recent_history = [
+            msg["content"] for msg in conversation_history[-5:] if msg.get("role") == "user"
+        ]
+        retrieval_query = " ".join(recent_history + [query])
+    
+    logger.info(f"Querying meta collection with query: '{retrieval_query}'")
+    
+    # Query the meta collection
+    results = meta_collection.query(
+        query_texts=[retrieval_query],
+        n_results=n_results,
+        where=where,
+    )
+    
+    # Check if we got any results
+    if not results or not results.get("metadatas") or not results["metadatas"][0]:
+        logger.info("No results from meta collection query")
+        return None
+    
+    # Extract the results
+    metadatas = results["metadatas"][0]  # Flatten the nested list
+    
+    # Convert to the expected format
+    companies_mentioned = list(set(meta.get("company", "") for meta in metadatas if meta.get("company")))
+    documents_to_load = []
+    
+    for meta in metadatas:
+        if meta.get("filename") and meta.get("company"):
+            documents_to_load.append({
+                "company": meta["company"],
+                "document_link": f"s3://document-path/{meta['filename']}",  # Placeholder - would need real S3 path
+                "filename": meta["filename"],
+                "reason": f"Relevant {meta.get('type', 'document')} for {meta.get('period', 'period')}"
+            })
+    
+    return {
+        "companies_mentioned": companies_mentioned,
+        "documents_to_load": documents_to_load
+    }
+
+
 # ---------------------------------------------------------------------------
 # QA Bot Helper (Gemini LLM)
 # ---------------------------------------------------------------------------

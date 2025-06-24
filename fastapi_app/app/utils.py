@@ -12,6 +12,9 @@ from google.oauth2 import service_account
 from google.cloud import aiplatform
 from vertexai.preview.generative_models import GenerativeModel
 
+# Import chroma helper function - will be available at runtime when called from main.py
+# from app.chroma_utils import query_meta_collection
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -180,9 +183,50 @@ def load_metadata_from_s3(s3_client):
         logger.error(f"Error loading metadata from S3: {str(e)}")
         return None
 
-# Function to use the LLM to determine which documents to load based on the query and conversation history
-def semantic_document_selection(query, metadata, conversation_history=None):
-    """Use LLM to determine which documents to load based on query and conversation history"""
+# Function to use embedding-based document selection with LLM fallback
+def semantic_document_selection(query, metadata, conversation_history=None, meta_collection=None):
+    """
+    Use embedding-based search in metadata collection with LLM fallback.
+    
+    Args:
+        query: User query
+        metadata: S3 metadata (used for fallback)
+        conversation_history: Optional conversation context
+        meta_collection: ChromaDB metadata collection (if None, falls back to LLM)
+    
+    Returns:
+        Dictionary with companies_mentioned and documents_to_load
+    """
+    # Try embedding-based approach first if meta_collection is available
+    if meta_collection is not None:
+        try:
+            logger.info("Attempting embedding-based document selection")
+            from app.chroma_utils import query_meta_collection
+            
+            result = query_meta_collection(
+                meta_collection=meta_collection,
+                query=query,
+                n_results=5,
+                conversation_history=conversation_history
+            )
+            
+            if result and result.get("documents_to_load"):
+                logger.info(f"Embedding-based selection found {len(result['documents_to_load'])} documents")
+                return result
+            else:
+                logger.info("Embedding-based selection returned no results, falling back to LLM")
+        except Exception as e:
+            logger.warning(f"Embedding-based selection failed: {str(e)}, falling back to LLM")
+    else:
+        logger.info("No meta_collection provided, using LLM approach")
+    
+    # Fallback to LLM-based approach
+    logger.info("Using LLM fallback for document selection")
+    return semantic_document_selection_llm_fallback(query, metadata, conversation_history)
+
+# Function to use the LLM to determine which documents to load based on the query and conversation history (FALLBACK)
+def semantic_document_selection_llm_fallback(query, metadata, conversation_history=None):
+    """Use LLM to determine which documents to load based on query and conversation history (fallback method)"""
     try:
         # Create a prompt for the LLM to analyze the query and metadata
         model = GenerativeModel("gemini-2.0-flash-001")
