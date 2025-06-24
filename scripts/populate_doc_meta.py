@@ -17,19 +17,22 @@ SETUP REQUIREMENTS:
      export CHROMA_PERSIST_DIRECTORY="./chroma_db"
    
    Option B (Remote server):
-     pip install chromadb[server]
-     chroma run --host localhost --port 8000  # in separate terminal
-     export CHROMA_HOST="localhost"
-     export CHROMA_PORT="8000"
+     export CHROMA_HOST="your-remote-host.com"
+     export CHROMA_PORT="8000"  # optional, defaults to 8000
 
 USAGE:
     python scripts/populate_doc_meta.py
+    
+    # Or override connection settings via command line:
+    python scripts/populate_doc_meta.py --remote-host your-remote-host.com --remote-port 8000
+    python scripts/populate_doc_meta.py --local-dir ./my_local_chroma_db
 """
 
 import os
 import sys
 import json
 import logging
+import argparse
 from typing import List, Dict, Any
 
 # Add the fastapi_app directory to the path so we can import modules
@@ -135,6 +138,97 @@ def populate_meta_collection(doc_entries: List[Dict[str, str]], meta_collection)
         raise
 
 
+def test_chroma_connection(chroma_client):
+    """Test the ChromaDB connection to ensure it's working."""
+    try:
+        # Try to list collections as a simple connectivity test
+        collections = chroma_client.list_collections()
+        logger.info(f"Successfully connected to ChromaDB. Found {len(collections)} collections.")
+        return True
+    except Exception as e:
+        logger.error(f"ChromaDB connection test failed: {e}")
+        return False
+
+
+def test_chroma_connection_only(chroma_client):
+    """Test ChromaDB connection without requiring embedding function."""
+    try:
+        # Just test basic connectivity
+        heartbeat = chroma_client.heartbeat()
+        logger.info(f"ChromaDB heartbeat successful: {heartbeat}")
+        
+        # Try to list collections
+        collections = chroma_client.list_collections()
+        logger.info(f"Successfully connected to ChromaDB. Found {len(collections)} collections.")
+        return True
+    except Exception as e:
+        logger.error(f"ChromaDB connection test failed: {e}")
+        return False
+
+
+def init_chroma_with_args(args):
+    """Initialize ChromaDB client with command-line argument overrides."""
+    # Override environment variables with command-line arguments if provided
+    if args.remote_host:
+        os.environ["CHROMA_HOST"] = args.remote_host
+        if args.remote_port:
+            os.environ["CHROMA_PORT"] = str(args.remote_port)
+        logger.info(f"Using command-line remote connection: {args.remote_host}:{args.remote_port or 8000}")
+    elif args.local_dir:
+        # Unset CHROMA_HOST to force local mode
+        os.environ.pop("CHROMA_HOST", None)
+        os.environ["CHROMA_PERSIST_DIRECTORY"] = args.local_dir
+        logger.info(f"Using command-line local directory: {args.local_dir}")
+    
+    # Initialize the client
+    return init_chroma_client()
+
+
+def parse_arguments():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Populate ChromaDB doc_meta collection from S3 metadata",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    # Use environment variables (default)
+    python scripts/populate_doc_meta.py
+    
+    # Connect to remote ChromaDB server
+    python scripts/populate_doc_meta.py --remote-host your-chroma-server.com --remote-port 8000
+    
+    # Use local ChromaDB storage  
+    python scripts/populate_doc_meta.py --local-dir ./my_chroma_db
+        """
+    )
+    
+    # Connection options (mutually exclusive)
+    conn_group = parser.add_mutually_exclusive_group()
+    conn_group.add_argument(
+        "--remote-host",
+        help="ChromaDB remote server hostname (e.g., 'your-server.com')"
+    )
+    conn_group.add_argument(
+        "--local-dir", 
+        help="Local directory for ChromaDB storage (e.g., './chroma_db')"
+    )
+    
+    parser.add_argument(
+        "--remote-port",
+        type=int,
+        default=8000,
+        help="ChromaDB remote server port (default: 8000, only used with --remote-host)"
+    )
+    
+    parser.add_argument(
+        "--test-connection",
+        action="store_true",
+        help="Test ChromaDB connection and exit"
+    )
+    
+    return parser.parse_args()
+
+
 def check_required_env_vars():
     """Check that all required environment variables are set."""
     required_vars = [
@@ -162,42 +256,71 @@ def check_required_env_vars():
 
 def main():
     """Main function to populate the doc_meta collection."""
+    # Parse command-line arguments
+    args = parse_arguments()
+    
     logger.info("Starting doc_meta collection population")
     
-    # Check environment variables first
-    if not check_required_env_vars():
-        return 1
+    # Skip environment variable check if we're only testing connection
+    if not args.test_connection:
+        if not check_required_env_vars():
+            return 1
     
     try:
-        # Initialize clients
-        logger.info("Initializing S3 client...")
-        s3_client = init_s3_client()
+        # Initialize ChromaDB client (S3 not needed for connection test)
+        if not args.test_connection:
+            logger.info("Initializing S3 client...")
+            s3_client = init_s3_client()
         
         logger.info("Initializing ChromaDB client...")
         try:
-            chroma_client = init_chroma_client()
+            chroma_client = init_chroma_with_args(args)
         except Exception as chroma_error:
             logger.error(f"Failed to initialize ChromaDB client: {chroma_error}")
-            logger.error("\n" + "="*60)
-            logger.error("CHROMADB CONNECTION ERROR - SETUP REQUIRED")
-            logger.error("="*60)
+            logger.error("\n" + "="*70)
+            logger.error("CHROMADB CONNECTION ERROR - CONFIGURATION REQUIRED")
+            logger.error("="*70)
+            
+            # Provide specific guidance based on what the user is trying to do
             chroma_host = os.getenv("CHROMA_HOST")
-            if chroma_host:
-                logger.error(f"Trying to connect to ChromaDB server at: {chroma_host}")
-                logger.error("SOLUTION 1 - Start ChromaDB server:")
-                logger.error("  pip install chromadb[server]")
-                logger.error("  chroma run --host localhost --port 8000")
+            if chroma_host or args.remote_host:
+                effective_host = args.remote_host or chroma_host
+                effective_port = args.remote_port if args.remote_host else os.getenv("CHROMA_PORT", "8000")
+                logger.error(f"Attempting to connect to remote ChromaDB at: {effective_host}:{effective_port}")
                 logger.error("")
-                logger.error("SOLUTION 2 - Use local storage instead:")
-                logger.error("  unset CHROMA_HOST")
-                logger.error("  unset CHROMA_PORT")
-                logger.error("  export CHROMA_PERSIST_DIRECTORY='./chroma_db'")
+                logger.error("REMOTE DATABASE CONNECTION TROUBLESHOOTING:")
+                logger.error("1. Verify your remote ChromaDB server is running and accessible")
+                logger.error("2. Check network connectivity:")
+                logger.error(f"   curl -f http://{effective_host}:{effective_port}/api/v1/heartbeat")
+                logger.error("3. Verify firewall/security group settings allow connections")
+                logger.error("4. Confirm the hostname and port are correct")
+                logger.error("")
+                logger.error("ALTERNATIVE - Use local storage for testing:")
+                logger.error("  python scripts/populate_doc_meta.py --local-dir ./chroma_db")
             else:
                 logger.error("Using local ChromaDB storage but connection failed")
-                logger.error("Make sure you have write permissions to the chroma directory")
-                persist_dir = os.getenv("CHROMA_PERSIST_DIRECTORY", "/app/chroma_db")
+                persist_dir = args.local_dir or os.getenv("CHROMA_PERSIST_DIRECTORY", "/app/chroma_db")
                 logger.error(f"ChromaDB persist directory: {persist_dir}")
-            logger.error("="*60)
+                logger.error("Make sure you have write permissions to this directory")
+                logger.error("")
+                logger.error("ALTERNATIVE - Connect to remote database:")
+                logger.error("  python scripts/populate_doc_meta.py --remote-host your-server.com")
+            logger.error("="*70)
+            return 1
+        
+        # Test the connection if requested
+        if args.test_connection:
+            logger.info("Testing ChromaDB connection...")
+            if test_chroma_connection_only(chroma_client):
+                logger.info("✅ ChromaDB connection test successful!")
+                return 0
+            else:
+                logger.error("❌ ChromaDB connection test failed!")
+                return 1
+        
+        # Test connection before proceeding
+        if not test_chroma_connection(chroma_client):
+            logger.error("Cannot proceed with population due to connection issues")
             return 1
         
         # Get or create the metadata collection
@@ -236,7 +359,7 @@ def main():
         except Exception as e:
             logger.warning(f"Could not get collection size: {e}")
         
-        logger.info("doc_meta collection population completed successfully")
+        logger.info("✅ doc_meta collection population completed successfully")
         return 0
         
     except Exception as e:
