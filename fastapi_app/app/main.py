@@ -331,6 +331,17 @@ async def fast_chat(
                     os.path.basename(doc["filename"]) for doc in selected_docs["documents_to_load"]
                 ]
 
+                # ------------------------------------------------------------------
+                # Chroma stores the *summary* files (usually `.txt`) while the
+                # metadata coming from S3 often refers to the original PDF
+                # filename.  To keep the vector-DB filter effective, translate any
+                # “.pdf” extension to “.txt” and de-duplicate the list.
+                # ------------------------------------------------------------------
+                semantic_filenames = list({
+                    fn[:-4] + ".txt" if fn.lower().endswith(".pdf") else fn
+                    for fn in semantic_filenames
+                })
+
         # -----------------------------
         # Step 3: Query ChromaDB using the same logic as /chroma/query endpoint
         # -----------------------------
@@ -340,7 +351,7 @@ async def fast_chat(
         sorted_results, context = chroma_query_collection(
             collection,
             query=retrieval_query,
-            n_results=3,
+            n_results=5,
             where=where_filter,
         )
 
