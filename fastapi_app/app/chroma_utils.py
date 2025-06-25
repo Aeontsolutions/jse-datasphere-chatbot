@@ -441,7 +441,7 @@ def qa_bot(
     prompt = f"{convo_context}Question: {query}\nContext: {contexts}"
 
     response = client.models.generate_content(
-        model="gemini-2.5-pro-preview-03-25",
+        model="gemini-2.5-flash",
         config=types.GenerateContentConfig(
             system_instruction=qa_system_prompt,
             temperature=0,
