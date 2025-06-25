@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Script to populate the doc_meta ChromaDB collection from S3 metadata.
+Script to populate the doc_meta collection via the /chroma/meta/update API endpoint.
 
-This script reads the metadata from S3 and populates the doc_meta collection
-with document metadata for embedding-based semantic document selection.
+This script reads metadata from S3 and uses the FastAPI application's 
+/chroma/meta/update endpoint to populate the doc_meta collection with 
+document metadata for embedding-based semantic document selection.
 
 SETUP REQUIREMENTS:
 1. Environment variables must be set:
@@ -11,21 +12,13 @@ SETUP REQUIREMENTS:
    - DOCUMENT_METADATA_S3_BUCKET
    - SUMMARIZER_API_KEY (Google API key for embeddings)
 
-2. ChromaDB setup - choose one:
-   Option A (Local storage - recommended for development):
-     unset CHROMA_HOST
-     export CHROMA_PERSIST_DIRECTORY="./chroma_db"
-   
-   Option B (Remote server):
-     export CHROMA_HOST="your-remote-host.com"
-     export CHROMA_PORT="8000"  # optional, defaults to 8000
+2. FastAPI application must be running and accessible
 
 USAGE:
     python scripts/populate_doc_meta.py
     
-    # Or override connection settings via command line:
-    python scripts/populate_doc_meta.py --remote-host your-remote-host.com --remote-port 8000
-    python scripts/populate_doc_meta.py --local-dir ./my_local_chroma_db
+    # Or specify custom API URL and batch size:
+    python scripts/populate_doc_meta.py --api-url http://localhost:8000 --batch-size 50
 """
 
 import os
@@ -33,13 +26,13 @@ import sys
 import json
 import logging
 import argparse
+import requests
 from typing import List, Dict, Any
 
 # Add the fastapi_app directory to the path so we can import modules
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'fastapi_app'))
 
 from app.utils import init_s3_client, load_metadata_from_s3
-from app.chroma_utils import init_chroma_client, get_or_create_collection, add_documents
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -53,15 +46,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def extract_metadata_for_embedding(metadata: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+def extract_metadata_for_api(metadata: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     """
-    Extract and format metadata for the doc_meta collection.
+    Extract and format metadata for the /chroma/meta/update API endpoint.
     
     Args:
         metadata: S3 metadata list
         
     Returns:
-        List of formatted metadata entries
+        List of MetaDocumentInfo dictionaries for the API
     """
     doc_entries = []
     
@@ -82,6 +75,7 @@ def extract_metadata_for_embedding(metadata: List[Dict[str, Any]]) -> List[Dict[
             # Create description for embedding: "company - doc_type - period"
             description = f"{company_name} - {doc_type} - {period}"
             
+            # Format according to MetaDocumentInfo model
             doc_entry = {
                 "filename": filename,
                 "company": company_name,
@@ -96,134 +90,115 @@ def extract_metadata_for_embedding(metadata: List[Dict[str, Any]]) -> List[Dict[
     return doc_entries
 
 
-def populate_meta_collection(doc_entries: List[Dict[str, str]], meta_collection):
+def populate_via_api(doc_entries: List[Dict[str, str]], api_url: str, batch_size: int = 100) -> int:
     """
-    Populate the metadata collection with document entries.
+    Populate the metadata collection via the /chroma/meta/update API endpoint.
     
     Args:
         doc_entries: List of document metadata entries
-        meta_collection: ChromaDB collection for metadata
+        api_url: Base URL of the FastAPI application
+        batch_size: Number of documents to send per request
+        
+    Returns:
+        Total number of documents successfully added
     """
     if not doc_entries:
         logger.warning("No document entries to populate")
-        return
+        return 0
     
-    # Prepare data for ChromaDB
-    documents = []
-    metadatas = []
-    ids = []
+    endpoint_url = f"{api_url.rstrip('/')}/chroma/meta/update"
+    total_added = 0
     
-    for entry in doc_entries:
-        documents.append(entry["description"])  # This gets embedded
+    # Process in batches
+    for i in range(0, len(doc_entries), batch_size):
+        batch = doc_entries[i:i + batch_size]
+        batch_num = (i // batch_size) + 1
+        total_batches = (len(doc_entries) + batch_size - 1) // batch_size
         
-        # Store all metadata
-        metadata = {
-            "filename": entry["filename"],
-            "company": entry["company"],
-            "period": entry["period"],
-            "type": entry["type"]
+        logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} documents)")
+        
+        # Prepare request payload
+        request_data = {
+            "documents": batch
         }
-        metadatas.append(metadata)
         
-        # Use filename as ID (assuming filenames are unique)
-        ids.append(entry["filename"])
+        try:
+            # Make API request
+            response = requests.post(endpoint_url, json=request_data, timeout=60)
+            response.raise_for_status()
+            
+            # Parse response
+            result = response.json()
+            batch_added = len(result.get("ids", []))
+            total_added += batch_added
+            
+            logger.info(f"Batch {batch_num} completed: {batch_added} documents added")
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error sending batch {batch_num} to API: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Response status: {e.response.status_code}")
+                logger.error(f"Response body: {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error processing batch {batch_num}: {e}")
+            raise
     
-    try:
-        # Add documents to collection
-        result_ids = add_documents(meta_collection, documents, metadatas, ids)
-        logger.info(f"Successfully added {len(result_ids)} documents to meta collection")
-        return result_ids
-    except Exception as e:
-        logger.error(f"Error adding documents to meta collection: {e}")
-        raise
+    logger.info(f"Successfully added {total_added} documents total")
+    return total_added
 
 
-def test_chroma_connection(chroma_client):
-    """Test the ChromaDB connection to ensure it's working."""
+def test_api_connection(api_url: str) -> bool:
+    """Test connection to the FastAPI application."""
     try:
-        # Try to list collections as a simple connectivity test
-        collections = chroma_client.list_collections()
-        logger.info(f"Successfully connected to ChromaDB. Found {len(collections)} collections.")
-        return True
-    except Exception as e:
-        logger.error(f"ChromaDB connection test failed: {e}")
+        # Test basic connectivity to the API
+        response = requests.get(f"{api_url.rstrip('/')}/", timeout=10)
+        if response.status_code == 200:
+            logger.info("Successfully connected to FastAPI application")
+            return True
+        else:
+            logger.error(f"API responded with status {response.status_code}")
+            return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to connect to API at {api_url}: {e}")
         return False
-
-
-def test_chroma_connection_only(chroma_client):
-    """Test ChromaDB connection without requiring embedding function."""
-    try:
-        # Just test basic connectivity
-        heartbeat = chroma_client.heartbeat()
-        logger.info(f"ChromaDB heartbeat successful: {heartbeat}")
-        
-        # Try to list collections
-        collections = chroma_client.list_collections()
-        logger.info(f"Successfully connected to ChromaDB. Found {len(collections)} collections.")
-        return True
-    except Exception as e:
-        logger.error(f"ChromaDB connection test failed: {e}")
-        return False
-
-
-def init_chroma_with_args(args):
-    """Initialize ChromaDB client with command-line argument overrides."""
-    # Override environment variables with command-line arguments if provided
-    if args.remote_host:
-        os.environ["CHROMA_HOST"] = args.remote_host
-        if args.remote_port:
-            os.environ["CHROMA_PORT"] = str(args.remote_port)
-        logger.info(f"Using command-line remote connection: {args.remote_host}:{args.remote_port or 8000}")
-    elif args.local_dir:
-        # Unset CHROMA_HOST to force local mode
-        os.environ.pop("CHROMA_HOST", None)
-        os.environ["CHROMA_PERSIST_DIRECTORY"] = args.local_dir
-        logger.info(f"Using command-line local directory: {args.local_dir}")
-    
-    # Initialize the client
-    return init_chroma_client()
 
 
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Populate ChromaDB doc_meta collection from S3 metadata",
+        description="Populate doc_meta collection via /chroma/meta/update API endpoint",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Use environment variables (default)
+    # Use default settings
     python scripts/populate_doc_meta.py
     
-    # Connect to remote ChromaDB server
-    python scripts/populate_doc_meta.py --remote-host your-chroma-server.com --remote-port 8000
+    # Specify custom API URL and batch size
+    python scripts/populate_doc_meta.py --api-url http://localhost:8000 --batch-size 50
     
-    # Use local ChromaDB storage  
-    python scripts/populate_doc_meta.py --local-dir ./my_chroma_db
+    # Test API connection only
+    python scripts/populate_doc_meta.py --test-connection
         """
     )
     
-    # Connection options (mutually exclusive)
-    conn_group = parser.add_mutually_exclusive_group()
-    conn_group.add_argument(
-        "--remote-host",
-        help="ChromaDB remote server hostname (e.g., 'your-server.com')"
-    )
-    conn_group.add_argument(
-        "--local-dir", 
-        help="Local directory for ChromaDB storage (e.g., './chroma_db')"
+    parser.add_argument(
+        "--api-url",
+        default="http://localhost:8000",
+        help="Base URL of the FastAPI application (default: http://localhost:8000)"
     )
     
     parser.add_argument(
-        "--remote-port",
+        "--batch-size",
         type=int,
-        default=8000,
-        help="ChromaDB remote server port (default: 8000, only used with --remote-host)"
+        default=100,
+        help="Number of documents to send per API request (default: 100)"
     )
     
     parser.add_argument(
         "--test-connection",
         action="store_true",
-        help="Test ChromaDB connection and exit"
+        help="Test API connection and exit"
     )
     
     return parser.parse_args()
@@ -255,79 +230,38 @@ def check_required_env_vars():
 
 
 def main():
-    """Main function to populate the doc_meta collection."""
+    """Main function to populate the doc_meta collection via API."""
     # Parse command-line arguments
     args = parse_arguments()
     
-    logger.info("Starting doc_meta collection population")
+    logger.info("Starting doc_meta collection population via API")
     
-    # Skip environment variable check if we're only testing connection
-    if not args.test_connection:
-        if not check_required_env_vars():
+    # Test API connection if requested
+    if args.test_connection:
+        logger.info(f"Testing API connection to {args.api_url}...")
+        if test_api_connection(args.api_url):
+            logger.info("✅ API connection test successful!")
+            return 0
+        else:
+            logger.error("❌ API connection test failed!")
             return 1
+    
+    # Check required environment variables
+    if not check_required_env_vars():
+        return 1
     
     try:
-        # Initialize ChromaDB client (S3 not needed for connection test)
-        if not args.test_connection:
-            logger.info("Initializing S3 client...")
-            s3_client = init_s3_client()
-        
-        logger.info("Initializing ChromaDB client...")
-        try:
-            chroma_client = init_chroma_with_args(args)
-        except Exception as chroma_error:
-            logger.error(f"Failed to initialize ChromaDB client: {chroma_error}")
-            logger.error("\n" + "="*70)
-            logger.error("CHROMADB CONNECTION ERROR - CONFIGURATION REQUIRED")
-            logger.error("="*70)
-            
-            # Provide specific guidance based on what the user is trying to do
-            chroma_host = os.getenv("CHROMA_HOST")
-            if chroma_host or args.remote_host:
-                effective_host = args.remote_host or chroma_host
-                effective_port = args.remote_port if args.remote_host else os.getenv("CHROMA_PORT", "8000")
-                logger.error(f"Attempting to connect to remote ChromaDB at: {effective_host}:{effective_port}")
-                logger.error("")
-                logger.error("REMOTE DATABASE CONNECTION TROUBLESHOOTING:")
-                logger.error("1. Verify your remote ChromaDB server is running and accessible")
-                logger.error("2. Check network connectivity:")
-                logger.error(f"   curl -f http://{effective_host}:{effective_port}/api/v1/heartbeat")
-                logger.error("3. Verify firewall/security group settings allow connections")
-                logger.error("4. Confirm the hostname and port are correct")
-                logger.error("")
-                logger.error("ALTERNATIVE - Use local storage for testing:")
-                logger.error("  python scripts/populate_doc_meta.py --local-dir ./chroma_db")
-            else:
-                logger.error("Using local ChromaDB storage but connection failed")
-                persist_dir = args.local_dir or os.getenv("CHROMA_PERSIST_DIRECTORY", "/app/chroma_db")
-                logger.error(f"ChromaDB persist directory: {persist_dir}")
-                logger.error("Make sure you have write permissions to this directory")
-                logger.error("")
-                logger.error("ALTERNATIVE - Connect to remote database:")
-                logger.error("  python scripts/populate_doc_meta.py --remote-host your-server.com")
-            logger.error("="*70)
+        # Test API connection first
+        logger.info(f"Testing connection to FastAPI application at {args.api_url}...")
+        if not test_api_connection(args.api_url):
+            logger.error("Cannot proceed - API is not accessible")
+            logger.error("Make sure the FastAPI application is running and accessible")
             return 1
         
-        # Test the connection if requested
-        if args.test_connection:
-            logger.info("Testing ChromaDB connection...")
-            if test_chroma_connection_only(chroma_client):
-                logger.info("✅ ChromaDB connection test successful!")
-                return 0
-            else:
-                logger.error("❌ ChromaDB connection test failed!")
-                return 1
+        # Initialize S3 client and load metadata
+        logger.info("Initializing S3 client...")
+        s3_client = init_s3_client()
         
-        # Test connection before proceeding
-        if not test_chroma_connection(chroma_client):
-            logger.error("Cannot proceed with population due to connection issues")
-            return 1
-        
-        # Get or create the metadata collection
-        logger.info("Getting or creating doc_meta collection...")
-        meta_collection = get_or_create_collection(chroma_client, "doc_meta")
-        
-        # Load metadata from S3
         logger.info("Loading metadata from S3...")
         metadata = load_metadata_from_s3(s3_client)
         
@@ -339,27 +273,18 @@ def main():
         
         # Extract document entries
         logger.info("Extracting document entries...")
-        doc_entries = extract_metadata_for_embedding(metadata)
+        doc_entries = extract_metadata_for_api(metadata)
         
         if not doc_entries:
             logger.error("No document entries found in metadata")
             return 1
         
-        # Populate the collection
-        logger.info("Populating meta collection...")
-        result_ids = populate_meta_collection(doc_entries, meta_collection)
+        # Populate via API
+        logger.info(f"Populating collection via API (batch size: {args.batch_size})...")
+        total_added = populate_via_api(doc_entries, args.api_url, args.batch_size)
         
         # Log summary
-        logger.info(f"Successfully populated doc_meta collection with {len(result_ids)} documents")
-        
-        # Get final collection size
-        try:
-            collection_size = meta_collection.count()
-            logger.info(f"Final collection size: {collection_size}")
-        except Exception as e:
-            logger.warning(f"Could not get collection size: {e}")
-        
-        logger.info("✅ doc_meta collection population completed successfully")
+        logger.info(f"✅ Successfully populated doc_meta collection with {total_added} documents")
         return 0
         
     except Exception as e:
