@@ -180,15 +180,237 @@ class TestSemanticDocumentSelectionEmbedding:
             ]]
         }
         
-        result = semantic_document_selection(
-            query="Show me Company A financials",
-            metadata=self.sample_metadata,
-            meta_collection=self.mock_meta_collection
-        )
-        
-        # Verify result format
-        assert result is not None
-        assert "companies_mentioned" in result
-        assert "documents_to_load" in result
-        assert len(result["documents_to_load"]) == 1
-        assert result["companies_mentioned"] == ["Company A"]
+        # Mock get_companies_from_query to return empty list (no companies detected)
+        with patch('app.utils.get_companies_from_query') as mock_get_companies:
+            mock_get_companies.return_value = []  # No companies detected, should use broader search
+            
+            # Mock query_meta_collection to return the expected result
+            with patch('app.utils.query_meta_collection') as mock_query_meta:
+                def mock_query_meta_side_effect(meta_collection, query, n_results=5, where=None, conversation_history=None):
+                    # Should be called with n_results=15 for broader search when no companies detected
+                    results = self.mock_meta_collection.query.return_value
+                    metadatas = results["metadatas"][0] 
+                    companies_mentioned = list(set(meta.get("company", "") for meta in metadatas if meta.get("company")))
+                    documents_to_load = []
+                    
+                    for meta in metadatas:
+                        if meta.get("filename") and meta.get("company"):
+                            documents_to_load.append({
+                                "company": meta["company"],
+                                "document_link": f"s3://document-path/{meta['filename']}",
+                                "filename": meta["filename"],
+                                "reason": f"Relevant {meta.get('type', 'document')} for {meta.get('period', 'period')}"
+                            })
+                    
+                    return {
+                        "companies_mentioned": companies_mentioned,
+                        "documents_to_load": documents_to_load
+                    }
+                
+                mock_query_meta.side_effect = mock_query_meta_side_effect
+                
+                result = semantic_document_selection(
+                    query="Show me Company A financials",
+                    metadata=self.sample_metadata,
+                    meta_collection=self.mock_meta_collection
+                )
+                
+                # Verify result format
+                assert result is not None
+                assert "companies_mentioned" in result
+                assert "documents_to_load" in result
+                assert len(result["documents_to_load"]) == 1
+                assert result["companies_mentioned"] == ["Company A"]
+    
+    def test_semantic_selection_multi_company_query(self):
+        """Test that multi-company queries return documents from all mentioned companies."""
+        # Mock the get_companies_from_query function
+        with patch('app.utils.get_companies_from_query') as mock_get_companies:
+            mock_get_companies.return_value = ["Access Bank", "NCB"]
+            
+            # Mock the meta collection to return different results for each company
+            def mock_query_side_effect(*args, **kwargs):
+                where_clause = kwargs.get('where', {})
+                if where_clause.get('company', {}).get('$eq') == "Access Bank":
+                    return {
+                        "ids": [["access_doc.txt"]],
+                        "documents": [["Access Bank - financial - 2023"]],
+                        "metadatas": [[{
+                            "filename": "access_doc.txt",
+                            "company": "Access Bank",
+                            "period": "2023",
+                            "type": "financial"
+                        }]]
+                    }
+                elif where_clause.get('company', {}).get('$eq') == "NCB":
+                    return {
+                        "ids": [["ncb_doc.txt"]],
+                        "documents": [["NCB - financial - 2023"]],
+                        "metadatas": [[{
+                            "filename": "ncb_doc.txt", 
+                            "company": "NCB",
+                            "period": "2023",
+                            "type": "financial"
+                        }]]
+                    }
+                else:
+                    return {"ids": [[]], "documents": [[]], "metadatas": [[]]}
+            
+            self.mock_meta_collection.query.side_effect = mock_query_side_effect
+            
+            # Mock query_meta_collection to call the actual function logic but with mocked collection
+            with patch('app.utils.query_meta_collection') as mock_query_meta:
+                def mock_query_meta_side_effect(meta_collection, query, n_results=5, where=None, conversation_history=None):
+                    # Simulate what query_meta_collection would return
+                    results = mock_query_side_effect(query_texts=[query], n_results=n_results, where=where)
+                    if not results or not results.get("metadatas") or not results["metadatas"][0]:
+                        return None
+                    
+                    metadatas = results["metadatas"][0] 
+                    companies_mentioned = list(set(meta.get("company", "") for meta in metadatas if meta.get("company")))
+                    documents_to_load = []
+                    
+                    for meta in metadatas:
+                        if meta.get("filename") and meta.get("company"):
+                            documents_to_load.append({
+                                "company": meta["company"],
+                                "document_link": f"s3://document-path/{meta['filename']}",
+                                "filename": meta["filename"],
+                                "reason": f"Relevant {meta.get('type', 'document')} for {meta.get('period', 'period')}"
+                            })
+                    
+                    return {
+                        "companies_mentioned": companies_mentioned,
+                        "documents_to_load": documents_to_load
+                    }
+                
+                mock_query_meta.side_effect = mock_query_meta_side_effect
+                
+                result = semantic_document_selection(
+                    query="How did Access Bank compare to NCB in 2023?",
+                    metadata=self.sample_metadata,
+                    meta_collection=self.mock_meta_collection
+                )
+                
+                # Verify result contains documents from both companies
+                assert result is not None
+                assert "companies_mentioned" in result
+                assert "documents_to_load" in result
+                
+                # Should have documents from both companies
+                assert len(result["documents_to_load"]) == 2
+                companies_in_results = [doc["company"] for doc in result["documents_to_load"]]
+                assert "Access Bank" in companies_in_results
+                assert "NCB" in companies_in_results
+                
+                # Verify companies mentioned includes both
+                assert set(result["companies_mentioned"]) >= {"Access Bank", "NCB"}
+    
+    def test_semantic_selection_deduplication(self):
+        """Test that duplicate documents are properly deduplicated."""
+        with patch('app.utils.get_companies_from_query') as mock_get_companies:
+            mock_get_companies.return_value = ["Company A", "Company B"]
+            
+            # Mock to return the same document for both companies (simulating duplication)
+            def mock_query_side_effect(*args, **kwargs):
+                return {
+                    "ids": [["shared_doc.txt"]],
+                    "documents": [["Shared document"]],
+                    "metadatas": [[{
+                        "filename": "shared_doc.txt",
+                        "company": kwargs.get('where', {}).get('company', {}).get('$eq', 'Unknown'),
+                        "period": "2023",
+                        "type": "financial"
+                    }]]
+                }
+            
+            self.mock_meta_collection.query.side_effect = mock_query_side_effect
+            
+            with patch('app.utils.query_meta_collection') as mock_query_meta:
+                def mock_query_meta_side_effect(meta_collection, query, n_results=5, where=None, conversation_history=None):
+                    results = mock_query_side_effect(query_texts=[query], n_results=n_results, where=where)
+                    if not results or not results.get("metadatas") or not results["metadatas"][0]:
+                        return None
+                    
+                    metadatas = results["metadatas"][0]
+                    companies_mentioned = list(set(meta.get("company", "") for meta in metadatas if meta.get("company")))
+                    documents_to_load = []
+                    
+                    for meta in metadatas:
+                        if meta.get("filename") and meta.get("company"):
+                            documents_to_load.append({
+                                "company": meta["company"],
+                                "document_link": f"s3://document-path/{meta['filename']}",
+                                "filename": meta["filename"],
+                                "reason": f"Relevant {meta.get('type', 'document')} for {meta.get('period', 'period')}"
+                            })
+                    
+                    return {
+                        "companies_mentioned": companies_mentioned,
+                        "documents_to_load": documents_to_load
+                    }
+                
+                mock_query_meta.side_effect = mock_query_meta_side_effect
+                
+                result = semantic_document_selection(
+                    query="Compare Company A and Company B",
+                    metadata=self.sample_metadata,
+                    meta_collection=self.mock_meta_collection
+                )
+                
+                # Verify deduplication occurred - should only have one document despite two companies
+                assert result is not None
+                assert len(result["documents_to_load"]) == 1
+                assert result["documents_to_load"][0]["filename"] == "shared_doc.txt"
+    
+    def test_semantic_selection_broader_fallback(self):
+        """Test that broader search is used when no companies are detected."""
+        with patch('app.utils.get_companies_from_query') as mock_get_companies:
+            mock_get_companies.return_value = []  # No companies detected
+            
+            # Mock successful broad search
+            self.mock_meta_collection.query.return_value = {
+                "ids": [["doc1.txt", "doc2.txt"]],
+                "documents": [["Generic doc 1", "Generic doc 2"]],
+                "metadatas": [[
+                    {"filename": "doc1.txt", "company": "Company X", "period": "2023"},
+                    {"filename": "doc2.txt", "company": "Company Y", "period": "2022"}
+                ]]
+            }
+            
+            with patch('app.utils.query_meta_collection') as mock_query_meta:
+                def mock_query_meta_side_effect(meta_collection, query, n_results=5, where=None, conversation_history=None):
+                    # Should be called with n_results=15 for broader search
+                    assert n_results == 15
+                    assert where is None  # No company filter for broad search
+                    
+                    results = self.mock_meta_collection.query.return_value
+                    metadatas = results["metadatas"][0]
+                    companies_mentioned = list(set(meta.get("company", "") for meta in metadatas if meta.get("company")))
+                    documents_to_load = []
+                    
+                    for meta in metadatas:
+                        if meta.get("filename") and meta.get("company"):
+                            documents_to_load.append({
+                                "company": meta["company"],
+                                "document_link": f"s3://document-path/{meta['filename']}",
+                                "filename": meta["filename"],
+                                "reason": f"Relevant document for {meta.get('period', 'period')}"
+                            })
+                    
+                    return {
+                        "companies_mentioned": companies_mentioned,
+                        "documents_to_load": documents_to_load
+                    }
+                
+                mock_query_meta.side_effect = mock_query_meta_side_effect
+                
+                result = semantic_document_selection(
+                    query="Show me some financial reports",
+                    metadata=self.sample_metadata,
+                    meta_collection=self.mock_meta_collection
+                )
+                
+                # Verify broader search was used
+                assert result is not None
+                assert len(result["documents_to_load"]) == 2

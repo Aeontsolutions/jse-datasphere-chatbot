@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Multi-company support for embedding-based document selection
+  - `semantic_document_selection` now extracts companies from queries using `get_companies_from_query`
+  - Runs individual searches for each detected company with company-specific filters
+  - Combines and deduplicates results from multiple companies
+  - Falls back to broader search (n_results=15) when no companies are detected
+  - Comprehensive test coverage for multi-company scenarios
+
 ### Fixed
 - Fixed single-clause `$and` filter crash in ChromaDB queries ([#4](https://github.com/Aeontsolutions/jse-datasphere-chatbot/issues/4))
   - ChromaDB rejects `$and` filters with fewer than two expressions
@@ -16,11 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Two+ clauses: wrap in `{"$and": [...]}`
   - Added comprehensive unit tests covering all three scenarios
   - Endpoints now return 200 status for queries with single metadata filters
+- Fixed embedding-based document selection to return documents for all companies mentioned in multi-company queries
+  - Previously only returned documents for the highest-scoring company
+  - Now ensures `/fast_chat` endpoint can compare multiple companies in a single query
 
 ### Added
 - Unit test suite for `chroma_utils.query_collection` function
 - pytest testing framework support
 - Test coverage for ChromaDB filter logic edge cases
+- Unit tests for multi-company query scenarios
+- Test coverage for document deduplication logic
 
 ---
 
