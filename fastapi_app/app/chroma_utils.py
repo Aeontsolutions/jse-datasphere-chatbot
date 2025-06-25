@@ -281,12 +281,45 @@ def query_collection(
     flattened_metadata = [item for sublist in metadata_results for item in sublist]
     flattened_documents = [item for sublist in document_results for item in sublist]
 
-    # Step 4: Sort Metadata & Documents by Year (Descending)
+    # ------------------------------------------------------------------
+    # Step 4: Sort results by year/period (descending)
+    # ------------------------------------------------------------------
+    # The primary metadata collection ("documents") stores a numeric
+    # ``year`` field, but the *doc_meta* collection uses a string
+    # ``period`` field (e.g. "FY2023" or "2022 H1").
+    #
+    # To keep the helper generic, attempt to:
+    #   1. Use the numeric ``year`` field when present.
+    #   2. Otherwise, extract the first 4-digit year from the ``period``
+    #      string.
+    #   3. Default to 0 so that undated documents appear last.
+
+    import re  # Local import to avoid polluting global namespace unnecessarily
+
+    def _extract_year(meta: Dict[str, Any]) -> int:
+        """Return an int year for sorting or 0 if not available."""
+        # Case 1: direct numeric year field
+        year_val = meta.get("year")
+        if isinstance(year_val, (int, float)):
+            return int(year_val)
+        if isinstance(year_val, str) and year_val.isdigit():
+            return int(year_val)
+
+        # Case 2: try to parse year from ``period`` string
+        period_val = meta.get("period", "")
+        match = re.search(r"(19|20)\d{2}", str(period_val))  # matches 1900-2099
+        if match:
+            try:
+                return int(match.group())
+            except ValueError:
+                pass
+
+        # Fallback: 0 (oldest)
+        return 0
+
     sorted_results = sorted(
         zip(flattened_metadata, flattened_documents),
-        key=lambda pair: int(
-            pair[0]["year"]
-        ),  # Convert 'year' to int for correct sorting
+        key=lambda pair: _extract_year(pair[0]),
         reverse=True,
     )
 

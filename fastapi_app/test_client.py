@@ -36,6 +36,11 @@ mode = st.sidebar.radio(
 if st.session_state.last_exec_time is not None:
     st.sidebar.metric("⏱️ Last Execution (s)", f"{st.session_state.last_exec_time:.2f}")
 
+    # Add a reset button to clear the stopwatch/last execution timer
+    if st.sidebar.button("🔄 Reset Timer"):
+        st.session_state.last_exec_time = None
+        st.rerun()
+
 # -------------------
 # Chat Mode
 # -------------------

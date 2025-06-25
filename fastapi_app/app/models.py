@@ -108,7 +108,7 @@ class ChromaMetaUpdateResponse(BaseModel):
 class ChromaMetaQueryRequest(BaseModel):
     """Request model for querying the metadata collection"""
     query: str = Field(..., description="Search query for document selection")
-    n_results: int = Field(5, description="Number of most similar documents to return")
+    n_results: int = Field(3, description="Number of most similar documents to return")
     where: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional metadata filter for the query",

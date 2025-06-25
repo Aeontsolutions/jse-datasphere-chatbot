@@ -27,6 +27,7 @@ import json
 import logging
 import argparse
 import requests
+import time
 from typing import List, Dict, Any
 
 # Add the fastapi_app directory to the path so we can import modules
@@ -56,37 +57,93 @@ def extract_metadata_for_api(metadata: List[Dict[str, Any]]) -> List[Dict[str, s
     Returns:
         List of MetaDocumentInfo dictionaries for the API
     """
-    doc_entries = []
-    
-    for company_data in metadata:
-        company_name = company_data.get("company_name", "")
-        
+    doc_entries: List[Dict[str, str]] = []
+
+    # The metadata loaded from S3 can have two possible shapes:
+    # 1. A list where each item is a dict with the keys "company_name", "documents", etc.
+    # 2. A dict keyed by company name where the value is another dict that contains a
+    #    "documents" list.  In the second case, iterating directly over the metadata
+    #    gives us strings (the company_name keys), which caused the original
+    #    AttributeError.  To support both shapes we normalise the data to a list of
+    #    dictionaries that *always* contain the key "company_name".
+
+    if isinstance(metadata, dict):
+        # Convert to a uniform list of dicts that mimic the shape in option (1).
+        normalised_metadata: List[Dict[str, Any]] = []
+        for company_name, company_info in metadata.items():
+            # Two possibilities here:
+            # a) company_info is already a mapping with a key "documents" (old shape)
+            # b) company_info is *itself* a list[dict] of documents (new shape shown by the user)
+
+            if isinstance(company_info, dict):
+                # Old shape → just tack on company_name and push through.
+                company_copy = company_info.copy()
+                company_copy.setdefault("company_name", company_name)
+                normalised_metadata.append(company_copy)
+            elif isinstance(company_info, list):
+                # New shape → wrap it into a dict with key "documents" so the processing loop below can stay the same.
+                normalised_metadata.append({
+                    "company_name": company_name,
+                    "documents": company_info,
+                })
+            else:
+                logger.warning(
+                    "Skipping company '%s' because the associated metadata type is unsupported (type=%s)",
+                    company_name,
+                    type(company_info).__name__,
+                )
+                continue
+    else:
+        # Assume the metadata is already an iterable of dicts.
+        normalised_metadata = metadata  # type: ignore[assignment]
+
+    # Now process the normalised list.
+    for company_data in normalised_metadata:
+        # Validate expected structure.
+        if not isinstance(company_data, dict):
+            logger.warning(
+                "Encountered non-dict item in metadata list of type %s – skipping",
+                type(company_data).__name__
+            )
+            continue
+
+        company_name: str = company_data.get("company_name", "")
+
         # Process each document for this company
         for doc in company_data.get("documents", []):
+            # Each doc should be a dict too – skip otherwise.
+            if not isinstance(doc, dict):
+                logger.warning(
+                    "Encountered non-dict document entry for company '%s' (type=%s) – skipping",
+                    company_name,
+                    type(doc).__name__
+                )
+                continue
+
             filename = os.path.basename(doc.get("filename", ""))
             doc_type = doc.get("type", "unknown")
             period = doc.get("period", "unknown")
-            
+
             # Skip if essential data is missing
             if not filename or not company_name:
-                logger.warning(f"Skipping document with missing data: {doc}")
+                logger.warning("Skipping document with missing data: %s", doc)
                 continue
-            
+
             # Create description for embedding: "company - doc_type - period"
             description = f"{company_name} - {doc_type} - {period}"
-            
+
             # Format according to MetaDocumentInfo model
-            doc_entry = {
+            doc_entry: Dict[str, str] = {
                 "filename": filename,
                 "company": company_name,
                 "period": period,
                 "type": doc_type,
-                "description": description
+                "description": description,
             }
-            
+
             doc_entries.append(doc_entry)
-    
-    logger.info(f"Extracted {len(doc_entries)} document entries from metadata")
+
+    logger.info("Extracted %s document entries from metadata", len(doc_entries))
     return doc_entries
 
 
@@ -122,28 +179,105 @@ def populate_via_api(doc_entries: List[Dict[str, str]], api_url: str, batch_size
             "documents": batch
         }
         
-        try:
-            # Make API request
-            response = requests.post(endpoint_url, json=request_data, timeout=60)
-            response.raise_for_status()
-            
-            # Parse response
-            result = response.json()
-            batch_added = len(result.get("ids", []))
-            total_added += batch_added
-            
-            logger.info(f"Batch {batch_num} completed: {batch_added} documents added")
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error sending batch {batch_num} to API: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Response status: {e.response.status_code}")
-                logger.error(f"Response body: {e.response.text}")
+        # ------------------------------------------------------------
+        # Send request with retry logic for transient 5xx errors
+        # ------------------------------------------------------------
+        max_retries = 3
+        backoff_seconds = 5
+        attempt = 0
+        while attempt < max_retries:
+            try:
+                response = requests.post(endpoint_url, json=request_data, timeout=60)
+                response.raise_for_status()
+
+                # Parse response on success
+                result = response.json()
+                batch_added = len(result.get("ids", []))
+                total_added += batch_added
+
+                logger.info(
+                    "Batch %s completed: %s documents added (attempt %s/%s)",
+                    batch_num,
+                    batch_added,
+                    attempt + 1,
+                    max_retries,
+                )
+                break  # Success – exit retry loop
+
+            except requests.exceptions.RequestException as e:
+                attempt += 1
+
+                # ------------------------------------------------------
+                # 1) Duplicate-ID error handling
+                # ------------------------------------------------------
+                if hasattr(e, "response") and e.response is not None:
+                    status_code = e.response.status_code
+                    body_text = e.response.text
+
+                    # If duplicate-ID error, strip duplicates and retry once
+                    if status_code == 500 and "Expected IDs to be unique" in body_text and "duplicates of:" in body_text:
+                        dup_part = body_text.split("duplicates of:")[-1]
+                        dup_part = dup_part.split("in add")[0]
+                        dup_part = dup_part.strip().strip('"').strip()
+                        duplicate_ids = [d.strip() for d in dup_part.replace("\n", ",").split(",") if d.strip()]
+
+                        if duplicate_ids:
+                            logger.warning(
+                                "Batch %s attempt %s/%s – removing %s duplicate IDs and retrying immediately.",
+                                batch_num,
+                                attempt,
+                                max_retries,
+                                len(duplicate_ids),
+                            )
+
+                            # Remove duplicates from current batch and rebuild payload
+                            batch = [doc for doc in batch if doc.get("filename") not in duplicate_ids]
+
+                            if not batch:
+                                logger.info("All documents in batch %s were duplicates – skipping batch.", batch_num)
+                                break  # Exit retry loop successfully (nothing to add)
+
+                            # Refresh request_data & reset attempt counter so we still get 3 network tries
+                            request_data = {"documents": batch}
+                            attempt = 0  # reset attempts for cleaned batch
+                            continue  # Immediate retry with cleaned batch
+
+                    # --------------------------------------------------
+                    # 2) Transient 5xx errors (except duplicates) → retry
+                    # --------------------------------------------------
+                    if 500 <= status_code < 600:
+                        if attempt < max_retries:
+                            logger.warning(
+                                "Transient %s error on batch %s (attempt %s/%s). Retrying in %s seconds...",
+                                status_code,
+                                batch_num,
+                                attempt,
+                                max_retries,
+                                backoff_seconds,
+                            )
+                            time.sleep(backoff_seconds * attempt)
+                            continue
+
+                # Out of retries or not retryable → raise
+                logger.error(
+                    "Failed request for batch %s on attempt %s/%s: %s",
+                    batch_num,
+                    attempt,
+                    max_retries,
+                    e,
+                )
+                if attempt >= max_retries:
+                    raise
+
+        else:
+            # Exceeded retries without success
+            logger.error(
+                "Failed to process batch %s after %s attempts – aborting.",
+                batch_num,
+                max_retries,
+            )
             raise
-        except Exception as e:
-            logger.error(f"Unexpected error processing batch {batch_num}: {e}")
-            raise
-    
+
     logger.info(f"Successfully added {total_added} documents total")
     return total_added
 
