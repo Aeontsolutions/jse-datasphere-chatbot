@@ -87,7 +87,8 @@ class TestQueryCollectionFilenameFiltering:
         
         # Second call should have no filter (fallback)
         second_call = self.mock_collection.query.call_args_list[1]
-        assert second_call[1]['where'] is None
+        # The fallback call omits the where parameter entirely
+        assert 'where' not in second_call[1] or second_call[1]['where'] is None
         
     def test_no_fallback_when_no_filter_provided(self):
         """Test that no fallback occurs when no filter is provided and no results found."""

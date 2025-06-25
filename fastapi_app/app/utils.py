@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from google.oauth2 import service_account
 from google.cloud import aiplatform
 from vertexai.preview.generative_models import GenerativeModel
+from .chroma_utils import get_companies_from_query
 
 # Configure logging
 logging.basicConfig(
@@ -182,75 +183,167 @@ def load_metadata_from_s3(s3_client):
 
 # Function to use the LLM to determine which documents to load based on the query and conversation history
 def semantic_document_selection(query, metadata, conversation_history=None):
-    """Use LLM to determine which documents to load based on query and conversation history"""
+    """Use company-aware approach to determine which documents to load based on query and conversation history.
+    
+    This function now:
+    1. Extracts companies from the query using get_companies_from_query
+    2. For each detected company, finds the top 3 relevant documents
+    3. Merges and deduplicates results
+    4. Falls back to broader search if no companies are detected
+    """
     try:
-        # Create a prompt for the LLM to analyze the query and metadata
-        model = GenerativeModel("gemini-2.0-flash-001")
+        # Step 1: Extract companies from query
+        companies_found = get_companies_from_query(query)
+        logger.info(f"Companies detected in query: {companies_found}")
         
-        # Format metadata in a readable format for the LLM
-        metadata_str = json.dumps(metadata, indent=2)
+        documents_to_load = []
         
-        # Format conversation history if available
-        conversation_context = ""
-        if conversation_history and len(conversation_history) > 0:
-            # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
-            recent_history = conversation_history[-10:]
-            conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
-            conversation_context = f"""
-            Previous conversation history:
-            {conversation_context}
-            """
+        if companies_found:
+            # Step 2: For each company, find relevant documents
+            for company in companies_found:
+                # Filter metadata for this specific company
+                company_metadata = [
+                    doc for doc in metadata 
+                    if doc.get('company', '').lower() == company.lower()
+                ]
+                
+                if company_metadata:
+                    # Create a prompt to find the top 3 documents for this company
+                    model = GenerativeModel("gemini-2.0-flash-001")
+                    
+                    # Format conversation history if available
+                    conversation_context = ""
+                    if conversation_history and len(conversation_history) > 0:
+                        recent_history = conversation_history[-10:]
+                        conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+                        conversation_context = f"""
+                        Previous conversation history:
+                        {conversation_context}
+                        """
+                    
+                    company_metadata_str = json.dumps(company_metadata, indent=2)
+                    
+                    prompt = f"""
+                    Based on the user question and conversation history, select the most relevant documents for {company}.
+                    
+                    {conversation_context}
+                    
+                    Current user question: "{query}"
+                    
+                    Available documents for {company}:
+                    {company_metadata_str}
+                    
+                    Select up to 3 most relevant documents for {company} to answer the user's question.
+                    Consider the document types, years, and relevance to the query.
+                    
+                    Return your response as a valid JSON array with this structure:
+                    [
+                        {{
+                            "company": "{company}",
+                            "document_link": "url",
+                            "filename": "filename",
+                            "reason": "brief explanation why this document is relevant"
+                        }}
+                    ]
+                    
+                    ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
+                    """
+                    
+                    try:
+                        response = model.generate_content(prompt)
+                        response_text = response.text
+                        
+                        # Extract JSON from response
+                        json_start = response_text.find('[')
+                        json_end = response_text.rfind(']') + 1
+                        if json_start >= 0 and json_end > json_start:
+                            response_text = response_text[json_start:json_end]
+                        
+                        company_docs = json.loads(response_text)
+                        documents_to_load.extend(company_docs[:3])  # Limit to 3 per company
+                        
+                    except (json.JSONDecodeError, Exception) as e:
+                        logger.error(f"Error processing documents for company {company}: {e}")
+                        # Continue to next company instead of failing completely
+                        continue
         
-        # Prompt the LLM to determine relevant documents (LIMIT TO 3)
-        prompt = f"""
-        Based on the following user question, conversation history, and available document metadata, determine which documents are most relevant to answer the question.
-        
-        {conversation_context}
-        
-        Current user question: "{query}"
-        
-        Available document metadata:
-        {metadata_str}
-        
-        For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
-        Consider aliases, abbreviations, or partial references to companies.
-        Consider the full context of the conversation when determining relevance.
-        
-        IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
-        
-        Return your response as a valid JSON object with this structure:
-        {{
-          "companies_mentioned": ["company1", "company2"], 
-          "documents_to_load": [
-            {{
-              "company": "company name",
-              "document_link": "url",
-              "filename": "filename",
-              "reason": "brief explanation why this document is relevant"
-            }}
-          ]
-        }}
-        
-        ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
-        """
-        
-        response = model.generate_content(prompt)
-        response_text = response.text
-        
-        # Extract the JSON part from the response
-        try:
-            # Try to find JSON in the response
-            json_start = response_text.find('{')
-            json_end = response_text.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                response_text = response_text[json_start:json_end]
+        # Step 3: If no companies found or no documents selected, use broader fallback
+        if not documents_to_load:
+            logger.info("No company-specific documents found, using broader fallback search")
+            model = GenerativeModel("gemini-2.0-flash-001")
             
-            recommendation = json.loads(response_text)
-            return recommendation
-        except json.JSONDecodeError as e:
-            logger.error(f"Error parsing LLM response as JSON: {e}")
-            logger.debug(response_text)  # Log the response for debugging
-            return None
+            # Use broader search with increased n_results
+            metadata_str = json.dumps(metadata, indent=2)
+            
+            conversation_context = ""
+            if conversation_history and len(conversation_history) > 0:
+                recent_history = conversation_history[-10:]
+                conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+                conversation_context = f"""
+                Previous conversation history:
+                {conversation_context}
+                """
+            
+            prompt = f"""
+            Based on the following user question, conversation history, and available document metadata, determine which documents are most relevant to answer the question.
+            
+            {conversation_context}
+            
+            Current user question: "{query}"
+            
+            Available document metadata:
+            {metadata_str}
+            
+            Select the most relevant documents to answer the user's question.
+            Consider document types, years, companies, and relevance to the query.
+            
+            IMPORTANT: Select up to 15 documents, prioritizing the most relevant ones.
+            
+            Return your response as a valid JSON object with this structure:
+            {{
+              "companies_mentioned": ["company1", "company2"], 
+              "documents_to_load": [
+                {{
+                  "company": "company name",
+                  "document_link": "url",
+                  "filename": "filename",
+                  "reason": "brief explanation why this document is relevant"
+                }}
+              ]
+            }}
+            
+            ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
+            """
+            
+            try:
+                response = model.generate_content(prompt)
+                response_text = response.text
+                
+                json_start = response_text.find('{')
+                json_end = response_text.rfind('}') + 1
+                if json_start >= 0 and json_end > json_start:
+                    response_text = response_text[json_start:json_end]
+                
+                fallback_result = json.loads(response_text)
+                return fallback_result
+                
+            except (json.JSONDecodeError, Exception) as e:
+                logger.error(f"Error in fallback document selection: {e}")
+                return None
+        
+        # Step 4: Deduplicate and return results
+        seen_filenames = set()
+        unique_documents = []
+        for doc in documents_to_load:
+            filename = doc.get('filename', '')
+            if filename and filename not in seen_filenames:
+                seen_filenames.add(filename)
+                unique_documents.append(doc)
+        
+        return {
+            "companies_mentioned": companies_found,
+            "documents_to_load": unique_documents
+        }
             
     except Exception as e:
         logger.error(f"Error in semantic document selection: {str(e)}")
