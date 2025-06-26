@@ -22,6 +22,8 @@ from app.utils import (
     auto_load_relevant_documents, 
     generate_chat_response,
     semantic_document_selection,
+    refresh_metadata_cache,
+    get_cache_status,
 )
 from app.chroma_utils import (
     init_chroma_client,
@@ -510,3 +512,44 @@ async def fast_chat(
     except Exception as e:
         logger.error(f"Error in fast_chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
+
+@app.get("/cache/status")
+async def get_cache_status_endpoint():
+    """Get the current status of the metadata cache"""
+    try:
+        status = get_cache_status()
+        return {
+            "success": True,
+            "cache_status": status
+        }
+    except Exception as e:
+        logger.error(f"Error getting cache status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting cache status: {str(e)}")
+
+@app.post("/cache/refresh")
+async def refresh_cache_endpoint():
+    """Force refresh of the metadata cache using current S3 metadata"""
+    try:
+        # Load current metadata from S3
+        metadata = load_metadata_from_s3()
+        if not metadata:
+            raise HTTPException(status_code=500, detail="Failed to load metadata from S3")
+        
+        # Refresh the cache
+        success = refresh_metadata_cache(metadata)
+        
+        if success:
+            return {
+                "success": True,
+                "message": "Cache refreshed successfully",
+                "cache_status": get_cache_status()
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Failed to refresh cache",
+                "cache_status": get_cache_status()
+            }
+    except Exception as e:
+        logger.error(f"Error refreshing cache: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error refreshing cache: {str(e)}")
