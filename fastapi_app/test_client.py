@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import json
+import time  # For execution-time measurement
 
 # -------------------
 # Configuration
@@ -12,6 +13,10 @@ LOCAL_BASE_URL = "http://localhost:8000"
 st.set_page_config(page_title="JSE Datasphere Chat", page_icon="💬")
 st.title("💬 JSE Datasphere Chat")
 
+# Ensure we have a slot in session state for timing information
+if "last_exec_time" not in st.session_state:
+    st.session_state.last_exec_time = None
+
 # -------------------
 # Sidebar controls
 # -------------------
@@ -21,9 +26,20 @@ BASE_URL = LOCAL_BASE_URL if env == "Local" else REMOTE_STAGE_BASE_URL if env ==
 # Primary mode (chat or vector upload)
 mode = st.sidebar.radio(
     "Mode",
-    ["Chat", "Add Document", "Query Vector DB"],
+    ["Chat", "Add Document", "Query Vector DB", "Query Meta DB"],
     horizontal=True,
 )
+
+# -------------------
+# Diagnostic sidebar info
+# -------------------
+if st.session_state.last_exec_time is not None:
+    st.sidebar.metric("⏱️ Last Execution (s)", f"{st.session_state.last_exec_time:.2f}")
+
+    # Add a reset button to clear the stopwatch/last execution timer
+    if st.sidebar.button("🔄 Reset Timer"):
+        st.session_state.last_exec_time = None
+        st.rerun()
 
 # -------------------
 # Chat Mode
@@ -54,6 +70,7 @@ if mode == "Chat":
         st.session_state.chat_history.append({"role": "user", "content": prompt})
 
         # Call the chat endpoint
+        start_time = time.perf_counter()
         try:
             response = requests.post(
                 f"{BASE_URL}{endpoint_path}",
@@ -70,6 +87,9 @@ if mode == "Chat":
             answer = result.get("response", "No response received.")
         except Exception as e:
             answer = f"❌ Error: {e}"
+        finally:
+            # Record execution time regardless of success/failure
+            st.session_state.last_exec_time = time.perf_counter() - start_time
 
         # Display assistant answer
         with st.chat_message("assistant"):
@@ -130,6 +150,7 @@ elif mode == "Add Document":
             payload["ids"] = [custom_id.strip()]
 
         # Call the update endpoint
+        start_time = time.perf_counter()
         try:
             res = requests.post(f"{BASE_URL}/chroma/update", json=payload, timeout=60)
             if res.status_code >= 400:
@@ -144,6 +165,8 @@ elif mode == "Add Document":
                 st.success(f"✅ Success: {res.json()}")
         except requests.exceptions.RequestException as e:
             st.error(f"❌ Request failed: {e}")
+        finally:
+            st.session_state.last_exec_time = time.perf_counter() - start_time
 
 # -------------------
 # Query Vector DB Mode
@@ -185,6 +208,7 @@ elif mode == "Query Vector DB":
                 st.stop()
 
         # Call the Chroma query endpoint
+        start_time = time.perf_counter()
         try:
             res = requests.post(f"{BASE_URL}/chroma/query", json=payload, timeout=60)
             res.raise_for_status()
@@ -195,3 +219,44 @@ elif mode == "Query Vector DB":
             st.json(result)
         except requests.exceptions.RequestException as req_err:
             st.error(f"❌ Request failed: {req_err}")
+        finally:
+            st.session_state.last_exec_time = time.perf_counter() - start_time
+            
+# -------------------
+# Query Meta DB Mode
+# -------------------
+elif mode == "Query Meta DB":
+    st.subheader("🔎 Query Meta Database")
+
+    # Input fields for the query
+    query_text = st.text_input("Query Text", placeholder="e.g. What is Company X's revenue in 2023?")
+    n_results = st.number_input(
+        "Number of Results",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1,
+    )
+
+    if st.button("🔍 Run Query"):
+        if not query_text.strip():
+            st.error("Query text cannot be empty.")
+            st.stop()
+
+        payload = {"query": query_text, "n_results": n_results}
+
+        # Call the Chroma query endpoint
+        start_time = time.perf_counter()
+        try:
+            res = requests.post(f"{BASE_URL}/chroma/meta/query", json=payload, timeout=60)
+            res.raise_for_status()
+            result = res.json()
+
+            # Pretty-print results
+            st.write("### Results:")
+            st.json(result)
+        except requests.exceptions.RequestException as req_err:
+            st.error(f"❌ Request failed: {req_err}")
+        finally:
+            st.session_state.last_exec_time = time.perf_counter() - start_time
+            

@@ -28,6 +28,29 @@ def test_api():
             print(f"Chat endpoint error: {response.text}")
     except Exception as e:
         print(f"Error testing chat endpoint: {str(e)}")
+    
+    # Test cache status endpoint
+    try:
+        response = requests.get("http://localhost:8000/cache/status")
+        print(f"Cache status endpoint response: {response.status_code}")
+        if response.status_code == 200:
+            print("Cache status response:", response.json())
+        else:
+            print(f"Cache status error: {response.text}")
+    except Exception as e:
+        print(f"Error testing cache status endpoint: {str(e)}")
+    
+    # Test cache refresh endpoint
+    try:
+        response = requests.post("http://localhost:8000/cache/refresh")
+        print(f"Cache refresh endpoint response: {response.status_code}")
+        if response.status_code == 200:
+            print("Cache refresh successful")
+            print("Cache refresh response:", response.json())
+        else:
+            print(f"Cache refresh error: {response.text}")
+    except Exception as e:
+        print(f"Error testing cache refresh endpoint: {str(e)}")
 
 if __name__ == "__main__":
     test_api()

@@ -281,12 +281,45 @@ def query_collection(
     flattened_metadata = [item for sublist in metadata_results for item in sublist]
     flattened_documents = [item for sublist in document_results for item in sublist]
 
-    # Step 4: Sort Metadata & Documents by Year (Descending)
+    # ------------------------------------------------------------------
+    # Step 4: Sort results by year/period (descending)
+    # ------------------------------------------------------------------
+    # The primary metadata collection ("documents") stores a numeric
+    # ``year`` field, but the *doc_meta* collection uses a string
+    # ``period`` field (e.g. "FY2023" or "2022 H1").
+    #
+    # To keep the helper generic, attempt to:
+    #   1. Use the numeric ``year`` field when present.
+    #   2. Otherwise, extract the first 4-digit year from the ``period``
+    #      string.
+    #   3. Default to 0 so that undated documents appear last.
+
+    import re  # Local import to avoid polluting global namespace unnecessarily
+
+    def _extract_year(meta: Dict[str, Any]) -> int:
+        """Return an int year for sorting or 0 if not available."""
+        # Case 1: direct numeric year field
+        year_val = meta.get("year")
+        if isinstance(year_val, (int, float)):
+            return int(year_val)
+        if isinstance(year_val, str) and year_val.isdigit():
+            return int(year_val)
+
+        # Case 2: try to parse year from ``period`` string
+        period_val = meta.get("period", "")
+        match = re.search(r"(19|20)\d{2}", str(period_val))  # matches 1900-2099
+        if match:
+            try:
+                return int(match.group())
+            except ValueError:
+                pass
+
+        # Fallback: 0 (oldest)
+        return 0
+
     sorted_results = sorted(
         zip(flattened_metadata, flattened_documents),
-        key=lambda pair: int(
-            pair[0]["year"]
-        ),  # Convert 'year' to int for correct sorting
+        key=lambda pair: _extract_year(pair[0]),
         reverse=True,
     )
 
@@ -294,6 +327,62 @@ def query_collection(
     context = "\n\n".join([doc for _, doc in sorted_results])
 
     return sorted_results, context
+
+
+def query_meta_collection(
+    meta_collection: "chromadb.Collection",
+    query: str,
+    n_results: int = 5,
+    where: Optional[Dict[str, Any]] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+):
+    """
+    Query the metadata collection for semantic document selection.
+    Returns results in the format expected by the existing semantic_document_selection interface.
+    """
+    # Optionally enhance query with conversation context
+    retrieval_query = query
+    if conversation_history:
+        # Combine recent user messages with the current query for better retrieval
+        recent_history = [
+            msg["content"] for msg in conversation_history[-5:] if msg.get("role") == "user"
+        ]
+        retrieval_query = " ".join(recent_history + [query])
+    
+    logger.info(f"Querying meta collection with query: '{retrieval_query}'")
+    
+    # Query the meta collection
+    results = meta_collection.query(
+        query_texts=[retrieval_query],
+        n_results=n_results,
+        where=where,
+    )
+    
+    # Check if we got any results
+    if not results or not results.get("metadatas") or not results["metadatas"][0]:
+        logger.info("No results from meta collection query")
+        return None
+    
+    # Extract the results
+    metadatas = results["metadatas"][0]  # Flatten the nested list
+    
+    # Convert to the expected format
+    companies_mentioned = list(set(meta.get("company", "") for meta in metadatas if meta.get("company")))
+    documents_to_load = []
+    
+    for meta in metadatas:
+        if meta.get("filename") and meta.get("company"):
+            documents_to_load.append({
+                "company": meta["company"],
+                "document_link": f"s3://document-path/{meta['filename']}",  # Placeholder - would need real S3 path
+                "filename": meta["filename"],
+                "reason": f"Relevant {meta.get('type', 'document')} for {meta.get('period', 'period')}"
+            })
+    
+    return {
+        "companies_mentioned": companies_mentioned,
+        "documents_to_load": documents_to_load
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +441,7 @@ def qa_bot(
     prompt = f"{convo_context}Question: {query}\nContext: {contexts}"
 
     response = client.models.generate_content(
-        model="gemini-2.5-pro-preview-03-25",
+        model="gemini-2.5-flash",
         config=types.GenerateContentConfig(
             system_instruction=qa_system_prompt,
             temperature=0,
