@@ -230,32 +230,37 @@ def create_metadata_cache(metadata):
         # Create cached content - this will be the system context that gets cached
         cached_content = f"""You are a document selection assistant. You have access to the following document metadata:
 
-{metadata_str}
+            {metadata_str}
 
-Your job is to analyze user queries and conversation history to select the most relevant documents from this metadata. When asked to select documents, you should:
+            Your job is to analyze user queries and conversation history to select the most relevant documents from this metadata. When asked to select documents, you should:
 
-1. Consider all companies mentioned or implied in the query/conversation
-2. Consider aliases, abbreviations, or partial references to companies
-3. Select a maximum of 3 documents total, prioritizing the most relevant ones
-4. Return results as valid JSON with this structure:
-{{
-  "companies_mentioned": ["company1", "company2"], 
-  "documents_to_load": [
-    {{
-      "company": "company name",
-      "document_link": "url",
-      "filename": "filename",
-      "reason": "brief explanation why this document is relevant"
-    }}
-  ]
-}}"""
+            1. Consider all companies mentioned or implied in the query/conversation
+            2. Consider aliases, abbreviations, or partial references to companies
+            3. Select a maximum of 3 documents total, prioritizing the most relevant ones
+            4. Return results as valid JSON with this structure:
+            {{
+            "companies_mentioned": ["company1", "company2"], 
+            "documents_to_load": [
+                {{
+                "company": "company name",
+                "document_link": "url",
+                "filename": "filename",
+                "reason": "brief explanation why this document is relevant"
+                }}
+            ]
+            }}"""
         
-        # Create the cache using Google Gemini context caching
-        cache = genai.caches.create(
-            model='gemini-1.5-pro-001',
-            display_name='document-metadata-cache',
-            system_instruction=cached_content,
-            ttl_seconds=3600,  # 1 hour TTL
+        # Build a dedicated client – required for the caches API
+        client = genai.Client()
+
+        # Create the cache using Google Gemini explicit context caching
+        cache = client.caches.create(
+            model='gemini-2.0-flash-001',
+            config=genai.types.CreateCachedContentConfig(
+                system_instruction=cached_content,
+                display_name='document-metadata-cache',
+                ttl_seconds=3600,  # 1-hour TTL
+            ),
         )
         
         # Store cache info globally
@@ -277,7 +282,7 @@ def get_cached_model(metadata):
         if cache:
             # Create model that uses the cached context
             model = genai.GenerativeModel(
-                model_name='gemini-1.5-pro-001',
+                model_name='gemini-2.0-flash-001',
                 cached_content=cache
             )
             logger.info("Created model with cached metadata context")
@@ -334,6 +339,11 @@ def semantic_document_selection(query, metadata, conversation_history=None, meta
     Now supports multi-company queries by extracting companies from the query
     and running separate searches for each company.
     
+    Operators can set the environment variable ``FORCE_LLM_FALLBACK`` to
+    ``true`` (case-insensitive) to bypass the embedding-based branch and jump
+    straight to the LLM fallback.  This is handy for load-testing the cache
+    mechanism.
+    
     Args:
         query: User query
         metadata: S3 metadata (used for fallback)
@@ -343,6 +353,13 @@ def semantic_document_selection(query, metadata, conversation_history=None, meta
     Returns:
         Dictionary with companies_mentioned and documents_to_load
     """
+    # ------------------------------------------------------------------
+    # Optional override: skip embedding search entirely (test LLM fallback)
+    # ------------------------------------------------------------------
+    if os.getenv("FORCE_LLM_FALLBACK", "false").lower() == "true":
+        logger.info("FORCE_LLM_FALLBACK is set – bypassing embedding-based selection")
+        return semantic_document_selection_llm_fallback(query, metadata, conversation_history)
+
     # Try embedding-based approach first if meta_collection is available
     if meta_collection is not None:
         try:
