@@ -1,35 +1,61 @@
-# Python bytecode
-__pycache__/
-*.py[cod]
-*$py.class
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache
+.coverage
 
-# Environment
-.env
-.venv
-env/
+# Virtual environments
 venv/
+env/
 ENV/
 
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# Local development settings
-.idea/
+# IDE
 .vscode/
-
-# Logs
-*.log
-
-# System files
-.DS_Store
-Thumbs.db
-
-# Test files
-test/
-tests/
+.idea/
+*.swp
+*.swo
 
 # Git
 .git/
 .gitignore
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Documentation (excluding README files we want to keep)
+*.md
+!README*.md
+
+# Logs
+*.log
+logs/
+
+# Testing
+test_*.py
+*_test.py
+.pytest_cache/
+
+# Temporary files
+tmp/
+temp/
+.tmp
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Keep these important files for the fast_chat_v2 endpoint
+!financial_data.csv
+!metadata_for_fast_chat_v2.json
+!companies.json
