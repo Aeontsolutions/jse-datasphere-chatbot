@@ -20,14 +20,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements file
 COPY requirements.txt .
 
-# Copy companies.json
-COPY ./companies.json ./companies.json
-
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
+
+# Ensure financial data files are present (these should be copied with the above COPY . . but being explicit)
+# The financial_data.csv and metadata_for_fast_chat_v2.json files should be in the container
+RUN if [ ! -f "financial_data.csv" ]; then echo "Warning: financial_data.csv not found - fast_chat_v2 endpoint may not work"; fi
+RUN if [ ! -f "metadata_for_fast_chat_v2.json" ]; then echo "Warning: metadata_for_fast_chat_v2.json not found"; fi
 
 # Expose port
 EXPOSE 8000

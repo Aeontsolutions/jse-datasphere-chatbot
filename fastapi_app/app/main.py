@@ -9,13 +9,20 @@ import uuid
 from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
 
+# Ensure pandas is available for financial data processing
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
 from app.models import (
     ChatRequest, ChatResponse, 
     ChromaAddRequest, ChromaAddResponse, 
     ChromaQueryRequest, ChromaQueryResponse,
     ChromaMetaUpdateRequest, ChromaMetaUpdateResponse,
     ChromaMetaQueryRequest, ChromaMetaQueryResponse,
-    StreamingChatRequest
+    StreamingChatRequest,
+    FinancialDataRequest, FinancialDataResponse
 )
 from app.utils import (
     init_s3_client, 
@@ -35,6 +42,7 @@ from app.chroma_utils import (
     qa_bot,
 )
 from app.streaming_chat import process_streaming_chat
+from app.financial_utils import FinancialDataManager
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -94,6 +102,40 @@ async def lifespan(app: FastAPI):
             )
         except Exception as chroma_err:
             logger.error(f"Failed to initialise ChromaDB: {chroma_err}")
+        
+        # -----------------------
+        # Initialize Financial Data Manager
+        # -----------------------
+        try:
+            # Try different possible paths for the financial data
+            possible_paths = [
+                "financial_data.csv",  # If running from fastapi_app directory
+                "../financial_data.csv",  # If running from project root
+                "fastapi_app/financial_data.csv"  # If running from parent directory
+            ]
+            
+            financial_manager = None
+            for csv_path in possible_paths:
+                try:
+                    temp_manager = FinancialDataManager(csv_path=csv_path)
+                    if temp_manager.load_data():
+                        financial_manager = temp_manager
+                        logger.info(f"Financial data loaded from: {csv_path}")
+                        break
+                except Exception as e:
+                    logger.debug(f"Could not load from {csv_path}: {e}")
+            
+            if financial_manager:
+                app.state.financial_manager = financial_manager
+                logger.info("Financial data manager initialized successfully")
+            else:
+                app.state.financial_manager = None
+                logger.warning("Financial data not available - fast_chat_v2 endpoint will be limited")
+                
+        except Exception as financial_err:
+            logger.error(f"Failed to initialize financial data manager: {financial_err}")
+            app.state.financial_manager = None
+        
         yield
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
@@ -153,6 +195,10 @@ def get_chroma_collection():
 def get_meta_collection():
     return app.state.meta_collection
 
+# Dependency to get financial data manager
+def get_financial_manager():
+    return getattr(app.state, 'financial_manager', None)
+
 @app.get("/")
 async def root():
     """Root endpoint to check if API is running"""
@@ -165,10 +211,22 @@ async def health_check():
     s3_status = "available" if hasattr(app.state, "s3_client") else "unavailable"
     metadata_status = "available" if hasattr(app.state, "metadata") and app.state.metadata else "unavailable"
     
+    # Check financial data manager status
+    financial_status = "unavailable"
+    financial_records = 0
+    if hasattr(app.state, "financial_manager") and app.state.financial_manager:
+        financial_status = "available"
+        if app.state.financial_manager.df is not None:
+            financial_records = len(app.state.financial_manager.df)
+    
     return {
         "status": "healthy",
         "s3_client": s3_status,
-        "metadata": metadata_status
+        "metadata": metadata_status,
+        "financial_data": {
+            "status": financial_status,
+            "records": financial_records
+        }
     }
 
 @app.post("/chat", response_model=ChatResponse)
@@ -610,6 +668,147 @@ async def fast_chat_stream(
     except Exception as e:
         logger.error(f"Error in fast_chat stream endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error starting fast chat stream: {str(e)}")
+
+# ---------------------------------------------------------------------------
+# Financial Data Query Endpoint (V2)
+# ---------------------------------------------------------------------------
+
+@app.post("/fast_chat_v2", response_model=FinancialDataResponse)
+async def fast_chat_v2(
+    request: FinancialDataRequest,
+    financial_manager: Any = Depends(get_financial_manager),
+):
+    """
+    Natural language financial data query endpoint
+    
+    This endpoint allows users to query financial data using natural language.
+    It processes queries like:
+    - "Show me MDS revenue for 2024"
+    - "Compare JBG and CPJ profit margins"
+    - "What about 2022?" (follow-up questions)
+    
+    The endpoint uses AI to parse natural language queries into structured filters,
+    queries the financial database, and returns formatted responses with data insights.
+    """
+    logger.info(f"/fast_chat_v2 called. query='{request.query[:200]}', memory_enabled={request.memory_enabled}")
+    
+    try:
+        # Check if financial manager is available
+        if not financial_manager:
+            raise HTTPException(
+                status_code=503, 
+                detail="Financial data service is not available. Please ensure financial_data.csv exists."
+            )
+        
+        # Maintain conversation state for follow-up queries
+        last_query_data = getattr(request, '_last_query_data', None)
+        
+        # Parse the user query using AI
+        filters = financial_manager.parse_user_query(
+            request.query, 
+            request.conversation_history,
+            last_query_data
+        )
+        
+        logger.info(f"Parsed filters: {filters}")
+        
+        # Validate data availability
+        availability = financial_manager.validate_data_availability(filters)
+        warnings = availability.get('warnings', [])
+        suggestions = availability.get('suggestions', [])
+        
+        # Query the data
+        results_df = financial_manager.query_data(filters)
+        
+        # Generate AI response
+        ai_response = financial_manager.format_response(
+            results_df,
+            request.query,
+            filters.interpretation,
+            filters.is_follow_up,
+            request.conversation_history
+        )
+        
+        # Convert data to structured records for response
+        data_preview = None
+        if not results_df.empty:
+            data_preview = financial_manager.convert_df_to_records(results_df)
+        
+        # Update conversation history if memory is enabled
+        updated_conversation_history = None
+        if request.memory_enabled:
+            if request.conversation_history:
+                updated_conversation_history = request.conversation_history.copy()
+            else:
+                updated_conversation_history = []
+            
+            # Add user query and AI response
+            updated_conversation_history.append({"role": "user", "content": request.query})
+            updated_conversation_history.append({"role": "assistant", "content": ai_response})
+            
+            # Keep conversation history to reasonable length
+            if len(updated_conversation_history) > 20:
+                updated_conversation_history = updated_conversation_history[-20:]
+        
+        logger.info(f"/fast_chat_v2 completed. data_found={not results_df.empty}, record_count={len(results_df)}")
+        
+        return FinancialDataResponse(
+            response=ai_response,
+            data_found=not results_df.empty,
+            record_count=len(results_df),
+            filters_used=filters,
+            data_preview=data_preview,
+            conversation_history=updated_conversation_history,
+            warnings=warnings if warnings else None,
+            suggestions=suggestions if suggestions else None
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in fast_chat_v2 endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing financial data query: {str(e)}")
+
+@app.get("/financial/metadata")
+async def get_financial_metadata(
+    financial_manager: Any = Depends(get_financial_manager),
+):
+    """Get financial data metadata including available companies, symbols, years, and metrics"""
+    try:
+        if not financial_manager:
+            raise HTTPException(
+                status_code=503, 
+                detail="Financial data service is not available."
+            )
+        
+        if not financial_manager.metadata:
+            raise HTTPException(
+                status_code=404,
+                detail="Financial metadata not available."
+            )
+        
+        # Return the metadata but limit large lists for better API response size
+        metadata = financial_manager.metadata.copy()
+        
+        # If there are too many items, provide sample + count
+        for key in ['companies', 'symbols', 'standard_items']:
+            if key in metadata and len(metadata[key]) > 50:
+                sample = metadata[key][:50]
+                metadata[key] = {
+                    "sample": sample,
+                    "total_count": len(metadata[key]),
+                    "note": f"Showing first 50 of {len(metadata[key])} items"
+                }
+        
+        return {
+            "status": "success",
+            "metadata": metadata
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving financial metadata: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving financial metadata: {str(e)}")
 
 @app.get("/cache/status")
 async def get_cache_status_endpoint():

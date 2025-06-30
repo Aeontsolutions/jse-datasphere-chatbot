@@ -150,3 +150,67 @@ class ChromaMetaQueryResponse(BaseModel):
         default=None,
         description="Metadata associated with the retrieved documents",
     )
+
+class FinancialDataRequest(BaseModel):
+    """
+    Request model for financial data query endpoint
+    """
+    query: str = Field(..., description="Natural language query about financial data")
+    conversation_history: Optional[List[Dict[str, str]]] = Field(
+        default=None, 
+        description="Previous conversation history as a list of role-content pairs"
+    )
+    memory_enabled: bool = Field(
+        default=True, 
+        description="Whether to use conversation memory"
+    )
+
+class FinancialDataFilters(BaseModel):
+    """
+    Parsed filters from natural language query
+    """
+    companies: List[str] = Field(default=[], description="Company names to filter by")
+    symbols: List[str] = Field(default=[], description="Stock symbols to filter by")
+    years: List[str] = Field(default=[], description="Years to filter by")
+    standard_items: List[str] = Field(default=[], description="Financial metrics to filter by")
+    interpretation: str = Field(default="", description="Human-readable interpretation of the query")
+    data_availability_note: str = Field(default="", description="Notes about data availability")
+    is_follow_up: bool = Field(default=False, description="Whether this is a follow-up query")
+    context_used: str = Field(default="", description="Context used from previous queries")
+
+class FinancialDataRecord(BaseModel):
+    """
+    Single financial data record
+    """
+    company: str = Field(..., description="Company name")
+    symbol: str = Field(..., description="Stock symbol")
+    year: str = Field(..., description="Year")
+    standard_item: str = Field(..., description="Financial metric name")
+    item_value: float = Field(..., description="Financial metric value")
+    unit_multiplier: int = Field(default=1, description="Unit multiplier (1, 1M, 1B)")
+    formatted_value: str = Field(..., description="Human-readable formatted value")
+
+class FinancialDataResponse(BaseModel):
+    """
+    Response model for financial data query endpoint
+    """
+    response: str = Field(..., description="AI-generated natural language response")
+    data_found: bool = Field(..., description="Whether any data was found")
+    record_count: int = Field(..., description="Number of records found")
+    filters_used: FinancialDataFilters = Field(..., description="Filters that were applied")
+    data_preview: Optional[List[FinancialDataRecord]] = Field(
+        default=None, 
+        description="Preview of the first few data records"
+    )
+    conversation_history: Optional[List[Dict[str, str]]] = Field(
+        default=None, 
+        description="Updated conversation history"
+    )
+    warnings: Optional[List[str]] = Field(
+        default=None,
+        description="Any warnings about data availability"
+    )
+    suggestions: Optional[List[str]] = Field(
+        default=None,
+        description="Suggestions for alternative queries"
+    )
