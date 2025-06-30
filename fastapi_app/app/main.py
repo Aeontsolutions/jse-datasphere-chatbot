@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import os
 import json
 import logging
@@ -13,7 +14,8 @@ from app.models import (
     ChromaAddRequest, ChromaAddResponse, 
     ChromaQueryRequest, ChromaQueryResponse,
     ChromaMetaUpdateRequest, ChromaMetaUpdateResponse,
-    ChromaMetaQueryRequest, ChromaMetaQueryResponse
+    ChromaMetaQueryRequest, ChromaMetaQueryResponse,
+    StreamingChatRequest
 )
 from app.utils import (
     init_s3_client, 
@@ -32,6 +34,7 @@ from app.chroma_utils import (
     query_collection as chroma_query_collection,
     qa_bot,
 )
+from app.streaming_chat import process_streaming_chat
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -251,6 +254,51 @@ async def chat(
     except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
+
+@app.post("/chat/stream")
+async def chat_stream(
+    request: StreamingChatRequest,
+    s3_client: Any = Depends(get_s3_client),
+    metadata: Dict = Depends(get_metadata)
+):
+    """
+    Stream chat responses with real-time progress updates using Server-Sent Events
+    
+    This endpoint provides the same functionality as /chat but streams progress updates
+    to the client, allowing the frontend to show real-time status messages like:
+    - "Loading documents..."
+    - "Analyzing query..."
+    - "Generating response..."
+    
+    The stream will emit 'progress' events with status updates and a final 'result' 
+    event with the complete response.
+    """
+    logger.info(
+        f"/chat/stream called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
+    )
+    
+    try:
+        # Start the streaming chat process
+        tracker = await process_streaming_chat(
+            request=request,
+            s3_client=s3_client,
+            metadata=metadata,
+            use_fast_mode=False
+        )
+        
+        # Return streaming response
+        return StreamingResponse(
+            tracker.stream_updates(),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream",
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in chat stream endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error starting chat stream: {str(e)}")
 
 @app.post("/chroma/update", response_model=ChromaAddResponse)
 async def chroma_update(
@@ -512,6 +560,56 @@ async def fast_chat(
     except Exception as e:
         logger.error(f"Error in fast_chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
+
+@app.post("/fast_chat/stream")
+async def fast_chat_stream(
+    request: StreamingChatRequest,
+    s3_client: Any = Depends(get_s3_client),
+    metadata: Dict = Depends(get_metadata),
+    collection: Any = Depends(get_chroma_collection),
+    meta_collection: Any = Depends(get_meta_collection),
+):
+    """
+    Stream fast chat responses with real-time progress updates using Server-Sent Events
+    
+    This endpoint provides the same functionality as /fast_chat but streams progress updates
+    to the client. It uses vector database retrieval for faster responses and provides
+    real-time updates on:
+    - Document selection process
+    - Vector database search
+    - AI response generation
+    
+    The stream will emit 'progress' events with status updates and a final 'result' 
+    event with the complete response.
+    """
+    logger.info(
+        f"/fast_chat/stream called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
+    )
+    
+    try:
+        # Start the streaming fast chat process
+        tracker = await process_streaming_chat(
+            request=request,
+            s3_client=s3_client,
+            metadata=metadata,
+            collection=collection,
+            meta_collection=meta_collection,
+            use_fast_mode=True
+        )
+        
+        # Return streaming response
+        return StreamingResponse(
+            tracker.stream_updates(),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream",
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in fast_chat stream endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error starting fast chat stream: {str(e)}")
 
 @app.get("/cache/status")
 async def get_cache_status_endpoint():

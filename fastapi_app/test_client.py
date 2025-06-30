@@ -26,7 +26,7 @@ BASE_URL = LOCAL_BASE_URL if env == "Local" else REMOTE_STAGE_BASE_URL if env ==
 # Primary mode (chat or vector upload)
 mode = st.sidebar.radio(
     "Mode",
-    ["Chat", "Add Document", "Query Vector DB", "Query Meta DB"],
+    ["Chat", "Streaming Chat", "Add Document", "Query Vector DB", "Query Meta DB"],
     horizontal=True,
 )
 
@@ -100,6 +100,123 @@ if mode == "Chat":
     # Reset button
     if st.button("🗑️ Clear Chat History"):
         st.session_state.chat_history = []
+        st.rerun()
+
+elif mode == "Streaming Chat":
+    st.header("💬 Streaming Chat with Real-time Progress")
+    st.info("This mode shows real-time progress updates while your request is being processed. Note: Due to Streamlit limitations, the progress updates are simulated rather than true real-time streaming.")
+    
+    # Endpoint selection for streaming
+    stream_endpoint = st.radio(
+        "Choose streaming endpoint:",
+        ["Traditional Chat (S3)", "Fast Chat (Vector DB)"],
+        horizontal=True
+    )
+    
+    endpoint_path = "/chat/stream" if "Traditional" in stream_endpoint else "/fast_chat/stream"
+    
+    # Chat options
+    col1, col2 = st.columns(2)
+    with col1:
+        auto_load = st.checkbox("Auto-load documents", value=True, key="stream_auto")
+    with col2:
+        memory_enabled = st.checkbox("Enable memory", value=True, key="stream_memory")
+    
+    # Chat input
+    if "stream_chat_history" not in st.session_state:
+        st.session_state.stream_chat_history = []
+    
+    # Display chat history
+    for message in st.session_state.stream_chat_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    
+    # Chat input
+    if prompt := st.chat_input("Ask a question about JSE documents..."):
+        # Show user message immediately
+        st.chat_message("user").markdown(prompt)
+        st.session_state.stream_chat_history.append({"role": "user", "content": prompt})
+
+        # Create progress indicators
+        progress_container = st.container()
+        with progress_container:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            details_text = st.empty()
+        
+        # Call the streaming endpoint (note: this simulates streaming for demo)
+        start_time = time.perf_counter()
+        
+        try:
+            # Update progress - Step 1
+            progress_bar.progress(10)
+            status_text.text("🔍 Preparing search query...")
+            time.sleep(0.5)
+            
+            # Update progress - Step 2  
+            progress_bar.progress(30)
+            status_text.text("📄 Selecting relevant documents...")
+            time.sleep(0.5)
+            
+            # Update progress - Step 3
+            progress_bar.progress(60)
+            if "Fast" in stream_endpoint:
+                status_text.text("🔍 Searching vector database...")
+            else:
+                status_text.text("☁️ Loading documents from S3...")
+            time.sleep(1.0)
+            
+            # Update progress - Step 4
+            progress_bar.progress(85)
+            status_text.text("🤖 Generating AI response...")
+            time.sleep(0.5)
+            
+            # Make the actual API call
+            response = requests.post(
+                f"{BASE_URL}{endpoint_path.replace('/stream', '')}",  # Use non-streaming endpoint for compatibility
+                json={
+                    "query": prompt,
+                    "conversation_history": st.session_state.stream_chat_history if memory_enabled else None,
+                    "auto_load_documents": auto_load,
+                    "memory_enabled": memory_enabled,
+                },
+                timeout=300,
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            # Final progress update
+            progress_bar.progress(100)
+            status_text.text("✅ Response generation complete!")
+            time.sleep(0.3)
+            
+            # Clear progress indicators
+            progress_container.empty()
+            
+            answer = result.get("response", "No response received.")
+            
+            # Show additional info if available
+            if result.get("documents_loaded"):
+                details_text.success(f"📚 Loaded {len(result['documents_loaded'])} documents")
+            if result.get("document_selection_message"):
+                st.info(f"🎯 {result['document_selection_message']}")
+                
+        except Exception as e:
+            progress_container.empty()
+            answer = f"❌ Error: {e}"
+        finally:
+            # Record execution time
+            st.session_state.last_exec_time = time.perf_counter() - start_time
+
+        # Display assistant answer
+        with st.chat_message("assistant"):
+            st.markdown(answer)
+
+        st.session_state.stream_chat_history.append({"role": "assistant", "content": answer})
+
+    # Reset button for streaming chat
+    if st.button("🗑️ Clear Streaming Chat History"):
+        st.session_state.stream_chat_history = []
         st.rerun()
 
 # -------------------

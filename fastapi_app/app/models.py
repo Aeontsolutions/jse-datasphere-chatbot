@@ -19,6 +19,34 @@ class ChatRequest(BaseModel):
         description="Whether to use conversation memory"
     )
 
+class ProgressUpdate(BaseModel):
+    """
+    Model for streaming progress updates
+    """
+    step: str = Field(..., description="Current processing step")
+    message: str = Field(..., description="Human-readable status message")
+    progress: float = Field(..., description="Progress percentage (0-100)")
+    timestamp: Optional[str] = Field(default=None, description="ISO timestamp of the update")
+    details: Optional[Dict[str, Any]] = Field(default=None, description="Additional details about the step")
+
+class StreamingChatRequest(BaseModel):
+    """
+    Request model for streaming chat endpoint
+    """
+    query: str = Field(..., description="User query/question")
+    conversation_history: Optional[List[Dict[str, str]]] = Field(
+        default=None, 
+        description="Previous conversation history as a list of role-content pairs"
+    )
+    auto_load_documents: bool = Field(
+        default=True, 
+        description="Whether to automatically load relevant documents"
+    )
+    memory_enabled: bool = Field(
+        default=True, 
+        description="Whether to use conversation memory"
+    )
+
 class DocumentInfo(BaseModel):
     """
     Information about a document selected by the LLM
