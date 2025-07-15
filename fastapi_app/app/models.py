@@ -186,9 +186,9 @@ class FinancialDataRecord(BaseModel):
     symbol: str = Field(..., description="Stock symbol")
     year: str = Field(..., description="Year")
     standard_item: str = Field(..., description="Financial metric name")
-    item_value: float = Field(..., description="Financial metric value")
-    unit_multiplier: int = Field(default=1, description="Unit multiplier (1, 1M, 1B)")
-    formatted_value: str = Field(..., description="Human-readable formatted value")
+    item: Optional[float] = Field(None, description="Financial metric value, or null if missing")
+    unit_multiplier: Optional[int] = Field(1, description="Unit multiplier (1, 1M, 1B), or null if missing")
+    formatted_value: str = Field(..., description="Human-readable formatted value, 'N/A' if missing")
 
 class FinancialDataResponse(BaseModel):
     """

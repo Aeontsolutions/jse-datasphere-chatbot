@@ -9,12 +9,6 @@ import uuid
 from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
 
-# Ensure pandas is available for financial data processing
-try:
-    import pandas as pd
-except ImportError:
-    pd = None
-
 from app.models import (
     ChatRequest, ChatResponse, 
     ChromaAddRequest, ChromaAddResponse, 
@@ -22,7 +16,7 @@ from app.models import (
     ChromaMetaUpdateRequest, ChromaMetaUpdateResponse,
     ChromaMetaQueryRequest, ChromaMetaQueryResponse,
     StreamingChatRequest,
-    FinancialDataRequest, FinancialDataResponse
+    FinancialDataRequest, FinancialDataResponse, FinancialDataFilters
 )
 from app.utils import (
     init_s3_client, 
@@ -60,17 +54,14 @@ async def lifespan(app: FastAPI):
     try:
         # Initialize S3 client
         app.state.s3_client = init_s3_client()
-        
         # Initialize Vertex AI
         init_vertex_ai()
-        
         # Load metadata from S3
         app.state.metadata = load_metadata_from_s3(app.state.s3_client)
         if app.state.metadata:
             logger.info(f"Metadata loaded: {len(app.state.metadata)} companies found")
         else:
             logger.warning("Failed to load metadata from S3")
-
         # -----------------------
         # Initialise ChromaDB
         # -----------------------
@@ -82,12 +73,10 @@ async def lifespan(app: FastAPI):
             except Exception:
                 collection_size = "unknown"
                 logger.warning("Could not retrieve Chroma collection size during startup.")
-
             logger.info(
                 "ChromaDB initialised and collection ready | collection_size=%s",
                 collection_size,
             )
-            
             # Initialize the metadata collection for semantic document selection
             app.state.meta_collection = get_or_create_collection(app.state.chroma_client, "doc_meta")
             try:
@@ -95,47 +84,21 @@ async def lifespan(app: FastAPI):
             except Exception:
                 meta_collection_size = "unknown"
                 logger.warning("Could not retrieve metadata collection size during startup.")
-            
             logger.info(
                 "Metadata collection initialised | collection_size=%s",
                 meta_collection_size,
             )
         except Exception as chroma_err:
             logger.error(f"Failed to initialise ChromaDB: {chroma_err}")
-        
         # -----------------------
-        # Initialize Financial Data Manager
+        # Initialize Financial Data Manager (BigQuery)
         # -----------------------
         try:
-            # Try different possible paths for the financial data
-            possible_paths = [
-                "financial_data.csv",  # If running from fastapi_app directory
-                "../financial_data.csv",  # If running from project root
-                "fastapi_app/financial_data.csv"  # If running from parent directory
-            ]
-            
-            financial_manager = None
-            for csv_path in possible_paths:
-                try:
-                    temp_manager = FinancialDataManager(csv_path=csv_path)
-                    if temp_manager.load_data():
-                        financial_manager = temp_manager
-                        logger.info(f"Financial data loaded from: {csv_path}")
-                        break
-                except Exception as e:
-                    logger.debug(f"Could not load from {csv_path}: {e}")
-            
-            if financial_manager:
-                app.state.financial_manager = financial_manager
-                logger.info("Financial data manager initialized successfully")
-            else:
-                app.state.financial_manager = None
-                logger.warning("Financial data not available - fast_chat_v2 endpoint will be limited")
-                
+            app.state.financial_manager = FinancialDataManager()
+            logger.info("Financial data manager (BigQuery) initialized successfully")
         except Exception as financial_err:
             logger.error(f"Failed to initialize financial data manager: {financial_err}")
             app.state.financial_manager = None
-        
         yield
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
@@ -145,7 +108,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Jacie",
     description="API for chatting with Jacie, the JSE DataSphere Chatbot.",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan
 )
 
@@ -206,28 +169,31 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    # Check if S3 client and metadata are available
-    s3_status = "available" if hasattr(app.state, "s3_client") else "unavailable"
-    metadata_status = "available" if hasattr(app.state, "metadata") and app.state.metadata else "unavailable"
-    
-    # Check financial data manager status
-    financial_status = "unavailable"
-    financial_records = 0
-    if hasattr(app.state, "financial_manager") and app.state.financial_manager:
-        financial_status = "available"
-        if app.state.financial_manager.df is not None:
-            financial_records = len(app.state.financial_manager.df)
-    
-    return {
-        "status": "healthy",
-        "s3_client": s3_status,
-        "metadata": metadata_status,
-        "financial_data": {
-            "status": financial_status,
-            "records": financial_records
+    try:
+        s3_status = "available" if hasattr(app.state, "s3_client") else "unavailable"
+        metadata_status = "available" if hasattr(app.state, "metadata") and app.state.metadata else "unavailable"
+        
+        financial_status = "unavailable"
+        financial_records = 0
+        if hasattr(app.state, "financial_manager") and app.state.financial_manager:
+            financial_status = "available"
+            if app.state.financial_manager.df is not None:
+                financial_records = len(app.state.financial_manager.df)
+
+        return {
+            "status": "healthy",
+            "s3_client": s3_status,
+            "metadata": metadata_status,
+            "financial_data": {
+                "status": financial_status,
+                "records": financial_records
+            }
         }
-    }
+    except Exception as e:
+        return {
+            "status": "healthy",
+            "error": f"Health check degraded: {str(e)}"
+        }
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
@@ -691,78 +657,56 @@ async def fast_chat_v2(
     queries the financial database, and returns formatted responses with data insights.
     """
     logger.info(f"/fast_chat_v2 called. query='{request.query[:200]}', memory_enabled={request.memory_enabled}")
-    
     try:
-        # Check if financial manager is available
         if not financial_manager:
             raise HTTPException(
-                status_code=503, 
-                detail="Financial data service is not available. Please ensure financial_data.csv exists."
+                status_code=503,
+                detail="Financial data service is not available. Please ensure BigQuery is configured."
             )
-        
-        # Maintain conversation state for follow-up queries
         last_query_data = getattr(request, '_last_query_data', None)
-        
-        # Parse the user query using AI
         filters = financial_manager.parse_user_query(
-            request.query, 
+            request.query,
             request.conversation_history,
             last_query_data
         )
-        
         logger.info(f"Parsed filters: {filters}")
-        
-        # Validate data availability
+        logger.info(f"filters type: {type(filters)}, filters: {filters}")
         availability = financial_manager.validate_data_availability(filters)
+        # logger.info(f"availability type: {type(availability)}, availability: {availability}")
         warnings = availability.get('warnings', [])
         suggestions = availability.get('suggestions', [])
-        
-        # Query the data
-        results_df = financial_manager.query_data(filters)
-        
-        # Generate AI response
+        results = financial_manager.query_data(filters)
+        logger.info(f"results type: {type(results)}, results: {results}")
         ai_response = financial_manager.format_response(
-            results_df,
+            results,
             request.query,
             filters.interpretation,
             filters.is_follow_up,
             request.conversation_history
         )
-        
-        # Convert data to structured records for response
-        data_preview = None
-        if not results_df.empty:
-            data_preview = financial_manager.convert_df_to_records(results_df)
-        
-        # Update conversation history if memory is enabled
+        # logger.info(f"ai_response type: {type(ai_response)}, ai_response: {ai_response}")
+        data_preview = results if results else None
         updated_conversation_history = None
         if request.memory_enabled:
             if request.conversation_history:
                 updated_conversation_history = request.conversation_history.copy()
             else:
                 updated_conversation_history = []
-            
-            # Add user query and AI response
             updated_conversation_history.append({"role": "user", "content": request.query})
             updated_conversation_history.append({"role": "assistant", "content": ai_response})
-            
-            # Keep conversation history to reasonable length
             if len(updated_conversation_history) > 20:
                 updated_conversation_history = updated_conversation_history[-20:]
-        
-        logger.info(f"/fast_chat_v2 completed. data_found={not results_df.empty}, record_count={len(results_df)}")
-        
+        logger.info(f"/fast_chat_v2 completed. data_found={bool(results)}, record_count={len(results) if results else 0}")
         return FinancialDataResponse(
             response=ai_response,
-            data_found=not results_df.empty,
-            record_count=len(results_df),
+            data_found=bool(results),
+            record_count=len(results) if results else 0,
             filters_used=filters,
             data_preview=data_preview,
             conversation_history=updated_conversation_history,
             warnings=warnings if warnings else None,
             suggestions=suggestions if suggestions else None
         )
-    
     except HTTPException:
         raise
     except Exception as e:

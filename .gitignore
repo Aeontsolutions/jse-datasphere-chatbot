@@ -65,3 +65,9 @@ summarizer.ipynb
 fastapi_app/.env
 fastapi_app/copilot/*
 fastapi_app/fastapi_app/*
+
+# Jupyter notebooks
+*.ipynb
+
+#AWS
+ecs-deployer_accessKeys.csv

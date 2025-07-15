@@ -1,178 +1,191 @@
-import pandas as pd
-import json
 import os
+import json
 import logging
 import re
 from typing import Dict, List, Any, Optional, Tuple
-import google.generativeai as genai
+from google.cloud import bigquery
+from google.oauth2 import service_account
 from app.models import FinancialDataFilters, FinancialDataRecord
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
+def get_row_attr(row, attr):
+    # Try exact match first
+    if hasattr(row, attr):
+        return getattr(row, attr)
+    # Fallback: try case-insensitive match
+    for candidate in dir(row):
+        if candidate.lower() == attr.lower():
+            return getattr(row, candidate)
+    raise AttributeError(f"Row has no attribute '{attr}' (case-insensitive search failed)")
+
+def safe_float(val):
+    try:
+        if val is None or val == '' or (isinstance(val, str) and val.strip().lower() in ['nan', 'null', 'none']):
+            return None
+        return float(val)
+    except Exception:
+        return None
+
 class FinancialDataManager:
     """
-    Manager class for handling financial data queries and processing
+    Manager class for handling financial data queries and processing (BigQuery version)
     """
-    
-    def __init__(self, csv_path: str = "financial_data.csv", metadata_path: str = "metadata.json"):
-        self.csv_path = csv_path
-        self.metadata_path = metadata_path
-        self.df: Optional[pd.DataFrame] = None
+    def __init__(self):
+        # Load BigQuery config from environment
+        self.project_id = os.getenv("GCP_PROJECT_ID")
+        self.dataset = os.getenv("BIGQUERY_DATASET")
+        self.table = os.getenv("BIGQUERY_TABLE")
+        self.location = os.getenv("BIGQUERY_LOCATION", "US")
         self.metadata: Optional[Dict] = None
         self.model = None
         self._initialize_ai_model()
-    
+        try:
+            self._initialize_bigquery_client()
+        except Exception as e:
+            logger.error(f"Failed to initialize BigQuery client: {e}")
+            self.bq_client = None
+        self.load_metadata_from_bigquery()
+
+    def _initialize_bigquery_client(self):
+        credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        service_account_info = os.getenv("GCP_SERVICE_ACCOUNT_INFO")
+        if credentials_path and os.path.exists(credentials_path):
+            self.bq_client = bigquery.Client.from_service_account_json(credentials_path, project=self.project_id, location=self.location)
+            logger.info(f"BigQuery client initialized with service account file: {credentials_path}")
+        elif service_account_info:
+            info = json.loads(service_account_info)
+            credentials = service_account.Credentials.from_service_account_info(info)
+            self.bq_client = bigquery.Client(credentials=credentials, project=self.project_id, location=self.location)
+            logger.info("BigQuery client initialized with service account info from env var.")
+        else:
+            self.bq_client = bigquery.Client(project=self.project_id, location=self.location)
+            logger.info("BigQuery client initialized with default credentials.")
+
     def _initialize_ai_model(self):
         """Initialize the Gemini AI model"""
         try:
             # Use the same API key configuration as the main app
-            api_key = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY')
+            api_key = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY') or os.getenv('CHATBOT_API_KEY')
             if api_key:
                 logger.info(f"Found API key (length: {len(api_key)}), initializing Gemini AI model...")
                 genai.configure(api_key=api_key)
                 self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
                 logger.info("✅ Gemini AI model initialized successfully for financial data queries")
             else:
-                logger.warning("❌ GOOGLE_API_KEY/GEMINI_API_KEY not found, falling back to basic parsing")
+                logger.warning("❌ GOOGLE_API_KEY/GEMINI_API_KEY/CHATBOT_API_KEY not found, falling back to basic parsing")
                 # Log available environment variables for debugging
                 env_vars = [key for key in os.environ.keys() if 'API' in key or 'KEY' in key]
                 logger.info(f"Available API-related env vars: {env_vars}")
         except Exception as e:
             logger.error(f"❌ Failed to initialize Gemini AI model: {e}")
             self.model = None
-    
-    def load_data(self) -> bool:
-        """Load the CSV file and metadata"""
+
+    def load_metadata_from_bigquery(self):
+        """Load metadata (companies, symbols, years, standard_items, associations) from BigQuery."""
         try:
-            # Check if CSV file exists
-            if not os.path.exists(self.csv_path):
-                logger.warning(f"Financial data CSV not found at {self.csv_path}")
-                return False
-            
-            # Load CSV file
-            self.df = pd.read_csv(self.csv_path)
-            
-            # Clean up year column - convert to string for consistent handling
-            self.df['Year'] = self.df['Year'].astype(str)
-            
-            # Check if we have the expected columns
-            required_columns = ['Company', 'Symbol', 'Year', 'standard_item', 'item_value', 'unit_multiplier']
-            missing_columns = [col for col in required_columns if col not in self.df.columns]
-            if missing_columns:
-                logger.error(f"Missing required columns: {missing_columns}")
-                logger.info(f"Available columns: {list(self.df.columns)}")
-                return False
-            
-            logger.info(f"Loaded financial data: {len(self.df)} records")
-            logger.info(f"Available columns: {list(self.df.columns)}")
-            logger.info(f"Unique companies: {len(self.df['Company'].unique())}")
-            logger.info(f"Unique symbols: {len(self.df['Symbol'].unique())}")
-            logger.info(f"Year range: {self.df['Year'].min()} - {self.df['Year'].max()}")
-            logger.info(f"Unique metrics: {len(self.df['standard_item'].unique())}")
-            
-            # Load or create metadata
-            if os.path.exists(self.metadata_path):
-                with open(self.metadata_path, 'r') as f:
-                    self.metadata = json.load(f)
-                
-                # Check if metadata has all required associations
-                required_associations = [
-                    'company_year_to_items', 
-                    'symbol_year_to_items', 
-                    'year_to_items'
-                ]
-                
-                if 'associations' not in self.metadata or any(
-                    key not in self.metadata['associations'] 
-                    for key in required_associations
-                ):
-                    logger.info("Metadata is incomplete. Regenerating with full associations...")
-                    self.create_metadata()
-                else:
-                    logger.info("Loaded existing metadata")
-            else:
-                logger.info("Creating new metadata...")
-                self.create_metadata()
-                
-            return True
-        except Exception as e:
-            logger.error(f"Error loading financial data: {str(e)}")
-            return False
-    
-    def create_metadata(self):
-        """Create metadata from the dataframe"""
-        if self.df is None:
-            raise ValueError("DataFrame not loaded")
-        
-        try:
-            # Create company-symbol mapping
-            company_symbol_map = self.df.groupby('Company')['Symbol'].unique().apply(list).to_dict()
-            
-            # Create symbol-company mapping (reverse lookup)
-            symbol_company_map = {}
-            for company, symbols in company_symbol_map.items():
-                for symbol in symbols:
-                    if symbol not in symbol_company_map:
-                        symbol_company_map[symbol] = []
-                    symbol_company_map[symbol].append(company)
-            
-            # Create other mappings
-            company_years_map = self.df.groupby('Company')['Year'].unique().apply(sorted).apply(list).to_dict()
-            company_items_map = self.df.groupby('Company')['standard_item'].unique().apply(sorted).apply(list).to_dict()
-            year_companies_map = self.df.groupby('Year')['Company'].unique().apply(sorted).apply(list).to_dict()
-            item_companies_map = self.df.groupby('standard_item')['Company'].unique().apply(sorted).apply(list).to_dict()
-            
-            # Create company-year-items mapping
-            company_year_items_map = {}
-            for company in self.df['Company'].unique():
-                company_year_items_map[company] = {}
-                company_df = self.df[self.df['Company'] == company]
-                for year in company_df['Year'].unique():
-                    year_items = company_df[company_df['Year'] == year]['standard_item'].unique().tolist()
-                    company_year_items_map[company][year] = sorted(year_items)
-            
-            # Create year-item mapping
-            year_items_map = self.df.groupby('Year')['standard_item'].unique().apply(sorted).apply(list).to_dict()
-            
-            # Create symbol-year-items mapping
-            symbol_year_items_map = {}
-            for symbol in self.df['Symbol'].unique():
-                symbol_year_items_map[symbol] = {}
-                symbol_df = self.df[self.df['Symbol'] == symbol]
-                for year in symbol_df['Year'].unique():
-                    year_items = symbol_df[symbol_df['Year'] == year]['standard_item'].unique().tolist()
-                    symbol_year_items_map[symbol][year] = sorted(year_items)
-            
+            # Companies
+            companies_query = f"""
+                SELECT DISTINCT Company FROM `{self.project_id}.{self.dataset}.{self.table}`
+            """
+            companies = [get_row_attr(row, 'Company') for row in self.bq_client.query(companies_query).result()]
+            # Symbols
+            symbols_query = f"""
+                SELECT DISTINCT Symbol FROM `{self.project_id}.{self.dataset}.{self.table}`
+            """
+            symbols = [get_row_attr(row, 'Symbol') for row in self.bq_client.query(symbols_query).result()]
+            # Years
+            years_query = f"""
+                SELECT DISTINCT CAST(Year AS STRING) as Year FROM `{self.project_id}.{self.dataset}.{self.table}`
+            """
+            years = [get_row_attr(row, 'Year') for row in self.bq_client.query(years_query).result()]
+            # Standard Items
+            items_query = f"""
+                SELECT DISTINCT standard_item FROM `{self.project_id}.{self.dataset}.{self.table}`
+            """
+            standard_items = [get_row_attr(row, 'standard_item') for row in self.bq_client.query(items_query).result()]
+            # Associations
+            # company_to_symbol
+            c2s_query = f"""
+                SELECT Company, ARRAY_AGG(DISTINCT Symbol) as symbols FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company
+            """
+            company_to_symbol = {get_row_attr(row, 'Company'): get_row_attr(row, 'symbols') for row in self.bq_client.query(c2s_query).result()}
+            # symbol_to_company
+            s2c_query = f"""
+                SELECT Symbol, ARRAY_AGG(DISTINCT Company) as companies FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Symbol
+            """
+            symbol_to_company = {get_row_attr(row, 'Symbol'): get_row_attr(row, 'companies') for row in self.bq_client.query(s2c_query).result()}
+            # company_to_years
+            c2y_query = f"""
+                SELECT Company, ARRAY_AGG(DISTINCT CAST(Year AS STRING)) as years FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company
+            """
+            company_to_years = {get_row_attr(row, 'Company'): get_row_attr(row, 'years') for row in self.bq_client.query(c2y_query).result()}
+            # company_to_items
+            c2i_query = f"""
+                SELECT Company, ARRAY_AGG(DISTINCT standard_item) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company
+            """
+            company_to_items = {get_row_attr(row, 'Company'): get_row_attr(row, 'items') for row in self.bq_client.query(c2i_query).result()}
+            # year_to_companies
+            y2c_query = f"""
+                SELECT CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT Company) as companies FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Year
+            """
+            year_to_companies = {get_row_attr(row, 'Year'): get_row_attr(row, 'companies') for row in self.bq_client.query(y2c_query).result()}
+            # item_to_companies
+            i2c_query = f"""
+                SELECT standard_item, ARRAY_AGG(DISTINCT Company) as companies FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY standard_item
+            """
+            item_to_companies = {get_row_attr(row, 'standard_item'): get_row_attr(row, 'companies') for row in self.bq_client.query(i2c_query).result()}
+            # company_year_to_items
+            cy2i_query = f"""
+                SELECT Company, CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT standard_item) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company, Year
+            """
+            company_year_to_items = {}
+            for row in self.bq_client.query(cy2i_query).result():
+                company = get_row_attr(row, 'Company')
+                year = get_row_attr(row, 'Year')
+                items = get_row_attr(row, 'items')
+                company_year_to_items.setdefault(company, {})[year] = items
+            # symbol_year_to_items
+            sy2i_query = f"""
+                SELECT Symbol, CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT standard_item) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Symbol, Year
+            """
+            symbol_year_to_items = {}
+            for row in self.bq_client.query(sy2i_query).result():
+                symbol = get_row_attr(row, 'Symbol')
+                year = get_row_attr(row, 'Year')
+                items = get_row_attr(row, 'items')
+                symbol_year_to_items.setdefault(symbol, {})[year] = items
+            # year_to_items
+            y2i_query = f"""
+                SELECT CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT standard_item) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Year
+            """
+            year_to_items = {get_row_attr(row, 'Year'): get_row_attr(row, 'items') for row in self.bq_client.query(y2i_query).result()}
+            # Compose metadata
             self.metadata = {
-                "companies": sorted(self.df['Company'].unique().tolist()),
-                "symbols": sorted(self.df['Symbol'].unique().tolist()),
-                "years": sorted(self.df['Year'].unique().tolist()),
-                "standard_items": sorted(self.df['standard_item'].unique().tolist()),
+                "companies": sorted(companies),
+                "symbols": sorted(symbols),
+                "years": sorted(years),
+                "standard_items": sorted(standard_items),
                 "associations": {
-                    "company_to_symbol": company_symbol_map,
-                    "symbol_to_company": symbol_company_map,
-                    "company_to_years": company_years_map,
-                    "company_to_items": company_items_map,
-                    "year_to_companies": year_companies_map,
-                    "item_to_companies": item_companies_map,
-                    "company_year_to_items": company_year_items_map,
-                    "symbol_year_to_items": symbol_year_items_map,
-                    "year_to_items": year_items_map
+                    "company_to_symbol": company_to_symbol,
+                    "symbol_to_company": symbol_to_company,
+                    "company_to_years": company_to_years,
+                    "company_to_items": company_to_items,
+                    "year_to_companies": year_to_companies,
+                    "item_to_companies": item_to_companies,
+                    "company_year_to_items": company_year_to_items,
+                    "symbol_year_to_items": symbol_year_to_items,
+                    "year_to_items": year_to_items
                 },
-                "total_records": len(self.df),
-                "last_updated": pd.Timestamp.now().isoformat()
+                "total_records": None,  # Optionally count(*)
+                "last_updated": None
             }
-            
-            # Save metadata
-            with open(self.metadata_path, 'w') as f:
-                json.dump(self.metadata, f, indent=2)
-            
-            logger.info("Created and saved financial data metadata")
-            
+            logger.info("Loaded metadata from BigQuery.")
         except Exception as e:
-            logger.error(f"Error creating metadata: {str(e)}")
-            raise
-    
+            logger.error(f"Error loading metadata from BigQuery: {e}")
+            self.metadata = None
+
     def get_conversation_context(self, conversation_history: Optional[List[Dict[str, str]]]) -> str:
         """Get recent conversation context for better understanding of follow-up questions"""
         if not conversation_history:
@@ -201,54 +214,54 @@ class FinancialDataManager:
         if self.metadata and 'associations' in self.metadata:
             # Show symbol-company mappings
             symbol_mappings = []
-            for symbol, companies in self.metadata['associations']['symbol_to_company'].items():
+            symbol_to_company = self.metadata['associations'].get('symbol_to_company', {})
+            for symbol, companies in symbol_to_company.items():
                 symbol_mappings.append(f"{symbol}: {', '.join(companies)}")
-            
             associations_context = f"""
-Symbol-Company Mappings:
-{chr(10).join(symbol_mappings)}
-"""
+                Symbol-Company Mappings:
+                {chr(10).join(symbol_mappings)}
+                """
         
         prompt = f"""
-        You are a financial data query parser. Given a user query and metadata about available financial data,
-        extract the relevant filter parameters. Consider the conversation history for context.
-        
-        CONVERSATION HISTORY:
-        {conversation_context}
-        
-        Available metadata:
-        - Companies: {', '.join(self.metadata['companies'][:10])}... (and {len(self.metadata['companies'])-10} more)
-        - Symbols: {', '.join(self.metadata['symbols'])}
-        - Years: {', '.join(self.metadata['years'])}
-        - Standard Items: {', '.join(self.metadata['standard_items'])}
-        
-        {associations_context}
-        
-        Current User Query: "{query}"
-        
-        CRITICAL PARSING RULES:
-        1. If user mentions a trading symbol (like MDS, SOS, JBG, etc.), put it in the "symbols" array
-        2. If user mentions a full company name, put it in the "companies" array
-        3. Symbols are typically 2-5 uppercase letters
-        4. Empty list [] means "ALL" - return data for all items in that category
-        5. Match symbols case-insensitively (sos = SOS, mds = MDS)
-        6. CONTEXT AWARENESS: If the user asks follow-up questions like "what about 2022?" or "show me their revenue", 
-           refer to the conversation history to understand which companies/symbols/items they're referring to
-        7. For pronouns like "it", "them", "their", "this company" - refer to the most recent companies/symbols discussed
-        
-        Return a JSON object with this EXACT structure:
-        {{
-            "companies": [],
-            "symbols": [],
-            "years": [],
-            "standard_items": [],
-            "interpretation": "",
-            "data_availability_note": "",
-            "is_follow_up": true/false,
-            "context_used": ""
-        }}
-        
-        Return ONLY the JSON object, no markdown formatting, no code blocks, no additional text.
+            You are a financial data query parser. Given a user query and metadata about available financial data,
+            extract the relevant filter parameters. Consider the conversation history for context.
+            
+            CONVERSATION HISTORY:
+            {conversation_context}
+            
+            Available metadata:
+            - Companies: {', '.join(self.metadata['companies'][:10])}... (and {len(self.metadata['companies'])-10} more)
+            - Symbols: {', '.join(self.metadata['symbols'])}
+            - Years: {', '.join(self.metadata['years'])}
+            - Standard Items: {', '.join(self.metadata['standard_items'])}
+            
+            {associations_context}
+            
+            Current User Query: "{query}"
+            
+            CRITICAL PARSING RULES:
+            1. If user mentions a trading symbol (like MDS, SOS, JBG, etc.), put it in the "symbols" array
+            2. If user mentions a full company name, put it in the "companies" array
+            3. Symbols are typically 2-5 uppercase letters
+            4. Empty list [] means "ALL" - return data for all items in that category
+            5. Match symbols case-insensitively (sos = SOS, mds = MDS)
+            6. CONTEXT AWARENESS: If the user asks follow-up questions like "what about 2022?" or "show me their revenue", 
+            refer to the conversation history to understand which companies/symbols/items they're referring to
+            7. For pronouns like "it", "them", "their", "this company" - refer to the most recent companies/symbols discussed
+            
+            Return a JSON object with this EXACT structure:
+            {{
+                "companies": [],
+                "symbols": [],
+                "years": [],
+                "standard_items": [],
+                "interpretation": "",
+                "data_availability_note": "",
+                "is_follow_up": true/false,
+                "context_used": ""
+            }}
+            
+            Return ONLY the JSON object, no markdown formatting, no code blocks, no additional text.
         """
         
         try:
@@ -273,7 +286,35 @@ Symbol-Company Mappings:
             # Convert symbols to uppercase for consistency
             if result.get('symbols'):
                 result['symbols'] = [s.upper() for s in result['symbols']]
-            
+
+            # Ensure years are all strings
+            if result.get('years'):
+                result['years'] = [str(y) for y in result['years']]
+
+            # Normalize standard_items synonyms to canonical names
+            if result.get('standard_items'):
+                metric_synonyms = {
+                    'net profit': 'net_profit',
+                    'gross profit': 'gross_profit',
+                    'revenue': 'revenue',
+                    'eps': 'EPS',
+                    'profit': 'net_profit',
+                    'net profit margin': 'net_profit_margin',
+                    'gross profit margin': 'gross_profit_margin',
+                    'operating profit': 'operating_profit',
+                    'operating income': 'operating_profit',
+                    'return on equity': 'ROE',
+                    'return on asset': 'ROA',
+                    'return on assets': 'ROA',
+                    'current ratio': 'current_ratio',
+                    'debt to equity ratio': 'debt_to_equity_ratio',
+                    'efficiency ratio': 'efficiency_ratio',
+                }
+                result['standard_items'] = [
+                    metric_synonyms.get(item.lower(), item.replace(' ', '_'))
+                    for item in result['standard_items']
+                ]
+
             # If this is a follow-up and some filters are empty, try to fill from last query
             if result.get('is_follow_up') and last_query_data:
                 last_filters = last_query_data.get('filters', {})
@@ -286,6 +327,10 @@ Symbol-Company Mappings:
                 # Carry forward years if not specified
                 if not result.get('years') and last_filters.get('years'):
                     result['years'] = last_filters.get('years', [])
+                
+                # Carry forward standard_items if not specified
+                if not result.get('standard_items') and last_filters.get('standard_items'):
+                    result['standard_items'] = last_filters.get('standard_items', [])
                 
                 # If asking about different metrics, keep the same companies/years
                 if result.get('standard_items') and not result.get('companies') and not result.get('symbols'):
@@ -310,61 +355,73 @@ Symbol-Company Mappings:
             return self._fallback_parse_query(query, last_query_data)
     
     def _post_process_filters(self, result: Dict) -> Dict:
-        """Post-process filters to ensure consistency using associations"""
+        """Post-process filters to ensure consistency using associations and metadata"""
         if not self.metadata or 'associations' not in self.metadata:
             return result
-        
-        # If symbols are specified, add ALL associated companies
-        if result.get('symbols') and len(result['symbols']) > 0:
-            companies = set()
+        associations = self.metadata['associations']
+        # Normalize for case-insensitive matching
+        all_companies = set(self.metadata.get('companies', []))
+        all_symbols = set(self.metadata.get('symbols', []))
+        company_to_symbol = associations.get('company_to_symbol', {})
+        symbol_to_company = associations.get('symbol_to_company', {})
+
+        # --- Filter symbols: only keep valid ones ---
+        if 'symbols' in result and result['symbols']:
             valid_symbols = []
-            
             for symbol in result['symbols']:
-                if symbol in self.metadata['associations']['symbol_to_company']:
-                    companies.update(self.metadata['associations']['symbol_to_company'][symbol])
-                    valid_symbols.append(symbol)
-                else:
-                    logger.warning(f"Symbol '{symbol}' not found in available symbols")
-            
-            # Update symbols to only include valid ones
+                # Accept if exact match (case-insensitive)
+                for s in all_symbols:
+                    if symbol.upper() == s.upper():
+                        valid_symbols.append(s)
+                        break
             result['symbols'] = valid_symbols
-            
-            if companies:
-                result['companies'] = list(companies)
-                logger.info(f"Found companies for symbols {result['symbols']}: {', '.join(result['companies'])}")
-            elif valid_symbols:
-                logger.error(f"No companies found for symbols: {result['symbols']}")
-        
-        # If companies are specified, add their symbols
-        elif result.get('companies') and len(result['companies']) > 0:
-            symbols = set()
+        # --- Filter companies: only keep valid ones (with partial match fallback) ---
+        if 'companies' in result and result['companies']:
             valid_companies = []
-            
             for company in result['companies']:
-                if company in self.metadata['associations']['company_to_symbol']:
-                    symbols.update(self.metadata['associations']['company_to_symbol'][company])
-                    valid_companies.append(company)
-                else:
-                    # Try partial matching
-                    matched = False
-                    for actual_company in self.metadata['companies']:
-                        if company.lower() in actual_company.lower() or actual_company.lower() in company.lower():
-                            if actual_company in self.metadata['associations']['company_to_symbol']:
-                                symbols.update(self.metadata['associations']['company_to_symbol'][actual_company])
-                                valid_companies.append(actual_company)
-                                matched = True
-                                break
-                    
-                    if not matched:
-                        logger.warning(f"Company '{company}' not found")
-            
-            # Update companies list
+                found = False
+                for c in all_companies:
+                    if company.lower() == c.lower():
+                        valid_companies.append(c)
+                        found = True
+                        break
+                if not found:
+                    # Try partial match
+                    for c in all_companies:
+                        if company.lower() in c.lower() or c.lower() in company.lower():
+                            valid_companies.append(c)
+                            found = True
+                            break
+                if not found:
+                    logger.warning(f"Company '{company}' not found")
             result['companies'] = valid_companies
-            
+
+        # --- If symbols are specified, add ALL associated companies (and filter again) ---
+        if result.get('symbols'):
+            companies = set()
+            for symbol in result['symbols']:
+                if symbol in symbol_to_company:
+                    companies.update(symbol_to_company[symbol])
+            if companies:
+                # Only keep valid companies
+                result['companies'] = [c for c in companies if c in all_companies]
+                logger.info(f"Found companies for symbols {result['symbols']}: {', '.join(result['companies'])}")
+            elif result['symbols']:
+                result['companies'] = []
+                logger.error(f"No companies found for symbols: {result['symbols']}")
+        # --- If companies are specified, add their symbols (and filter again) ---
+        if result.get('companies'):
+            symbols = set()
+            for company in result['companies']:
+                if company in company_to_symbol:
+                    symbols.update(company_to_symbol[company])
             if symbols:
-                result['symbols'] = list(symbols)
+                # Only keep valid symbols
+                result['symbols'] = [s for s in symbols if s in all_symbols]
                 logger.info(f"Found symbols for companies: {result['symbols']}")
-        
+            elif result['companies']:
+                result['symbols'] = []
+                logger.error(f"No symbols found for companies: {result['companies']}")
         return result
     
     def _fallback_parse_query(self, query: str, last_query_data: Optional[Dict] = None) -> FinancialDataFilters:
@@ -430,72 +487,85 @@ Symbol-Company Mappings:
         # If we found symbols, get associated companies
         if result['symbols'] and self.metadata and 'associations' in self.metadata:
             companies = set()
+            symbol_to_company = self.metadata['associations'].get('symbol_to_company', {})
             for symbol in result['symbols']:
-                if symbol in self.metadata['associations']['symbol_to_company']:
-                    companies.update(self.metadata['associations']['symbol_to_company'][symbol])
+                if symbol in symbol_to_company:
+                    companies.update(symbol_to_company[symbol])
             if companies:
                 result['companies'] = list(companies)
                 logger.info(f"Found companies for symbols: {', '.join(result['companies'])}")
         
         return FinancialDataFilters(**result)
     
-    def query_data(self, filters: FinancialDataFilters) -> pd.DataFrame:
-        """Query the dataframe based on filters"""
-        if self.df is None:
-            raise ValueError("DataFrame not loaded")
-        
-        filtered_df = self.df.copy()
-        
-        logger.info(f"Starting with {len(filtered_df)} total records")
-        logger.info(f"Applying filters: companies={filters.companies}, symbols={filters.symbols}, years={filters.years}, items={filters.standard_items}")
-        
-        # Apply company filter
-        if filters.companies and len(filters.companies) > 0:
-            unique_companies = filtered_df['Company'].unique()
-            matching_companies = [c for c in filters.companies if c in unique_companies]
-            logger.info(f"Found matching companies in data: {matching_companies}")
-            
-            if matching_companies:
-                filtered_df = filtered_df[filtered_df['Company'].isin(matching_companies)]
-                logger.info(f"After company filter: {len(filtered_df)} records")
-            else:
-                logger.warning(f"None of the requested companies found in data: {filters.companies}")
-                logger.info(f"Available companies sample: {list(unique_companies)[:10]}")
-        
-        # Apply symbol filter
-        if filters.symbols and len(filters.symbols) > 0:
-            unique_symbols = filtered_df['Symbol'].unique()
-            logger.info(f"Looking for symbols: {filters.symbols}")
-            logger.info(f"Available symbols in current data: {list(unique_symbols)}")
-            
-            filtered_df = filtered_df[filtered_df['Symbol'].isin(filters.symbols)]
-            logger.info(f"After symbol filter: {len(filtered_df)} records")
-        
-        # Apply year filter
-        if filters.years and len(filters.years) > 0:
-            # Convert years to string for comparison
-            year_strings = [str(y) for y in filters.years]
-            filtered_df = filtered_df[filtered_df['Year'].isin(year_strings)]
-            logger.info(f"After year filter: {len(filtered_df)} records")
-        
-        # Apply standard items filter
-        if filters.standard_items and len(filters.standard_items) > 0:
-            if len(filtered_df) > 0:
-                available_items = filtered_df['standard_item'].unique()
-                logger.info(f"Available items in filtered data: {list(available_items)[:10]}")
-            
-            filtered_df = filtered_df[filtered_df['standard_item'].isin(filters.standard_items)]
-            logger.info(f"After item filter: {len(filtered_df)} records")
-        
-        if len(filtered_df) == 0:
-            logger.warning("No data found with current filters")
-        else:
-            logger.info(f"Found {len(filtered_df)} matching records")
-        
-        return filtered_df
+    def query_data(self, filters: FinancialDataFilters) -> List[FinancialDataRecord]:
+        """Query BigQuery for financial data based on filters."""
+        if not self.bq_client:
+            raise RuntimeError("BigQuery client not initialized")
+        query = f"SELECT Company, Symbol, CAST(Year AS STRING) as Year, standard_item, item, unit_multiplier, item_type, item_name FROM `{self.project_id}.{self.dataset}.{self.table}` WHERE 1=1"
+        params = []
+        if filters.companies:
+            query += " AND Company IN UNNEST(@companies)"
+            params.append(bigquery.ArrayQueryParameter("companies", "STRING", filters.companies))
+        if filters.symbols:
+            query += " AND Symbol IN UNNEST(@symbols)"
+            params.append(bigquery.ArrayQueryParameter("symbols", "STRING", filters.symbols))
+        if filters.years:
+            query += " AND CAST(Year AS STRING) IN UNNEST(@years)"
+            params.append(bigquery.ArrayQueryParameter("years", "STRING", filters.years))
+        if filters.standard_items:
+            query += " AND standard_item IN UNNEST(@items)"
+            params.append(bigquery.ArrayQueryParameter("items", "STRING", filters.standard_items))
+        job_config = bigquery.QueryJobConfig()
+        if params:
+            job_config.query_parameters = params
+        logger.info(f"Executing BigQuery: {query} | Params: {params}")
+        try:
+            results = self.bq_client.query(query, job_config=job_config).result()
+            records = []
+            for row in results:
+                unit_multiplier = safe_float(get_row_attr(row, 'unit_multiplier'))
+                if unit_multiplier is None:
+                    unit_multiplier = 1
+                item = safe_float(get_row_attr(row, 'item'))
+                calculated_value = safe_float(get_row_attr(row, 'calculated_value')) if (hasattr(row, 'calculated_value') or 'calculated_value' in dir(row)) and get_row_attr(row, 'calculated_value') is not None else None
+                # Format value
+                if calculated_value is not None:
+                    actual_value = calculated_value
+                elif item is not None:
+                    actual_value = item * unit_multiplier
+                else:
+                    actual_value = None
+                if actual_value is None:
+                    formatted_value = "N/A"
+                elif unit_multiplier == 1000000000.0 or abs(actual_value) >= 1e9:
+                    formatted_value = f"{actual_value/1e9:,.2f}B"
+                elif unit_multiplier == 1000000.0 or abs(actual_value) >= 1e6:
+                    formatted_value = f"{actual_value/1e6:,.2f}M"
+                elif abs(actual_value) >= 1000:
+                    formatted_value = f"{actual_value:,.0f}"
+                else:
+                    formatted_value = f"{actual_value:,.2f}"
+                item_type = get_row_attr(row, 'item_type') if hasattr(row, 'item_type') or 'item_type' in dir(row) else ''
+                if item_type == 'ratio' and unit_multiplier == 1.0 and item is not None:
+                    formatted_value = f"{item:.2f}%"
+                record = FinancialDataRecord(
+                    company=str(get_row_attr(row, 'company') if hasattr(row, 'company') or 'company' in dir(row) else get_row_attr(row, 'Company')),
+                    symbol=str(get_row_attr(row, 'symbol') if hasattr(row, 'symbol') or 'symbol' in dir(row) else get_row_attr(row, 'Symbol')),
+                    year=str(get_row_attr(row, 'year') if hasattr(row, 'year') or 'year' in dir(row) else get_row_attr(row, 'Year')),
+                    standard_item=str(get_row_attr(row, 'standard_item')),
+                    item=item,
+                    unit_multiplier=unit_multiplier,
+                    formatted_value=formatted_value
+                )
+                records.append(record)
+            logger.info(f"BigQuery returned {len(records)} records.")
+            return records
+        except Exception as e:
+            logger.error(f"Error querying BigQuery: {e}")
+            return []
     
     def validate_data_availability(self, filters: FinancialDataFilters) -> Dict[str, Any]:
-        """Validate what data is actually available for the given filters"""
+        logger.info(f"IN validate_data_availability: filters type: {type(filters)}, filters: {filters}")
         availability_info = {
             "has_data": True,
             "warnings": [],
@@ -503,28 +573,45 @@ Symbol-Company Mappings:
         }
         
         if not self.metadata or not self.metadata.get('associations'):
+            logger.info("No metadata or associations available.")
             return availability_info
         
         # Check if specific company-year-item combinations exist
         if filters.companies and filters.years and filters.standard_items:
+            logger.info("Checking company-year-item combinations.")
             missing_data = []
             available_alternatives = {}
             
             if 'company_year_to_items' in self.metadata['associations']:
                 for company in filters.companies:
+                    logger.info(f"Checking company: {company}")
                     company_year_items = self.metadata['associations'].get('company_year_to_items', {}).get(company, {})
                     
                     for year in filters.years:
+                        logger.info(f"Checking year: {year}")
                         if year not in company_year_items:
-                            # This company doesn't have data for this year
                             available_years = self.metadata['associations'].get('company_to_years', {}).get(company, [])
                             if available_years:
                                 available_alternatives[company] = available_years[-3:]  # Last 3 years
                             missing_data.append(f"{company} has no data for {year}")
                         else:
-                            # Check which items are available
                             available_items = company_year_items[year]
+                            # Robust fix for BigQuery Row 'items' field
+                            if hasattr(available_items, 'get'):
+                                available_items = available_items.get('items', [])
+                                logger.info("Extracted available_items using .get('items', [])")
+                            elif hasattr(available_items, 'items') and not callable(available_items.items):
+                                available_items = available_items.items
+                                logger.info("Extracted available_items using attribute access (not callable)")
+                            elif hasattr(available_items, 'items') and callable(available_items.items):
+                                logger.warning("available_items is still a method after attempted extraction; falling back to empty list.")
+                                available_items = []
+                            else:
+                                logger.warning("Could not extract 'items' from available_items; falling back to empty list.")
+                                available_items = []
+                            logger.info(f"available_items type: {type(available_items)}, available_items: {available_items}")
                             for item in filters.standard_items:
+                                logger.info(f"Checking item: {item}")
                                 if item not in available_items:
                                     missing_data.append(f"{company} ({year}) missing: {item}")
             
@@ -538,7 +625,9 @@ Symbol-Company Mappings:
         
         # Check if items are available for ANY of the requested companies
         elif filters.companies and filters.standard_items:
+            logger.info("Checking item availability for companies.")
             for item in filters.standard_items:
+                logger.info(f"Checking item: {item}")
                 item_companies = set(self.metadata['associations'].get('item_to_companies', {}).get(item, []))
                 requested_companies = set(filters.companies)
                 
@@ -554,99 +643,44 @@ Symbol-Company Mappings:
         # Note: We don't call query_data here to avoid duplicate processing
         # The main endpoint will call query_data and check if results are empty
         
+        logger.info(f"Returning availability_info: {availability_info}")
         return availability_info
     
-    def format_response(self, df: pd.DataFrame, query: str, interpretation: str, is_follow_up: bool = False, conversation_history: Optional[List[Dict[str, str]]] = None) -> str:
+    def format_response(self, records: List[FinancialDataRecord], query: str, interpretation: str, is_follow_up: bool = False, conversation_history: Optional[List[Dict[str, str]]] = None) -> str:
         """Format the query results into a readable response with conversation awareness"""
-        if df.empty:
+        if not records:
             return "No data found matching your query criteria."
-        
         if not self.model:
             # Fallback to basic formatting
-            return f"Found {len(df)} records matching your query. Here's a summary of the data."
-        
+            return f"Found {len(records)} records matching your query. Here's a summary of the data."
         # Use Gemini to create a natural language response
-        data_summary = df.to_dict('records')[:20]  # Limit to first 20 records for prompt
-        
+        data_summary = [r.dict() for r in records[:20]]  # Limit to first 20 records for prompt
         # Get conversation context for more natural responses
         conversation_context = ""
         if is_follow_up and conversation_history:
             recent_messages = conversation_history[-4:]
             conversation_context = "\n".join([f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in recent_messages])
-        
         prompt = f"""
-        Create a concise, informative response to the user's financial data query.
-        {f"This is a follow-up question in an ongoing conversation." if is_follow_up else ""}
-        
-        {"Recent conversation:" if conversation_context else ""}
-        {conversation_context}
-        
-        User Query: "{query}"
-        Query Interpretation: "{interpretation}"
-        
-        Data Found ({len(df)} total records, showing first {min(20, len(df))}):
-        {json.dumps(data_summary, indent=2)}
-        
-        Create a natural language response that:
-        1. {"Acknowledges this is a follow-up and references previous context" if is_follow_up else "Confirms what data was found"}
-        2. Highlights key insights or patterns
-        3. Formats numbers appropriately (e.g., millions, billions)
-        4. Suggests relevant follow-up questions based on what was found
-        5. {"Maintains conversational continuity" if is_follow_up else "Sets up potential follow-up questions"}
-        
-        Keep the response concise but informative. Be conversational and natural.
+            Create a concise, informative response to the user's financial data query.
+            {f'This is a follow-up question in an ongoing conversation.' if is_follow_up else ''}
+            {"Recent conversation:" if conversation_context else ""}
+            {conversation_context}
+            User Query: "{query}"
+            Query Interpretation: "{interpretation}"
+            Data Found ({len(records)} total records, showing first {min(20, len(records))}):
+            {json.dumps(data_summary, indent=2)}
+            Create a natural language response that:
+            1. {"Acknowledges this is a follow-up and references previous context" if is_follow_up else "Confirms what data was found"}
+            2. Highlights key insights or patterns
+            3. Formats numbers appropriately (e.g., millions, billions)
+            4. Suggests relevant follow-up questions based on what was found
+            5. {"Maintains conversational continuity" if is_follow_up else "Sets up potential follow-up questions"}
+            Keep the response concise but informative. Be conversational and natural.
         """
-        
         try:
             response = self.model.generate_content(prompt)
             return response.text
         except Exception as e:
             logger.error(f"Error generating AI response: {e}")
             # Fallback to basic formatting
-            return f"Found {len(df)} records matching your query. Here's a summary of the data."
-    
-    def convert_df_to_records(self, df: pd.DataFrame) -> List[FinancialDataRecord]:
-        """Convert DataFrame rows to FinancialDataRecord objects"""
-        records = []
-        for _, row in df.head(50).iterrows():  # Limit to first 50 records
-            try:
-                # Format value based on unit multiplier
-                unit_multiplier = float(row.get('unit_multiplier', 1))
-                item_value = float(row.get('item_value', 0))
-                
-                # Calculate the actual value
-                if 'calculated_value' in row and pd.notna(row['calculated_value']):
-                    actual_value = float(row['calculated_value'])
-                else:
-                    actual_value = item_value * unit_multiplier
-                
-                # Format the value for display
-                if unit_multiplier == 1000000000.0 or abs(actual_value) >= 1e9:
-                    formatted_value = f"{actual_value/1e9:,.2f}B"
-                elif unit_multiplier == 1000000.0 or abs(actual_value) >= 1e6:
-                    formatted_value = f"{actual_value/1e6:,.2f}M"
-                elif abs(actual_value) >= 1000:
-                    formatted_value = f"{actual_value:,.0f}"
-                else:
-                    formatted_value = f"{actual_value:,.2f}"
-                
-                # Handle ratio/percentage items differently
-                item_type = row.get('item_type', '')
-                if item_type == 'ratio' and unit_multiplier == 1.0:
-                    formatted_value = f"{item_value:.2f}%"
-                
-                record = FinancialDataRecord(
-                    company=str(row.get('Company', '')),
-                    symbol=str(row.get('Symbol', '')),
-                    year=str(row.get('Year', '')),
-                    standard_item=str(row.get('standard_item', '')),
-                    item_value=float(item_value),
-                    unit_multiplier=int(unit_multiplier),
-                    formatted_value=formatted_value
-                )
-                records.append(record)
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Error processing record: {e}")
-                continue
-        
-        return records 
+            return f"Found {len(records)} records matching your query. Here's a summary of the data." 

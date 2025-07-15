@@ -8,6 +8,7 @@ import time  # For execution-time measurement
 # -------------------
 REMOTE_PROD_BASE_URL = "http://jse-da-Publi-YNJSNI96davV-367279008.us-east-1.elb.amazonaws.com"
 REMOTE_STAGE_BASE_URL = "http://jse-da-Publi-wupYrzJkbRrm-92790362.us-east-1.elb.amazonaws.com"
+REMOTE_DEV_BASE_URL = "http://jse-da-Publi-1wgQS45FnwpV-1192199831.us-east-1.elb.amazonaws.com"
 LOCAL_BASE_URL = "http://localhost:8000"
 
 st.set_page_config(page_title="JSE Datasphere Chat", page_icon="💬")
@@ -20,8 +21,8 @@ if "last_exec_time" not in st.session_state:
 # -------------------
 # Sidebar controls
 # -------------------
-env = st.sidebar.selectbox("Environment", [ "Local", "Remote Prod", "Remote Stage"])
-BASE_URL = LOCAL_BASE_URL if env == "Local" else REMOTE_STAGE_BASE_URL if env == "Remote Stage" else REMOTE_PROD_BASE_URL
+env = st.sidebar.selectbox("Environment", [ "Local", "Remote Prod", "Remote Stage", "Remote Dev"])
+BASE_URL = LOCAL_BASE_URL if env == "Local" else REMOTE_STAGE_BASE_URL if env == "Remote Stage" else REMOTE_DEV_BASE_URL if env == "Remote Dev" else REMOTE_PROD_BASE_URL
 
 # Primary mode (chat or vector upload)
 mode = st.sidebar.radio(
@@ -172,7 +173,7 @@ if mode == "Chat":
                     with st.expander(f"📈 Data Preview ({len(data_preview)} records)"):
                         for i, record in enumerate(data_preview[:5]):  # Show first 5 records
                             st.write(f"**{i+1}.** {record.get('company', 'N/A')} ({record.get('symbol', 'N/A')}) - {record.get('year', 'N/A')}")
-                            st.write(f"   {record.get('item', 'N/A')}: {record.get('formatted_value', record.get('item_value', 'N/A'))}")
+                            st.write(f"   {record.get('item', 'N/A')}: {record.get('formatted_value', record.get('item', 'N/A'))}")
                         if len(data_preview) > 5:
                             st.write(f"... and {len(data_preview) - 5} more records")
                 
