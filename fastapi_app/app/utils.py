@@ -2,8 +2,10 @@ import os
 import json
 import logging
 import tempfile
+import hashlib
 from io import BytesIO
 from typing import Dict, List, Tuple, Optional, Any
+from datetime import datetime, timedelta
 
 import boto3
 import PyPDF2
@@ -11,6 +13,8 @@ from dotenv import load_dotenv
 from google.oauth2 import service_account
 from google.cloud import aiplatform
 from vertexai.preview.generative_models import GenerativeModel
+import google.generativeai as genai
+from app.chroma_utils import query_meta_collection, get_companies_from_query
 
 # Configure logging
 logging.basicConfig(
@@ -180,59 +184,357 @@ def load_metadata_from_s3(s3_client):
         logger.error(f"Error loading metadata from S3: {str(e)}")
         return None
 
-# Function to use the LLM to determine which documents to load based on the query and conversation history
-def semantic_document_selection(query, metadata, conversation_history=None):
-    """Use LLM to determine which documents to load based on query and conversation history"""
+# Global variable to store the cached context
+_metadata_cache = None
+_cache_expiry = None
+_cache_hash = None
+
+def init_genai():
+    """Initialize Google GenerativeAI client"""
+    api_key = os.getenv("SUMMARIZER_API_KEY")
+    if not api_key:
+        logger.error("SUMMARIZER_API_KEY not found in environment variables")
+        raise ValueError("SUMMARIZER_API_KEY not found for Google GenerativeAI")
+    
+    genai.configure(api_key=api_key)
+    logger.info("Google GenerativeAI client initialized")
+
+def get_metadata_hash(metadata):
+    """Generate a hash of the metadata to detect changes"""
+    metadata_str = json.dumps(metadata, sort_keys=True)
+    return hashlib.md5(metadata_str.encode()).hexdigest()
+
+def create_metadata_cache(metadata):
+    """Create or update the metadata cache using Google Gemini context caching"""
+    global _metadata_cache, _cache_expiry, _cache_hash
+    
     try:
-        # Create a prompt for the LLM to analyze the query and metadata
-        model = GenerativeModel("gemini-2.0-flash-001")
+        # Initialize genai if not already done
+        init_genai()
         
-        # Format metadata in a readable format for the LLM
+        # Generate hash for metadata to detect changes
+        current_hash = get_metadata_hash(metadata)
+        
+        # Check if cache exists and is still valid
+        if (_metadata_cache and _cache_expiry and 
+            datetime.now() < _cache_expiry and 
+            _cache_hash == current_hash):
+            logger.info("Using existing valid metadata cache")
+            return _metadata_cache
+        
+        logger.info("Creating new metadata cache with Google Gemini context caching")
+        
+        # Format metadata for caching
         metadata_str = json.dumps(metadata, indent=2)
         
-        # Format conversation history if available
-        conversation_context = ""
-        if conversation_history and len(conversation_history) > 0:
-            # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
-            recent_history = conversation_history[-10:]
-            conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
-            conversation_context = f"""
-            Previous conversation history:
-            {conversation_context}
-            """
-        
-        # Prompt the LLM to determine relevant documents (LIMIT TO 3)
-        prompt = f"""
-        Based on the following user question, conversation history, and available document metadata, determine which documents are most relevant to answer the question.
-        
-        {conversation_context}
-        
-        Current user question: "{query}"
-        
-        Available document metadata:
-        {metadata_str}
-        
-        For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
-        Consider aliases, abbreviations, or partial references to companies.
-        Consider the full context of the conversation when determining relevance.
-        
-        IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
-        
-        Return your response as a valid JSON object with this structure:
-        {{
-          "companies_mentioned": ["company1", "company2"], 
-          "documents_to_load": [
+        # Create cached content - this will be the system context that gets cached
+        cached_content = f"""You are a document selection assistant. You have access to the following document metadata:
+
+            {metadata_str}
+
+            Your job is to analyze user queries and conversation history to select the most relevant documents from this metadata. When asked to select documents, you should:
+
+            1. Consider all companies mentioned or implied in the query/conversation
+            2. Consider aliases, abbreviations, or partial references to companies
+            3. Select a maximum of 3 documents total, prioritizing the most relevant ones
+            4. Return results as valid JSON with this structure:
             {{
-              "company": "company name",
-              "document_link": "url",
-              "filename": "filename",
-              "reason": "brief explanation why this document is relevant"
-            }}
-          ]
-        }}
+            "companies_mentioned": ["company1", "company2"], 
+            "documents_to_load": [
+                {{
+                "company": "company name",
+                "document_link": "url",
+                "filename": "filename",
+                "reason": "brief explanation why this document is relevant"
+                }}
+            ]
+            }}"""
         
-        ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
-        """
+        # Build a dedicated client – required for the caches API
+        client = genai.Client()
+
+        # Create the cache using Google Gemini explicit context caching
+        cache = client.caches.create(
+            model='gemini-2.0-flash-001',
+            config=genai.types.CreateCachedContentConfig(
+                system_instruction=cached_content,
+                display_name='document-metadata-cache',
+                ttl_seconds=3600,  # 1-hour TTL
+            ),
+        )
+        
+        # Store cache info globally
+        _metadata_cache = cache
+        _cache_expiry = datetime.now() + timedelta(seconds=3500)  # Expire 5 minutes before actual TTL
+        _cache_hash = current_hash
+        
+        logger.info(f"Created metadata cache with name: {cache.name}")
+        return cache
+        
+    except Exception as e:
+        logger.warning(f"Failed to create metadata cache: {str(e)}")
+        return None
+
+def get_cached_model(metadata):
+    """Get a model instance that uses the cached metadata context"""
+    try:
+        cache = create_metadata_cache(metadata)
+        if cache:
+            # Create model that uses the cached context
+            model = genai.GenerativeModel(
+                model_name='gemini-2.0-flash-001',
+                cached_content=cache
+            )
+            logger.info("Created model with cached metadata context")
+            return model, True
+        else:
+            logger.info("Cache creation failed, falling back to regular model")
+            return None, False
+    except Exception as e:
+        logger.warning(f"Failed to get cached model: {str(e)}")
+        return None, False
+
+def refresh_metadata_cache(metadata):
+    """Force refresh of the metadata cache (useful when metadata is updated)"""
+    global _metadata_cache, _cache_expiry, _cache_hash
+    
+    try:
+        # Clear existing cache
+        _metadata_cache = None
+        _cache_expiry = None
+        _cache_hash = None
+        
+        # Create new cache
+        cache = create_metadata_cache(metadata)
+        if cache:
+            logger.info("Successfully refreshed metadata cache")
+            return True
+        else:
+            logger.warning("Failed to refresh metadata cache")
+            return False
+    except Exception as e:
+        logger.error(f"Error refreshing metadata cache: {str(e)}")
+        return False
+
+def get_cache_status():
+    """Get current cache status for monitoring/debugging"""
+    global _metadata_cache, _cache_expiry, _cache_hash
+    
+    if not _metadata_cache:
+        return {"status": "no_cache", "cache_name": None, "expires_at": None, "hash": None}
+    
+    is_expired = _cache_expiry and datetime.now() >= _cache_expiry
+    
+    return {
+        "status": "expired" if is_expired else "active",
+        "cache_name": getattr(_metadata_cache, 'name', 'unknown'),
+        "expires_at": _cache_expiry.isoformat() if _cache_expiry else None,
+        "hash": _cache_hash
+    }
+
+# Function to use embedding-based document selection with LLM fallback
+def semantic_document_selection(query, metadata, conversation_history=None, meta_collection=None):
+    """
+    Use embedding-based search in metadata collection with LLM fallback.
+    Now supports multi-company queries by extracting companies from the query
+    and running separate searches for each company.
+    
+    Operators can set the environment variable ``FORCE_LLM_FALLBACK`` to
+    ``true`` (case-insensitive) to bypass the embedding-based branch and jump
+    straight to the LLM fallback.  This is handy for load-testing the cache
+    mechanism.
+    
+    Args:
+        query: User query
+        metadata: S3 metadata (used for fallback)
+        conversation_history: Optional conversation context
+        meta_collection: ChromaDB metadata collection (if None, falls back to LLM)
+    
+    Returns:
+        Dictionary with companies_mentioned and documents_to_load
+    """
+    # ------------------------------------------------------------------
+    # Optional override: skip embedding search entirely (test LLM fallback)
+    # ------------------------------------------------------------------
+    if os.getenv("FORCE_LLM_FALLBACK", "false").lower() == "true":
+        logger.info("FORCE_LLM_FALLBACK is set – bypassing embedding-based selection")
+        return semantic_document_selection_llm_fallback(query, metadata, conversation_history)
+
+    # Try embedding-based approach first if meta_collection is available
+    if meta_collection is not None:
+        try:
+            logger.info("Attempting embedding-based document selection")
+            
+            # Extract companies from the query
+            companies_from_query = get_companies_from_query(query)
+            logger.info(f"Extracted companies from query: {companies_from_query}")
+            
+            all_documents_to_load = []
+            all_companies_mentioned = set()
+            
+            if companies_from_query:
+                # Run individual searches for each detected company
+                for company in companies_from_query:
+                    logger.info(f"Searching for documents from company: {company}")
+                    company_result = query_meta_collection(
+                        meta_collection=meta_collection,
+                        query=query,
+                        n_results=3,  # Get top 3 documents per company
+                        where={"company": {"$eq": company}},
+                        conversation_history=conversation_history
+                    )
+                    
+                    if company_result and company_result.get("documents_to_load"):
+                        all_documents_to_load.extend(company_result["documents_to_load"])
+                        all_companies_mentioned.update(company_result.get("companies_mentioned", []))
+                        logger.info(f"Found {len(company_result['documents_to_load'])} documents for {company}")
+                
+                # Deduplicate documents by filename
+                seen_filenames = set()
+                deduplicated_documents = []
+                for doc in all_documents_to_load:
+                    if doc["filename"] not in seen_filenames:
+                        deduplicated_documents.append(doc)
+                        seen_filenames.add(doc["filename"])
+                
+                if deduplicated_documents:
+                    result = {
+                        "companies_mentioned": list(all_companies_mentioned),
+                        "documents_to_load": deduplicated_documents
+                    }
+                    logger.info(f"Multi-company embedding-based selection found {len(deduplicated_documents)} documents from {len(all_companies_mentioned)} companies")
+                    return result
+                else:
+                    logger.info("Multi-company search returned no results, trying broader search")
+            
+            # Fallback to broader search if no companies detected or no results
+            logger.info("Running broader embedding search (no company-specific filtering)")
+            result = query_meta_collection(
+                meta_collection=meta_collection,
+                query=query,
+                n_results=15,  # Increased for broader search
+                conversation_history=conversation_history
+            )
+            
+            if result and result.get("documents_to_load"):
+                logger.info(f"Broader embedding-based selection found {len(result['documents_to_load'])} documents")
+                return result
+            else:
+                logger.info("Embedding-based selection returned no results, falling back to LLM")
+        except Exception as e:
+            logger.warning(f"Embedding-based selection failed: {str(e)}, falling back to LLM")
+    else:
+        logger.info("No meta_collection provided, using LLM approach")
+    
+    # Fallback to LLM-based approach
+    logger.info("Using LLM fallback for document selection")
+    return semantic_document_selection_llm_fallback(query, metadata, conversation_history)
+
+# Function to use the LLM to determine which documents to load based on the query and conversation history (FALLBACK)
+def semantic_document_selection_llm_fallback(query, metadata, conversation_history=None):
+    """
+    Use LLM to determine which documents to load based on query and conversation history (fallback method).
+    Now optimized with Google Gemini context caching to reduce latency from ~20s to ~2-3s.
+    """
+    try:
+        # Try to get cached model first for faster performance
+        cached_model, using_cache = get_cached_model(metadata)
+        
+        if using_cache and cached_model:
+            logger.info("Using cached metadata context for LLM fallback (~2-3s expected)")
+            model = cached_model
+            
+            # Format conversation history if available
+            conversation_context = ""
+            if conversation_history and len(conversation_history) > 0:
+                # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
+                recent_history = conversation_history[-10:]
+                conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+                conversation_context = f"""
+                Previous conversation history:
+                {conversation_context}
+                """
+            
+            # Simplified prompt since metadata is already cached in the model context
+            prompt = f"""
+            {conversation_context}
+            
+            Current user question: "{query}"
+            
+            Based on this question and conversation history, select the most relevant documents from the available metadata.
+            
+            For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
+            Consider aliases, abbreviations, or partial references to companies.
+            Consider the full context of the conversation when determining relevance.
+            
+            IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
+            
+            Return your response as a valid JSON object with this structure:
+            {{
+              "companies_mentioned": ["company1", "company2"], 
+              "documents_to_load": [
+                {{
+                  "company": "company name",
+                  "document_link": "url",
+                  "filename": "filename",
+                  "reason": "brief explanation why this document is relevant"
+                }}
+              ]
+            }}
+            
+            ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
+            """
+        else:
+            # Fallback to traditional approach if caching fails
+            logger.info("Cache unavailable, using traditional LLM fallback (~20s expected)")
+            model = GenerativeModel("gemini-2.0-flash-001")
+            
+            # Format metadata in a readable format for the LLM
+            metadata_str = json.dumps(metadata, indent=2)
+            
+            # Format conversation history if available
+            conversation_context = ""
+            if conversation_history and len(conversation_history) > 0:
+                # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
+                recent_history = conversation_history[-10:]
+                conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+                conversation_context = f"""
+                Previous conversation history:
+                {conversation_context}
+                """
+            
+            # Full prompt with metadata included (original behavior)
+            prompt = f"""
+            Based on the following user question, conversation history, and available document metadata, determine which documents are most relevant to answer the question.
+            
+            {conversation_context}
+            
+            Current user question: "{query}"
+            
+            Available document metadata:
+            {metadata_str}
+            
+            For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
+            Consider aliases, abbreviations, or partial references to companies.
+            Consider the full context of the conversation when determining relevance.
+            
+            IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
+            
+            Return your response as a valid JSON object with this structure:
+            {{
+              "companies_mentioned": ["company1", "company2"], 
+              "documents_to_load": [
+                {{
+                  "company": "company name",
+                  "document_link": "url",
+                  "filename": "filename",
+                  "reason": "brief explanation why this document is relevant"
+                }}
+              ]
+            }}
+            
+            ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
+            """
         
         response = model.generate_content(prompt)
         response_text = response.text
@@ -246,6 +548,12 @@ def semantic_document_selection(query, metadata, conversation_history=None):
                 response_text = response_text[json_start:json_end]
             
             recommendation = json.loads(response_text)
+            
+            if using_cache:
+                logger.info("Successfully completed LLM fallback with cached context")
+            else:
+                logger.info("Successfully completed LLM fallback with traditional approach")
+                
             return recommendation
         except json.JSONDecodeError as e:
             logger.error(f"Error parsing LLM response as JSON: {e}")

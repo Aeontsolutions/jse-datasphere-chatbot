@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import os
 import json
 import logging
@@ -8,7 +9,15 @@ import uuid
 from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
 
-from app.models import ChatRequest, ChatResponse, ChromaAddRequest, ChromaAddResponse, ChromaQueryRequest, ChromaQueryResponse
+from app.models import (
+    ChatRequest, ChatResponse, 
+    ChromaAddRequest, ChromaAddResponse, 
+    ChromaQueryRequest, ChromaQueryResponse,
+    ChromaMetaUpdateRequest, ChromaMetaUpdateResponse,
+    ChromaMetaQueryRequest, ChromaMetaQueryResponse,
+    StreamingChatRequest,
+    FinancialDataRequest, FinancialDataResponse, FinancialDataFilters
+)
 from app.utils import (
     init_s3_client, 
     init_vertex_ai, 
@@ -16,6 +25,8 @@ from app.utils import (
     auto_load_relevant_documents, 
     generate_chat_response,
     semantic_document_selection,
+    refresh_metadata_cache,
+    get_cache_status,
 )
 from app.chroma_utils import (
     init_chroma_client,
@@ -24,6 +35,8 @@ from app.chroma_utils import (
     query_collection as chroma_query_collection,
     qa_bot,
 )
+from app.streaming_chat import process_streaming_chat
+from app.financial_utils import FinancialDataManager
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -41,17 +54,14 @@ async def lifespan(app: FastAPI):
     try:
         # Initialize S3 client
         app.state.s3_client = init_s3_client()
-        
         # Initialize Vertex AI
         init_vertex_ai()
-        
         # Load metadata from S3
         app.state.metadata = load_metadata_from_s3(app.state.s3_client)
         if app.state.metadata:
             logger.info(f"Metadata loaded: {len(app.state.metadata)} companies found")
         else:
             logger.warning("Failed to load metadata from S3")
-
         # -----------------------
         # Initialise ChromaDB
         # -----------------------
@@ -63,13 +73,32 @@ async def lifespan(app: FastAPI):
             except Exception:
                 collection_size = "unknown"
                 logger.warning("Could not retrieve Chroma collection size during startup.")
-
             logger.info(
                 "ChromaDB initialised and collection ready | collection_size=%s",
                 collection_size,
             )
+            # Initialize the metadata collection for semantic document selection
+            app.state.meta_collection = get_or_create_collection(app.state.chroma_client, "doc_meta")
+            try:
+                meta_collection_size = app.state.meta_collection.count()
+            except Exception:
+                meta_collection_size = "unknown"
+                logger.warning("Could not retrieve metadata collection size during startup.")
+            logger.info(
+                "Metadata collection initialised | collection_size=%s",
+                meta_collection_size,
+            )
         except Exception as chroma_err:
             logger.error(f"Failed to initialise ChromaDB: {chroma_err}")
+        # -----------------------
+        # Initialize Financial Data Manager (BigQuery)
+        # -----------------------
+        try:
+            app.state.financial_manager = FinancialDataManager()
+            logger.info("Financial data manager (BigQuery) initialized successfully")
+        except Exception as financial_err:
+            logger.error(f"Failed to initialize financial data manager: {financial_err}")
+            app.state.financial_manager = None
         yield
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
@@ -79,7 +108,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Jacie",
     description="API for chatting with Jacie, the JSE DataSphere Chatbot.",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan
 )
 
@@ -125,6 +154,14 @@ def get_metadata():
 def get_chroma_collection():
     return app.state.chroma_collection
 
+# Dependency to get metadata collection
+def get_meta_collection():
+    return app.state.meta_collection
+
+# Dependency to get financial data manager
+def get_financial_manager():
+    return getattr(app.state, 'financial_manager', None)
+
 @app.get("/")
 async def root():
     """Root endpoint to check if API is running"""
@@ -132,16 +169,31 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    # Check if S3 client and metadata are available
-    s3_status = "available" if hasattr(app.state, "s3_client") else "unavailable"
-    metadata_status = "available" if hasattr(app.state, "metadata") and app.state.metadata else "unavailable"
-    
-    return {
-        "status": "healthy",
-        "s3_client": s3_status,
-        "metadata": metadata_status
-    }
+    try:
+        s3_status = "available" if hasattr(app.state, "s3_client") else "unavailable"
+        metadata_status = "available" if hasattr(app.state, "metadata") and app.state.metadata else "unavailable"
+        
+        financial_status = "unavailable"
+        financial_records = 0
+        if hasattr(app.state, "financial_manager") and app.state.financial_manager:
+            financial_status = "available"
+            if app.state.financial_manager.df is not None:
+                financial_records = len(app.state.financial_manager.df)
+
+        return {
+            "status": "healthy",
+            "s3_client": s3_status,
+            "metadata": metadata_status,
+            "financial_data": {
+                "status": financial_status,
+                "records": financial_records
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "healthy",
+            "error": f"Health check degraded: {str(e)}"
+        }
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
@@ -227,6 +279,51 @@ async def chat(
         logger.error(f"Error in chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
 
+@app.post("/chat/stream")
+async def chat_stream(
+    request: StreamingChatRequest,
+    s3_client: Any = Depends(get_s3_client),
+    metadata: Dict = Depends(get_metadata)
+):
+    """
+    Stream chat responses with real-time progress updates using Server-Sent Events
+    
+    This endpoint provides the same functionality as /chat but streams progress updates
+    to the client, allowing the frontend to show real-time status messages like:
+    - "Loading documents..."
+    - "Analyzing query..."
+    - "Generating response..."
+    
+    The stream will emit 'progress' events with status updates and a final 'result' 
+    event with the complete response.
+    """
+    logger.info(
+        f"/chat/stream called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
+    )
+    
+    try:
+        # Start the streaming chat process
+        tracker = await process_streaming_chat(
+            request=request,
+            s3_client=s3_client,
+            metadata=metadata,
+            use_fast_mode=False
+        )
+        
+        # Return streaming response
+        return StreamingResponse(
+            tracker.stream_updates(),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream",
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in chat stream endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error starting chat stream: {str(e)}")
+
 @app.post("/chroma/update", response_model=ChromaAddResponse)
 async def chroma_update(
     request: ChromaAddRequest,
@@ -276,6 +373,78 @@ async def chroma_query(
         logger.error(f"Error querying ChromaDB: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error querying ChromaDB: {str(e)}")
 
+@app.post("/chroma/meta/update", response_model=ChromaMetaUpdateResponse)
+async def chroma_meta_update(
+    request: ChromaMetaUpdateRequest,
+    meta_collection: Any = Depends(get_meta_collection),
+):
+    """Add or upsert document metadata into the metadata collection."""
+    logger.info(f"/chroma/meta/update called. num_documents={len(request.documents)}")
+    try:
+        # Build the documents list for embedding
+        documents = []
+        metadatas = []
+        ids = []
+        
+        for doc_info in request.documents:
+            # Create description text for embedding: "company - doc_type - period"
+            description = f"{doc_info.company} - {doc_info.type} - {doc_info.period}"
+            documents.append(description)
+            
+            # Create metadata with all fields
+            metadata = {
+                "filename": doc_info.filename,
+                "company": doc_info.company,
+                "period": doc_info.period,
+                "type": doc_info.type
+            }
+            metadatas.append(metadata)
+            
+            # Use filename as ID (could be made more unique if needed)
+            ids.append(doc_info.filename)
+        
+        # Add to collection
+        result_ids = chroma_add_documents(meta_collection, documents, metadatas, ids)
+        logger.info(f"/chroma/meta/update completed. ids={result_ids}")
+        return ChromaMetaUpdateResponse(status="success", ids=result_ids)
+    except Exception as e:
+        logger.error(f"Error updating metadata collection: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error updating metadata collection: {str(e)}")
+
+@app.post("/chroma/meta/query", response_model=ChromaMetaQueryResponse)
+async def chroma_meta_query(
+    request: ChromaMetaQueryRequest,
+    meta_collection: Any = Depends(get_meta_collection),
+):
+    """Query the metadata collection to find relevant documents."""
+    logger.info(f"/chroma/meta/query called. query='{request.query}', n_results={request.n_results}")
+    try:
+        # Query the metadata collection
+        sorted_results, _ = chroma_query_collection(
+            meta_collection,
+            query=request.query,
+            n_results=request.n_results,
+            where=request.where,
+        )
+
+        # Build separate lists for the response schema
+        ids = [meta.get("filename") for meta, _ in sorted_results if meta.get("filename")]
+        documents = [doc for _, doc in sorted_results]
+        metadatas = [meta for meta, _ in sorted_results] if sorted_results else None
+
+        logger.info(
+            f"/chroma/meta/query completed. documents_returned={len(documents)}"
+        )
+
+        return ChromaMetaQueryResponse(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
+        )
+    except Exception as e:
+        logger.error(f"Error querying metadata collection: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error querying metadata collection: {str(e)}")
+
 # ---------------------------------------------------------------------------
 # Fast Chat Endpoint (Vector DB → Gemini QA)
 # ---------------------------------------------------------------------------
@@ -286,6 +455,7 @@ async def fast_chat(
     s3_client: Any = Depends(get_s3_client),
     metadata: Dict = Depends(get_metadata),
     collection: Any = Depends(get_chroma_collection),
+    meta_collection: Any = Depends(get_meta_collection),
 ):
     """A retrieval-augmented chat endpoint that reuses the ChromaDB query logic
     from the /chroma/query endpoint and then lets Gemini answer based on that context.
@@ -320,6 +490,7 @@ async def fast_chat(
                 request.query,
                 metadata,
                 request.conversation_history,
+                meta_collection,
             )
             
             if selected_docs:
@@ -351,7 +522,7 @@ async def fast_chat(
         sorted_results, context = chroma_query_collection(
             collection,
             query=retrieval_query,
-            n_results=5,
+            n_results=3,
             where=where_filter,
         )
 
@@ -413,3 +584,213 @@ async def fast_chat(
     except Exception as e:
         logger.error(f"Error in fast_chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
+
+@app.post("/fast_chat/stream")
+async def fast_chat_stream(
+    request: StreamingChatRequest,
+    s3_client: Any = Depends(get_s3_client),
+    metadata: Dict = Depends(get_metadata),
+    collection: Any = Depends(get_chroma_collection),
+    meta_collection: Any = Depends(get_meta_collection),
+):
+    """
+    Stream fast chat responses with real-time progress updates using Server-Sent Events
+    
+    This endpoint provides the same functionality as /fast_chat but streams progress updates
+    to the client. It uses vector database retrieval for faster responses and provides
+    real-time updates on:
+    - Document selection process
+    - Vector database search
+    - AI response generation
+    
+    The stream will emit 'progress' events with status updates and a final 'result' 
+    event with the complete response.
+    """
+    logger.info(
+        f"/fast_chat/stream called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
+    )
+    
+    try:
+        # Start the streaming fast chat process
+        tracker = await process_streaming_chat(
+            request=request,
+            s3_client=s3_client,
+            metadata=metadata,
+            collection=collection,
+            meta_collection=meta_collection,
+            use_fast_mode=True
+        )
+        
+        # Return streaming response
+        return StreamingResponse(
+            tracker.stream_updates(),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream",
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in fast_chat stream endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error starting fast chat stream: {str(e)}")
+
+# ---------------------------------------------------------------------------
+# Financial Data Query Endpoint (V2)
+# ---------------------------------------------------------------------------
+
+@app.post("/fast_chat_v2", response_model=FinancialDataResponse)
+async def fast_chat_v2(
+    request: FinancialDataRequest,
+    financial_manager: Any = Depends(get_financial_manager),
+):
+    """
+    Natural language financial data query endpoint
+    
+    This endpoint allows users to query financial data using natural language.
+    It processes queries like:
+    - "Show me MDS revenue for 2024"
+    - "Compare JBG and CPJ profit margins"
+    - "What about 2022?" (follow-up questions)
+    
+    The endpoint uses AI to parse natural language queries into structured filters,
+    queries the financial database, and returns formatted responses with data insights.
+    """
+    logger.info(f"/fast_chat_v2 called. query='{request.query[:200]}', memory_enabled={request.memory_enabled}")
+    try:
+        if not financial_manager:
+            raise HTTPException(
+                status_code=503,
+                detail="Financial data service is not available. Please ensure BigQuery is configured."
+            )
+        last_query_data = getattr(request, '_last_query_data', None)
+        filters = financial_manager.parse_user_query(
+            request.query,
+            request.conversation_history,
+            last_query_data
+        )
+        logger.info(f"Parsed filters: {filters}")
+        logger.info(f"filters type: {type(filters)}, filters: {filters}")
+        availability = financial_manager.validate_data_availability(filters)
+        # logger.info(f"availability type: {type(availability)}, availability: {availability}")
+        warnings = availability.get('warnings', [])
+        suggestions = availability.get('suggestions', [])
+        results = financial_manager.query_data(filters)
+        logger.info(f"results type: {type(results)}, results: {results}")
+        ai_response = financial_manager.format_response(
+            results,
+            request.query,
+            filters.interpretation,
+            filters.is_follow_up,
+            request.conversation_history
+        )
+        # logger.info(f"ai_response type: {type(ai_response)}, ai_response: {ai_response}")
+        data_preview = results if results else None
+        updated_conversation_history = None
+        if request.memory_enabled:
+            if request.conversation_history:
+                updated_conversation_history = request.conversation_history.copy()
+            else:
+                updated_conversation_history = []
+            updated_conversation_history.append({"role": "user", "content": request.query})
+            updated_conversation_history.append({"role": "assistant", "content": ai_response})
+            if len(updated_conversation_history) > 20:
+                updated_conversation_history = updated_conversation_history[-20:]
+        logger.info(f"/fast_chat_v2 completed. data_found={bool(results)}, record_count={len(results) if results else 0}")
+        return FinancialDataResponse(
+            response=ai_response,
+            data_found=bool(results),
+            record_count=len(results) if results else 0,
+            filters_used=filters,
+            data_preview=data_preview,
+            conversation_history=updated_conversation_history,
+            warnings=warnings if warnings else None,
+            suggestions=suggestions if suggestions else None
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in fast_chat_v2 endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing financial data query: {str(e)}")
+
+@app.get("/financial/metadata")
+async def get_financial_metadata(
+    financial_manager: Any = Depends(get_financial_manager),
+):
+    """Get financial data metadata including available companies, symbols, years, and metrics"""
+    try:
+        if not financial_manager:
+            raise HTTPException(
+                status_code=503, 
+                detail="Financial data service is not available."
+            )
+        
+        if not financial_manager.metadata:
+            raise HTTPException(
+                status_code=404,
+                detail="Financial metadata not available."
+            )
+        
+        # Return the metadata but limit large lists for better API response size
+        metadata = financial_manager.metadata.copy()
+        
+        # If there are too many items, provide sample + count
+        for key in ['companies', 'symbols', 'standard_items']:
+            if key in metadata and len(metadata[key]) > 50:
+                sample = metadata[key][:50]
+                metadata[key] = {
+                    "sample": sample,
+                    "total_count": len(metadata[key]),
+                    "note": f"Showing first 50 of {len(metadata[key])} items"
+                }
+        
+        return {
+            "status": "success",
+            "metadata": metadata
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving financial metadata: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving financial metadata: {str(e)}")
+
+@app.get("/cache/status")
+async def get_cache_status_endpoint():
+    """Get the current status of the metadata cache"""
+    try:
+        status = get_cache_status()
+        return {
+            "success": True,
+            "cache_status": status
+        }
+    except Exception as e:
+        logger.error(f"Error getting cache status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting cache status: {str(e)}")
+
+@app.post("/cache/refresh")
+async def refresh_cache_endpoint():
+    """Force refresh of the metadata cache using current S3 metadata"""
+    try:
+        # Load current metadata from S3
+        metadata = load_metadata_from_s3()
+        if not metadata:
+            raise HTTPException(status_code=500, detail="Failed to load metadata from S3")
+        
+        # Refresh the cache
+        success = refresh_metadata_cache(metadata)
+        
+        if success:
+            return {
+                "success": True,
+                "message": "Cache refreshed successfully",
+                "cache_status": get_cache_status()
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Failed to refresh cache",
+                "cache_status": get_cache_status()
+            }
+    except Exception as e:
+        logger.error(f"Error refreshing cache: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error refreshing cache: {str(e)}")

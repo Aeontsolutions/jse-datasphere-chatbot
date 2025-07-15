@@ -1,0 +1,501 @@
+symbol,company,year,item_name,standard_item,item,unit_multiplier
+FESCO,Future Energy Source Company Limited,2024,EPS,EPS,0.16,1
+DOLLA,Dolla Financial Services Limited,2022,Return on Asset,ROA,0.19,1
+DOLLA,Dolla Financial Services Limited,2021,Return on Asset,ROA,0.19,1
+DOLLA,Dolla Financial Services Limited,2024,Return on Assets,ROA,0.13,1
+DOLLA,Dolla Financial Services Limited,2023,Return on Assets,ROA,0.17,1
+ELITE,Elite Diagnostic Limited,2024,Return on Assets,ROA,0.024,1
+DOLLA,Dolla Financial Services Limited,2021,Return on Equity,ROE,0.53,1
+DOLLA,Dolla Financial Services Limited,2022,Return on Equity,ROE,0.57,1
+DOLLA,Dolla Financial Services Limited,2024,Return on Equity,ROE,0.45,1
+DOLLA,Dolla Financial Services Limited,2023,Return on Equity,ROE,0.52,1
+ELITE,Elite Diagnostic Limited,2024,Return on Equity,ROE,0.053,1
+ELITE,Elite Diagnostic Limited,2024,Current Ratio,current_ratio,0.78,1
+FESCO,Future Energy Source Company Limited,2024,Current Ratio,current_ratio,1.11,1
+ELITE,Elite Diagnostic Limited,2024,Debt to Equity Ratio,debt_to_equity_ratio,1.06,1
+DOLLA,Dolla Financial Services Limited,2022,Efficiency Ratio,efficiency_ratio,0.49,1
+DOLLA,Dolla Financial Services Limited,2021,Efficiency Ratio,efficiency_ratio,0.39,1
+ELITE,Elite Diagnostic Limited,2024,Gross Profit,gross_profit,587.6,1000000
+ELITE,Elite Diagnostic Limited,2023,Gross Profit,gross_profit,521.3,1000000
+ELITE,Elite Diagnostic Limited,2022,Gross Profit,gross_profit,432.3,1000000
+ELITE,Elite Diagnostic Limited,2021,Gross Profit,gross_profit,328.3,1000000
+ELITE,Elite Diagnostic Limited,2019,Gross Profit,gross_profit,278.6,1000000
+ELITE,Elite Diagnostic Limited,2015,Gross Profit,gross_profit,86.9,1000000
+ELITE,Elite Diagnostic Limited,2016,Gross Profit,gross_profit,121.9,1000000
+ELITE,Elite Diagnostic Limited,2018,Gross Profit,gross_profit,181.0,1000000
+ELITE,Elite Diagnostic Limited,2017,Gross Profit,gross_profit,175.7,1000000
+ELITE,Elite Diagnostic Limited,2020,Gross Profit,gross_profit,278.3,1000000
+FESCO,Future Energy Source Company Limited,2024,Gross Profit,gross_profit,1387005451.0,1
+JETCON,Jetcon Corporation Limited,2024,Gross Profit,gross_profit,21483.0,1000
+ELITE,Elite Diagnostic Limited,2024,Gross Profit Margin,gross_profit_margin,0.716,1
+ELITE,Elite Diagnostic Limited,2023,Gross Profit Margin,gross_profit_margin,0.69,1
+FESCO,Future Energy Source Company Limited,2024,Gross Profit Margin,gross_profit_margin,0.0484,1
+ELITE,Elite Diagnostic Limited,2021,Net Profit,net_profit,1.9,1000000
+ELITE,Elite Diagnostic Limited,2024,Net Profit,net_profit,26.1,1000000
+ELITE,Elite Diagnostic Limited,2022,Net Profit,net_profit,48.7,1000000
+ELITE,Elite Diagnostic Limited,2023,Net Profit,net_profit,13.6,1000000
+ELITE,Elite Diagnostic Limited,2019,Net Profit,net_profit,51.8,1000000
+ELITE,Elite Diagnostic Limited,2015,Net Profit,net_profit,0.5,1000000
+ELITE,Elite Diagnostic Limited,2017,Net Profit,net_profit,44.2,1000000
+ELITE,Elite Diagnostic Limited,2018,Net Profit,net_profit,44.9,1000000
+ELITE,Elite Diagnostic Limited,2016,Net Profit,net_profit,28.8,1000000
+ELITE,Elite Diagnostic Limited,2020,Net Profit,net_profit,8.6,1000000
+FESCO,Future Energy Source Company Limited,2024,Net Profit,net_profit,410816940.0,1
+GWEST,GWEST Corporation Limited,2017,Net Profit,net_profit,180584000.0,1
+GWEST,GWEST Corporation Limited,2024,Net Profit,net_profit,-13515000.0,1
+GWEST,GWEST Corporation Limited,2023,Net Profit,net_profit,2154000.0,1
+KREMI,Caribbean Cream Limited,0,Net Profit,net_profit,167190.0,1000
+KREMI,Caribbean Cream Limited,0,Net Profit,net_profit,176185.0,1000
+KREMI,Caribbean Cream Limited,0,Net Profit,net_profit,89759.0,1000
+KREMI,Caribbean Cream Limited,2024,Net Profit,net_profit,36739.0,1000
+FESCO,Future Energy Source Company Limited,2024,Net Profit Margin,net_profit_margin,0.0143,1
+DOLLA,Dolla Financial Services Limited,2022,Net Interest Income,none,660910.0,1
+DOLLA,Dolla Financial Services Limited,2021,Cash and Cash Equivalents,none,65587.0,1
+DOLLA,Dolla Financial Services Limited,2022,Investing Cash Flow,none,-79168.0,1
+DOLLA,Dolla Financial Services Limited,2022,Financial Investments,none,63431.0,1
+DOLLA,Dolla Financial Services Limited,2021,Total Loans,none,793244.0,1
+DOLLA,Dolla Financial Services Limited,2022,Cash and Cash Equivalents,none,352935.0,1
+DOLLA,Dolla Financial Services Limited,2021,Net Interest Income,none,325467.0,1
+DOLLA,Dolla Financial Services Limited,2021,Financing Cash Flow,none,317065.0,1
+DOLLA,Dolla Financial Services Limited,2022,Total Loans,none,1797841.0,1
+DOLLA,Dolla Financial Services Limited,2021,Operating Cash Flow,none,-253087.0,1
+DOLLA,Dolla Financial Services Limited,2022,Retained Earnings,none,264228.0,1
+DOLLA,Dolla Financial Services Limited,2021,Retained Earnings,none,75222.0,1
+DOLLA,Dolla Financial Services Limited,2022,Financing Cash Flow,none,114965.0,1
+DOLLA,Dolla Financial Services Limited,2022,Operating Cash Flow,none,255031.0,1
+DOLLA,Dolla Financial Services Limited,2021,Operating Expense,none,153440.0,1
+DOLLA,Dolla Financial Services Limited,2022,Total Income,none,746519.0,1
+DOLLA,Dolla Financial Services Limited,2022,Operating Expense,none,369515.0,1
+DOLLA,Dolla Financial Services Limited,2021,Total Income,none,395275.0,1
+DOLLA,Dolla Financial Services Limited,2023,Operating Cash Flow,none,193345.0,1
+DOLLA,Dolla Financial Services Limited,2023,Operating Expense,none,549961.0,1
+DOLLA,Dolla Financial Services Limited,2024,Operating Cash Flow,none,346345.0,1
+DOLLA,Dolla Financial Services Limited,2024,Net Interest Income,none,1227027.0,1
+DOLLA,Dolla Financial Services Limited,2023,Retained Earnings,none,509320.0,1
+DOLLA,Dolla Financial Services Limited,2024,Total Income,none,1522680.0,1
+DOLLA,Dolla Financial Services Limited,2023,Cash and Deposits,none,325898.0,1
+DOLLA,Dolla Financial Services Limited,2024,Net Loans,none,3995486.0,1
+DOLLA,Dolla Financial Services Limited,2023,Total Income,none,1177254.0,1
+DOLLA,Dolla Financial Services Limited,2024,Retained Earnings,none,662387.0,1
+DOLLA,Dolla Financial Services Limited,2023,Net Loans,none,2451080.0,1
+DOLLA,Dolla Financial Services Limited,2023,Investing Cash Flow,none,-44581.0,1
+DOLLA,Dolla Financial Services Limited,2024,Cash and Deposits,none,355290.0,1
+DOLLA,Dolla Financial Services Limited,2023,Financing Cash Flow,none,-186813.0,1
+DOLLA,Dolla Financial Services Limited,2024,Investing Cash Flow,none,-11776.0,1
+DOLLA,Dolla Financial Services Limited,2024,Financing Cash Flow,none,-283819.0,1
+DOLLA,Dolla Financial Services Limited,2023,Net Interest Income,none,1001596.0,1
+DOLLA,Dolla Financial Services Limited,2024,Operating Expense,none,760182.0,1
+DOLLA,Dolla Financial Services Limited,2023,Retained Earnings,none,509320.0,1
+DOLLA,Dolla Financial Services Limited,2023,Cash and Cash Equivalents,none,325898.0,1
+DOLLA,Dolla Financial Services Limited,2022,Net Interest Income,none,660910.0,1
+DOLLA,Dolla Financial Services Limited,2022,Operating Cash Flow,none,255031.0,1
+DOLLA,Dolla Financial Services Limited,2023,Operating Cash Flow,none,193345.0,1
+DOLLA,Dolla Financial Services Limited,2023,Net Interest Income,none,1001596.0,1
+DOLLA,Dolla Financial Services Limited,2022,Retained Earnings,none,255351.0,1
+DOLLA,Dolla Financial Services Limited,2022,Cash and Cash Equivalents,none,352935.0,1
+DOLLA,Dolla Financial Services Limited,2023,Operating Expense,none,549961.0,1
+DOLLA,Dolla Financial Services Limited,2023,Net Loans,none,2451080.0,1
+DOLLA,Dolla Financial Services Limited,2022,Total Income,none,746477.0,1
+DOLLA,Dolla Financial Services Limited,2022,Operating Expense,none,369515.0,1
+DOLLA,Dolla Financial Services Limited,2022,Net Loans,none,1725742.0,1
+DOLLA,Dolla Financial Services Limited,2023,Total Income,none,1177254.0,1
+ELITE,Elite Diagnostic Limited,2020,FX Loss,none,0.5,1000000
+ELITE,Elite Diagnostic Limited,2019,FX Loss,none,3.1,1000000
+ELITE,Elite Diagnostic Limited,2019,Stock Price,none,4.0,1
+ELITE,Elite Diagnostic Limited,2020,Stock Price,none,4.49,1
+FESCO,Future Energy Source Company Limited,2024,Current Liabilities,none,1347725859.0,1
+FESCO,Future Energy Source Company Limited,2024,Current Assets,none,1502098290.0,1
+FESCO,Future Energy Source Company Limited,2024,Long Term Debt,none,1541369589.0,1
+GWEST,GWEST Corporation Limited,2017,Current Assets,none,241.7,1000000
+GWEST,GWEST Corporation Limited,2017,Cash and Cash Equivalents,none,84.4,1000000
+GWEST,GWEST Corporation Limited,2018,Net Loss,none,-78.0,1000000
+GWEST,GWEST Corporation Limited,2017,Operating Cash Flow,none,518.7,1000000
+GWEST,GWEST Corporation Limited,2018,Current Assets,none,350.0,1000000
+GWEST,GWEST Corporation Limited,2018,Operating Cash Flow,none,-149.7,1000000
+GWEST,GWEST Corporation Limited,2019,Current Assets,none,224.3,1000000
+GWEST,GWEST Corporation Limited,2018,Cash and Cash Equivalents,none,177.1,1000000
+GWEST,GWEST Corporation Limited,2019,Operating Cash Flow,none,-386.6,1000000
+GWEST,GWEST Corporation Limited,2019,Net Loss,none,-136.0,1000000
+GWEST,GWEST Corporation Limited,2019,Cash and Cash Equivalents,none,10.6,1000000
+GWEST,GWEST Corporation Limited,2020,Operating Cash Flow,none,-73.9,1000000
+GWEST,GWEST Corporation Limited,2020,Financing Cash Flow,none,-73.6,1000000
+GWEST,GWEST Corporation Limited,2020,Net Cash Flow,none,23.1,1000000
+GWEST,GWEST Corporation Limited,2020,Net Loss,none,47.5,1000000
+GWEST,GWEST Corporation Limited,2020,Current Assets,none,366.7,1000000
+GWEST,GWEST Corporation Limited,2019,Cash and Cash Equivalents,none,10.6,1000000
+GWEST,GWEST Corporation Limited,2019,Current Assets,none,224.3,1000000
+GWEST,GWEST Corporation Limited,2019,Net Loss,none,135.9,1000000
+GWEST,GWEST Corporation Limited,2020,Non-current Liabilities,none,806.2,1000000
+GWEST,GWEST Corporation Limited,2019,Net Cash Flow,none,-168.0,1000000
+GWEST,GWEST Corporation Limited,2019,Investing Cash Flow,none,-7.1,1000000
+GWEST,GWEST Corporation Limited,2020,Investing Cash Flow,none,170.5,1000000
+GWEST,GWEST Corporation Limited,2020,Cash and Cash Equivalents,none,36.9,1000000
+GWEST,GWEST Corporation Limited,2019,Non-current Liabilities,none,644.2,1000000
+GWEST,GWEST Corporation Limited,2019,Current Liabilities,none,182.7,1000000
+GWEST,GWEST Corporation Limited,2019,Operating Cash Flow,none,-386.6,1000000
+GWEST,GWEST Corporation Limited,2019,Non-current Assets,none,1318.2,1000000
+GWEST,GWEST Corporation Limited,2019,Financing Cash Flow,none,225.7,1000000
+GWEST,GWEST Corporation Limited,2020,Current Liabilities,none,230.6,1000000
+GWEST,GWEST Corporation Limited,2020,Non-current Assets,none,1338.2,1000000
+GWEST,GWEST Corporation Limited,2021,Current Assets,none,253.0,1000000
+GWEST,GWEST Corporation Limited,2022,Current Assets,none,191.0,1000000
+GWEST,GWEST Corporation Limited,2023,Current Assets,none,163.77,1000000
+GWEST,GWEST Corporation Limited,2023,Operating Cash Flow,none,-19.23,1000000
+GWEST,GWEST Corporation Limited,2024,Current Assets,none,167.72,1000000
+GWEST,GWEST Corporation Limited,2024,Operating Cash Flow,none,38.55,1000000
+GWEST,GWEST Corporation Limited,2020,Current Assets,none,367.0,1000000
+JETCON,Jetcon Corporation Limited,2024,Current Asset Ratio,none,4.4,1
+JETCON,Jetcon Corporation Limited,2024,Pretax Profit,none,-74260.0,1000
+JETCON,Jetcon Corporation Limited,2024,Fixed Assets Net,none,410649.0,1000
+JETCON,Jetcon Corporation Limited,2024,Shares Issued,none,583500.0,1
+JETCON,Jetcon Corporation Limited,2024,Current Liabilities,none,96463.0,1000
+JETCON,Jetcon Corporation Limited,2024,After Tax Profit,none,-74260.0,1000
+JETCON,Jetcon Corporation Limited,2024,Current Assets,none,420797.0,1000
+KREMI,Caribbean Cream Limited,0,Total Borrowings,none,101830.0,1000
+KREMI,Caribbean Cream Limited,0,Total Borrowings,none,81645.0,1000
+KREMI,Caribbean Cream Limited,0,Total Borrowings,none,125456.0,1000
+KREMI,Caribbean Cream Limited,2024,Net Current Assets,none,109548.0,1000
+KREMI,Caribbean Cream Limited,2024,Net Profit Before Tax,none,48288.0,1000
+KREMI,Caribbean Cream Limited,2024,Total Borrowings,none,1179266.0,1000
+KREMI,Caribbean Cream Limited,2024,Property Plant and Equipment,none,1763687.0,1000
+DOLLA,Dolla Financial Services Limited,2022,Profit Before Tax,operating_profit,295640.0,1000
+DOLLA,Dolla Financial Services Limited,2021,Profit Before Tax,operating_profit,167797.0,1000
+DOLLA,Dolla Financial Services Limited,2024,Profit Before Tax,operating_profit,478151000.0,1
+DOLLA,Dolla Financial Services Limited,2023,Profit Before Tax,operating_profit,444882.0,1000
+ELITE,Elite Diagnostic Limited,2023,Operating Profit,operating_profit,64.7,1000000
+ELITE,Elite Diagnostic Limited,2021,Operating Profit,operating_profit,29.5,1000000
+ELITE,Elite Diagnostic Limited,2024,Operating Profit,operating_profit,95.3,1000000
+ELITE,Elite Diagnostic Limited,2022,Operating Profit,operating_profit,82.4,1000000
+FESCO,Future Energy Source Company Limited,2024,Operating Profit,operating_profit,594706099.0,1
+GWEST,GWEST Corporation Limited,2024,Operating Profit,operating_profit,16373000.0,1
+GWEST,GWEST Corporation Limited,2023,Operating Profit,operating_profit,20962000.0,1
+ELITE,Elite Diagnostic Limited,2021,Revenue,revenue,506.9,1000000
+ELITE,Elite Diagnostic Limited,2024,Revenue,revenue,821.3,1000000
+ELITE,Elite Diagnostic Limited,2022,Revenue,revenue,62.2,1000000
+ELITE,Elite Diagnostic Limited,2023,Revenue,revenue,755.3,1000000
+ELITE,Elite Diagnostic Limited,2018,Revenue,revenue,297.8,1000000
+ELITE,Elite Diagnostic Limited,2020,Revenue,revenue,439.8,1000000
+ELITE,Elite Diagnostic Limited,2017,Revenue,revenue,263.1,1000000
+ELITE,Elite Diagnostic Limited,2016,Revenue,revenue,193.5,1000000
+ELITE,Elite Diagnostic Limited,2019,Revenue,revenue,404.8,1000000
+ELITE,Elite Diagnostic Limited,2015,Revenue,revenue,132.7,1000000
+FESCO,Future Energy Source Company Limited,2023,Revenue,revenue,26282165790.0,1
+FESCO,Future Energy Source Company Limited,2024,Revenue,revenue,28680616572.0,1
+GWEST,GWEST Corporation Limited,2017,Revenue,revenue,1008834000.0,1
+GWEST,GWEST Corporation Limited,2018,Revenue,revenue,66389000.0,1
+GWEST,GWEST Corporation Limited,2019,Revenue,revenue,129962000.0,1
+GWEST,GWEST Corporation Limited,2019,Revenue,revenue,130.0,1000000
+GWEST,GWEST Corporation Limited,2020,Revenue,revenue,129.1,1000000
+GWEST,GWEST Corporation Limited,2023,Revenue,revenue,197451000.0,1
+GWEST,GWEST Corporation Limited,2024,Revenue,revenue,277095000.0,1
+INDIES,Indies Pharma Jamaica Limited,2022,Revenue,revenue,937282761.0,1
+INDIES,Indies Pharma Jamaica Limited,2024,Revenue,revenue,1158974105.0,1
+INDIES,Indies Pharma Jamaica Limited,2023,Revenue,revenue,1055458662.0,1
+INDIES,Indies Pharma Jamaica Limited,2017,Revenue,revenue,620349804.0,1
+INDIES,Indies Pharma Jamaica Limited,2020,Revenue,revenue,765948581.0,1
+INDIES,Indies Pharma Jamaica Limited,2019,Revenue,revenue,729451037.0,1
+INDIES,Indies Pharma Jamaica Limited,2016,Revenue,revenue,587005510.0,1
+INDIES,Indies Pharma Jamaica Limited,2018,Revenue,revenue,636174735.0,1
+JETCON,Jetcon Corporation Limited,2024,Revenues,revenue,519876.0,1000
+KREMI,Caribbean Cream Limited,0,Revenue,revenue,1213549.0,1000
+KREMI,Caribbean Cream Limited,0,Revenue,revenue,1373279.0,1000
+KREMI,Caribbean Cream Limited,0,Revenue,revenue,1134933.0,1000
+KREMI,Caribbean Cream Limited,2021,Revenue,revenue,1870188.0,1000
+KREMI,Caribbean Cream Limited,2024,Revenue,revenue,2642970.0,1000
+KREMI,Caribbean Cream Limited,2020,Revenue,revenue,1706359.0,1000
+KREMI,Caribbean Cream Limited,2023,Revenue,revenue,2506260.0,1000
+KREMI,Caribbean Cream Limited,2019,Revenue,revenue,1552905.0,1000
+KREMI,Caribbean Cream Limited,2022,Revenue,revenue,2085409.0,1000
+KREMI,Caribbean Cream Limited,2018,Revenue,revenue,1373279.0,1000
+DOLLA,Dolla Financial Services Limited,2021,Total Assets,total_assets,861094.0,1000
+DOLLA,Dolla Financial Services Limited,2022,Total Assets,total_assets,2244747.0,1000
+DOLLA,Dolla Financial Services Limited,2024,Total Assets,total_assets,4583962.0,1000
+DOLLA,Dolla Financial Services Limited,2023,Total Assets,total_assets,2988023.0,1000
+ELITE,Elite Diagnostic Limited,2018,Total Assets,total_assets,591.8,1000000
+ELITE,Elite Diagnostic Limited,2015,Total Assets,total_assets,233.9,1000000
+ELITE,Elite Diagnostic Limited,2020,Total Assets,total_assets,690.6,1000000
+ELITE,Elite Diagnostic Limited,2016,Total Assets,total_assets,260.7,1000000
+ELITE,Elite Diagnostic Limited,2019,Total Assets,total_assets,664.1,1000000
+ELITE,Elite Diagnostic Limited,2017,Total Assets,total_assets,271.0,1000000
+FESCO,Future Energy Source Company Limited,2024,Total Assets,total_assets,5315120882.0,1
+GWEST,GWEST Corporation Limited,2018,Total Assets,total_assets,1656832000.0,1
+GWEST,GWEST Corporation Limited,2019,Total Assets,total_assets,1542450000.0,1
+GWEST,GWEST Corporation Limited,2017,Total Assets,total_assets,1501450000.0,1
+GWEST,GWEST Corporation Limited,2020,Total Assets,total_assets,1704.9,1000000
+GWEST,GWEST Corporation Limited,2019,Total Assets,total_assets,1542.5,1000000
+GWEST,GWEST Corporation Limited,2024,Total Assets,total_assets,1786347000.0,1
+GWEST,GWEST Corporation Limited,2023,Total Assets,total_assets,1441844000.0,1
+INDIES,Indies Pharma Jamaica Limited,2024,Total Assets,total_assets,2307194373.0,1
+INDIES,Indies Pharma Jamaica Limited,2023,Total Assets,total_assets,2240194429.0,1
+INDIES,Indies Pharma Jamaica Limited,2022,Total Assets,total_assets,2048228741.0,1
+INDIES,Indies Pharma Jamaica Limited,2017,Total Assets,total_assets,825492150.0,1
+INDIES,Indies Pharma Jamaica Limited,2020,Total Assets,total_assets,1781957626.0,1
+INDIES,Indies Pharma Jamaica Limited,2016,Total Assets,total_assets,504622179.0,1
+INDIES,Indies Pharma Jamaica Limited,2019,Total Assets,total_assets,770905886.0,1
+INDIES,Indies Pharma Jamaica Limited,2018,Total Assets,total_assets,851259572.0,1
+KREMI,Caribbean Cream Limited,2024,Total Assets,total_assets,2523447.0,1000
+DOLLA,Dolla Financial Services Limited,2022,Shareholders Equity,total_equity,720981.0,1000
+DOLLA,Dolla Financial Services Limited,2021,Shareholders Equity,total_equity,314984.0,1000
+DOLLA,Dolla Financial Services Limited,2024,Shareholders Equity,total_equity,1126806000.0,1
+DOLLA,Dolla Financial Services Limited,2023,Shareholders Equity,total_equity,981383.0,1000
+FESCO,Future Energy Source Company Limited,2024,Total Equity,total_equity,2257847707.0,1
+GWEST,GWEST Corporation Limited,2017,Total Equity,total_equity,315611000.0,1
+GWEST,GWEST Corporation Limited,2018,Total Equity,total_equity,606636000.0,1
+GWEST,GWEST Corporation Limited,2019,Total Equity,total_equity,715555000.0,1
+GWEST,GWEST Corporation Limited,2020,Shareholders Equity,total_equity,668.1,1000000
+GWEST,GWEST Corporation Limited,2019,Shareholders Equity,total_equity,715.6,1000000
+GWEST,GWEST Corporation Limited,2023,Shareholders Equity,total_equity,716562000.0,1
+GWEST,GWEST Corporation Limited,2024,Shareholders Equity,total_equity,703047000.0,1
+INDIES,Indies Pharma Jamaica Limited,2024,Shareholders Equity,total_equity,1293642183.0,1
+INDIES,Indies Pharma Jamaica Limited,2023,Shareholders Equity,total_equity,1219044091.0,1
+INDIES,Indies Pharma Jamaica Limited,2016,Shareholders Equity,total_equity,265374295.0,1
+INDIES,Indies Pharma Jamaica Limited,2019,Shareholders Equity,total_equity,695231013.0,1
+INDIES,Indies Pharma Jamaica Limited,2020,Shareholders Equity,total_equity,786739173.0,1
+INDIES,Indies Pharma Jamaica Limited,2018,Shareholders Equity,total_equity,668636175.0,1
+INDIES,Indies Pharma Jamaica Limited,2017,Shareholders Equity,total_equity,319992889.0,1
+JETCON,Jetcon Corporation Limited,2024,Shareholders' Equity,total_equity,734984.0,1000
+KREMI,Caribbean Cream Limited,0,Stockholder's Equity,total_equity,413189.0,1000
+KREMI,Caribbean Cream Limited,0,Stockholder's Equity,total_equity,570446.0,1000
+KREMI,Caribbean Cream Limited,0,Stockholder's Equity,total_equity,637491.0,1000
+KREMI,Caribbean Cream Limited,2024,Stockholders Equity,total_equity,862356.0,1000
+DOLLA,Dolla Financial Services Limited,2021,Total Liabilities,total_liabilities,546110.0,1000
+DOLLA,Dolla Financial Services Limited,2022,Total Liabilities,total_liabilities,1523766.0,1000
+DOLLA,Dolla Financial Services Limited,2024,Total Liabilities,total_liabilities,3457156.0,1000
+ELITE,Elite Diagnostic Limited,2017,Total Liabilities,total_liabilities,47.5,1000000
+ELITE,Elite Diagnostic Limited,2019,Total Liabilities,total_liabilities,212.9,1000000
+ELITE,Elite Diagnostic Limited,2020,Total Liabilities,total_liabilities,230.8,1000000
+ELITE,Elite Diagnostic Limited,2016,Total Liabilities,total_liabilities,81.4,1000000
+ELITE,Elite Diagnostic Limited,2018,Total Liabilities,total_liabilities,192.3,1000000
+ELITE,Elite Diagnostic Limited,2015,Total Liabilities,total_liabilities,83.4,1000000
+GWEST,GWEST Corporation Limited,2019,Total Liabilities,total_liabilities,826.9,1000000
+GWEST,GWEST Corporation Limited,2020,Total Liabilities,total_liabilities,1036.8,1000000
+INDIES,Indies Pharma Jamaica Limited,2016,Total Liabilities,total_liabilities,239247884.0,1
+INDIES,Indies Pharma Jamaica Limited,2017,Total Liabilities,total_liabilities,505499261.0,1
+INDIES,Indies Pharma Jamaica Limited,2020,Total Liabilities,total_liabilities,995218453.0,1
+INDIES,Indies Pharma Jamaica Limited,2019,Total Liabilities,total_liabilities,75674873.0,1
+INDIES,Indies Pharma Jamaica Limited,2018,Total Liabilities,total_liabilities,182623397.0,1
+KREMI,Caribbean Cream Limited,2024,Total Liabilities,total_liabilities,1661091.0,1000
+MGL,Mayberry Group Limited,2015,Total Assets,20735714,,1000
+MGL,Mayberry Group Limited,2015,Net Interest Income and Other Revenues,998618,,1000
+MGL,Mayberry Group Limited,2015,Stockholders Equity,6245486,,1000
+MGL,Mayberry Group Limited,2015,Interest Income,890263,,1000
+MGL,Mayberry Group Limited,2015,Net Profit,145460,,1000
+MGL,Mayberry Group Limited,2015,Net Interest Income,345866,,1000
+MJE,Mayberry Jamaican Equities Limited,2018,Total Operating Income,5034,,1000
+MJE,Mayberry Jamaican Equities Limited,2019,Total Operating Income,3884,,1000
+MJE,Mayberry Jamaican Equities Limited,2016,Total Operating Income,2434,,1000
+MJE,Mayberry Jamaican Equities Limited,2015,Net Profit,2817,,1000
+MJE,Mayberry Jamaican Equities Limited,2018,Net Profit,816,,1000
+MJE,Mayberry Jamaican Equities Limited,2017,Total Operating Income,10292,,1000
+MJE,Mayberry Jamaican Equities Limited,2017,Total Assets,77446,,1000
+MJE,Mayberry Jamaican Equities Limited,2019,Net Profit,-1473,,1000
+MJE,Mayberry Jamaican Equities Limited,2017,Net Profit,3120,,1000
+MJE,Mayberry Jamaican Equities Limited,2015,Total Operating Income,2758,,1000
+MJE,Mayberry Jamaican Equities Limited,2016,Total Assets,62653,,1000
+MJE,Mayberry Jamaican Equities Limited,2015,Total Assets,67696,,1000
+MJE,Mayberry Jamaican Equities Limited,2016,Net Profit,1260,,1000
+MJE,Mayberry Jamaican Equities Limited,2018,Total Assets,118668,,1000
+NCBFG,NCB Financial Group Limited,2024,Net Profit,21569527,,1000
+NCBFG,NCB Financial Group Limited,2024,Book Value per Share,66.68,,1
+NCBFG,NCB Financial Group Limited,2023,Net Profit,7713510,,1000
+NCBFG,NCB Financial Group Limited,2023,Total Assets,2199090398,,1000
+NCBFG,NCB Financial Group Limited,2024,Total Assets,2316010845,,1000
+PJAM,Pan Jamaica Group Limited,2024,Total Borrowings,24357063,,1000
+PJAM,Pan Jamaica Group Limited,2024,Total Assets,143645538,,1000
+PJAM,Pan Jamaica Group Limited,2024,Dividends Paid,732476,,1000
+PJAM,Pan Jamaica Group Limited,2024,Retained Earnings,39377970,,1000
+PJAM,Pan Jamaica Group Limited,2024,Stockholders' Equity,78941566,,1000
+PJAM,Pan Jamaica Group Limited,2024,Cash and Cash Equivalents,17445667,,1000
+PJAM,Pan Jamaica Group Limited,2024,Net Profit,4578580,,1000
+PJX,Portland JSX Limited,2024,Net Profit,-7242840,,1
+PJX,Portland JSX Limited,2023,Shareholders' Equity Brought Forward,32233851,,1
+PJX,Portland JSX Limited,2024,Total Shareholders' Equity,24025007,,1
+PJX,Portland JSX Limited,2022,Net Profit,4277269,,1
+PJX,Portland JSX Limited,2023,Retained Earnings,5584894,,1
+PJX,Portland JSX Limited,2024,Shareholders' Equity Brought Forward,31421769,,1
+PJX,Portland JSX Limited,2024,Retained Earnings,-1657946,,1
+PJX,Portland JSX Limited,2024,Fair Value Gains,-5992864,,1
+PJX,Portland JSX Limited,2024,Share Capital,25682953,,1
+PJX,Portland JSX Limited,2023,Net Profit,-812082,,1
+PROVEN,Proven Group Limited,2024,Operating Revenue,50215,,1000
+PROVEN,Proven Group Limited,2024,Total Assets,1102551,,1000
+PROVEN,Proven Group Limited,2024,Shareholders' Equity,108546,,1000
+PROVEN,Proven Group Limited,2023,Operating Revenue,45971,,1000
+PROVEN,Proven Group Limited,2023,Total Assets,1026303,,1000
+QWI,QWI Investments Limited,2020,Net Income,-394323,,1000
+QWI,QWI Investments Limited,2022,Total Equity,1729975,,1000
+QWI,QWI Investments Limited,2023,Jamaican Quoted Equities,1490154,,1000
+QWI,QWI Investments Limited,2021,Total Equity,1827156,,1000
+QWI,QWI Investments Limited,2024,Jamaican Quoted Equities,1416900,,1000
+QWI,QWI Investments Limited,2024,Net Income,125958,,1000
+QWI,QWI Investments Limited,2021,Jamaican Quoted Equities,1707256,,1000
+QWI,QWI Investments Limited,2020,Total Equity,1477390,,1000
+QWI,QWI Investments Limited,2020,Total Assets,1685976,,1000
+QWI,QWI Investments Limited,2022,Total Assets,2131718,,1000
+QWI,QWI Investments Limited,2024,Total Equity,1811815,,1000
+QWI,QWI Investments Limited,2024,Total Assets,2237381,,1000
+QWI,QWI Investments Limited,2023,Total Equity,1685856,,1000
+QWI,QWI Investments Limited,2021,Total Assets,2313053,,1000
+QWI,QWI Investments Limited,2020,Jamaican Quoted Equities,1211575,,1000
+QWI,QWI Investments Limited,2022,Net Income,-49405,,1000
+QWI,QWI Investments Limited,2023,Net Income,-44119,,1000
+QWI,QWI Investments Limited,2022,Jamaican Quoted Equities,1637917,,1000
+QWI,QWI Investments Limited,2021,Net Income,349765,,1000
+QWI,QWI Investments Limited,2023,Total Assets,2024756,,1000
+RJR,Radio Jamaica Limited,2016,Revenue,2307,,1000000
+RJR,Radio Jamaica Limited,2018,Revenue,5046,,1000000
+RJR,Radio Jamaica Limited,2019,Revenue,5483,,1000000
+RJR,Radio Jamaica Limited,2020,Net Profit,38,,1000000
+RJR,Radio Jamaica Limited,2020,Revenue,5593,,1000000
+RJR,Radio Jamaica Limited,2019,Net Profit,-22,,1000000
+SELECTF,Sagicor Select Funds Limited - Financial,2024,Net Income,-9011,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2024,Market Capitalization,2346000,,1
+SELECTF,Sagicor Select Funds Limited - Financial,2023,Shareholders Equity,3012456,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2023,Market Capitalization,1989000,,1
+SELECTF,Sagicor Select Funds Limited - Financial,2023,Total Assets,3050215,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2022,Net Income,-479696,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2023,Net Income,-523709,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2024,Total Assets,3028549,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2024,Shareholders Equity,3003445,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2022,Total Assets,3623198,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2020,Net Income,-1582556,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2021,Net Income,-148514,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2024,Dividend Income,87950,,1000
+SELECTF,Sagicor Select Funds Limited - Financial,2023,Dividend Income,63390,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2021,Net Income,866777,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2022,Total Assets,4030684,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2022,Net Income,20295,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2024,Net Income,748396,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2021,Total Assets,4082175,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2024,Total Assets,4851508,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2020,Net Income,-677585,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2022,Shareholders Equity,4009588,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2023,Net Income,191046,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2023,Shareholders Equity,4078884,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2020,Shareholders Equity,3266402,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2020,Total Assets,3275872,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2023,Total Assets,4103285,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2024,Shareholders Equity,4827280,,1000
+SELECTMD,Sagicor Select Funds Limited - Manufacturing and Distribution,2021,Shareholders Equity,4063717,,1000
+SEP,Seprod Limited,2024,Revenue,133608893,,1000
+SEP,Seprod Limited,2023,Revenue,112149457,,1000
+SEP,Seprod Limited,2022,Capital_Expenditure,8080849,,1
+SEP,Seprod Limited,2024,Operating_Profit,8985769,,1000
+SEP,Seprod Limited,2024,Capital_Expenditure,6780118,,1
+SEP,Seprod Limited,2023,Capital_Expenditure,2692513,,1
+SEP,Seprod Limited,2020,Capital_Expenditure,871959,,1
+SEP,Seprod Limited,2021,Capital_Expenditure,1695325,,1
+SEP,Seprod Limited,2023,Operating_Profit,8695095,,1000
+SGJ,Scotia Group Limited,2024,Net Profit,20157791,,1000
+SGJ,Scotia Group Limited,2023,Total Assets,664736962,,1000
+SGJ,Scotia Group Limited,2023,Stockholders Equity,126548087,,1000
+SGJ,Scotia Group Limited,2024,Stockholders Equity,138469577,,1000
+SGJ,Scotia Group Limited,2023,Net Profit,17228629,,1000
+SGJ,Scotia Group Limited,2024,Total Assets,705016705,,1000
+SJ,Sagicor Group Jamaica Limited,2023,Net Profit,14368,,1000000
+SJ,Sagicor Group Jamaica Limited,2023,Shareholders Equity,99779,,1000000
+SJ,Sagicor Group Jamaica Limited,2022,Total Revenue,62185,,1000000
+SJ,Sagicor Group Jamaica Limited,2023,Total Revenue,100204,,1000000
+SJ,Sagicor Group Jamaica Limited,2024,Total Assets,597795,,1000000
+SJ,Sagicor Group Jamaica Limited,2024,Shareholders Equity,102167,,1000000
+SJ,Sagicor Group Jamaica Limited,2024,Total Revenue,111849,,1000000
+SJ,Sagicor Group Jamaica Limited,2024,Net Profit,9238,,1000000
+SJ,Sagicor Group Jamaica Limited,2023,Total Assets,560649,,1000000
+SML,Stanley Motta Limited,2019,Net Operating Income,351244,,1000
+SML,Stanley Motta Limited,2021,Investment Property,6169094,,1000
+SML,Stanley Motta Limited,2018,Investment Property,4969316,,1000
+SML,Stanley Motta Limited,2022,Net Operating Income,331288,,1000
+SML,Stanley Motta Limited,2022,Investment Property,6806231,,1000
+SML,Stanley Motta Limited,2020,Investment Property,5480128,,1000
+SML,Stanley Motta Limited,2023,Net Operating Income,345975,,1000
+SML,Stanley Motta Limited,2023,Revenue,527454,,1000
+SML,Stanley Motta Limited,2018,Revenue,269763,,1000
+SML,Stanley Motta Limited,2020,Net Operating Income,309953,,1000
+SML,Stanley Motta Limited,2020,Revenue,458177,,1000
+SML,Stanley Motta Limited,2021,Revenue,492620,,1000
+SML,Stanley Motta Limited,2024,Investment Property,11138771,,1000
+SML,Stanley Motta Limited,2022,Revenue,499370,,1000
+SML,Stanley Motta Limited,2018,Net Operating Income,156589,,1000
+SML,Stanley Motta Limited,2023,Investment Property,9552709,,1000
+SML,Stanley Motta Limited,2019,Investment Property,4794152,,1000
+SML,Stanley Motta Limited,2021,Net Operating Income,352176,,1000
+SML,Stanley Motta Limited,2024,Revenue,564106,,1000
+SML,Stanley Motta Limited,2024,Net Operating Income,367892,,1000
+SML,Stanley Motta Limited,2019,Revenue,419950,,1000
+SVL,Supreme Ventures Limited,2019,Working Capital,2253657,,1000
+SVL,Supreme Ventures Limited,2017,Gross Ticket Sales,56164724,,1000
+SVL,Supreme Ventures Limited,2019,Gross Ticket Sales,73092357,,1000
+SVL,Supreme Ventures Limited,2019,Cash and Cash Equivalents,3592465,,1000
+SVL,Supreme Ventures Limited,2019,Book Value per Share,1.4,,1
+SVL,Supreme Ventures Limited,2015,Gross Ticket Sales,43847020,,1000
+SVL,Supreme Ventures Limited,2016,Gross Ticket Sales,44921339,,1000
+SVL,Supreme Ventures Limited,2018,Gross Ticket Sales,62960996,,1000
+SVL,Supreme Ventures Limited,2019,Fixed odd wagering income,15226809,,1
+SVL,Supreme Ventures Limited,2020,Fixed odd wagering income,16513756,,1
+SVL,Supreme Ventures Limited,2018,Fixed odd wagering income,13451851,,1
+SVL,Supreme Ventures Limited,2016,Revenue - Non-fixed odd wagering,11489076,,1
+SVL,Supreme Ventures Limited,2020,Revenue - Non-fixed odd wagering,22846440,,1
+SVL,Supreme Ventures Limited,2017,Revenue - Non-fixed odd wagering,17755425,,1
+SVL,Supreme Ventures Limited,2019,Revenue - Non-fixed odd wagering,23289501,,1
+SVL,Supreme Ventures Limited,2016,Fixed odd wagering income,10166014,,1
+SVL,Supreme Ventures Limited,2017,Fixed odd wagering income,11925402,,1
+SVL,Supreme Ventures Limited,2018,Revenue - Non-fixed odd wagering,19484179,,1
+SVL,Supreme Ventures Limited,2020,Total Assets,15577810,,1000
+SVL,Supreme Ventures Limited,2023,Total Assets,20289808,,1000
+SVL,Supreme Ventures Limited,2024,Net Profit,1775978,,1000
+SVL,Supreme Ventures Limited,2022,Net Profit,3078050,,1000
+SVL,Supreme Ventures Limited,2023,Net Profit,2441701,,1000
+SVL,Supreme Ventures Limited,2022,Total Assets,18373470,,1000
+SVL,Supreme Ventures Limited,2020,Net Profit,2420947,,1000
+SVL,Supreme Ventures Limited,2021,Total Assets,17234548,,1000
+SVL,Supreme Ventures Limited,2024,Total Assets,21049202,,1000
+SVL,Supreme Ventures Limited,2021,Net Profit,2325731,,1000
+VMIL,VM Investments Limited,2023,Total Assets,29506794,,1000
+VMIL,VM Investments Limited,2024,Total Assets,30455151,,1000
+VMIL,VM Investments Limited,2024,Net Profit,555722,,1000
+VMIL,VM Investments Limited,2024,Cash and Cash Equivalents,1469290,,1000
+VMIL,VM Investments Limited,2024,Book Value Per Share,3.08,,1
+VMIL,VM Investments Limited,2023,Net Profit,198844,,1000
+WIG,Wigton Energy Limited,2020,Sales,2416753,,1000
+WIG,Wigton Energy Limited,2024,Operating Profit,897687,,1000
+WIG,Wigton Energy Limited,2024,Net Profit,839021,,1000
+WIG,Wigton Energy Limited,2023,Cash and Cash Equivalents,3822730,,1000
+WIG,Wigton Energy Limited,2023,Net Profit,308645,,1000
+WIG,Wigton Energy Limited,2023,Total Equity,4429209,,1000
+WIG,Wigton Energy Limited,2024,Cash and Cash Equivalents,3781202,,1000
+WIG,Wigton Energy Limited,2022,Sales,2049232,,1000
+WIG,Wigton Energy Limited,2023,Operating Profit,1065345,,1000
+WIG,Wigton Energy Limited,2024,Sales,2057181,,1000
+WIG,Wigton Energy Limited,2024,Total Equity,5203266,,1000
+WIG,Wigton Energy Limited,2021,Sales,2592054,,1000
+WIG,Wigton Energy Limited,2023,Sales,2218435,,1000
+WISYNCO,Wisynco Group Limited,2021,Revenue,31816430,,1000
+WISYNCO,Wisynco Group Limited,2020,Net Profit,2802403,,1000
+WISYNCO,Wisynco Group Limited,2024,Revenue,54269846,,1000
+WISYNCO,Wisynco Group Limited,2020,Revenue,32170426,,1000
+WISYNCO,Wisynco Group Limited,2024,Net Profit,5187366,,1000
+WISYNCO,Wisynco Group Limited,2023,Revenue,48705454,,1000
+WISYNCO,Wisynco Group Limited,2022,Net Profit,4053683,,1000
+WISYNCO,Wisynco Group Limited,2022,Revenue,39045880,,1000
+WISYNCO,Wisynco Group Limited,2023,Net Profit,4922575,,1000
+WISYNCO,Wisynco Group Limited,2021,Net Profit,3072300,,1000
+LASF,Lasco Financial Services Limited,2023,Total Stockholder's Equity,nan,2110031.0,1000
+LASF,Lasco Financial Services Limited,2022,Total Stockholder's Equity,nan,1962197.0,1000
+LASF,Lasco Financial Services Limited,2024,Total Stockholder's Equity,nan,2272005.0,1000
+PTL,Paramount Trading (Jamaica) Limited,2020,Sales Revenue,nan,1515582258.0,1
+PTL,Paramount Trading (Jamaica) Limited,2019,Sales Revenue,nan,1595644995.0,1
+PTL,Paramount Trading (Jamaica) Limited,2017,Sales Revenue,nan,1155871702.0,1
+PTL,Paramount Trading (Jamaica) Limited,2021,Sales Revenue,nan,1437596767.0,1
+PTL,Paramount Trading (Jamaica) Limited,2018,Sales Revenue,nan,1398409815.0,1
+PTL,Paramount Trading (Jamaica) Limited,2024,Sales Revenue,nan,1616024487.0,1
+PTL,Paramount Trading (Jamaica) Limited,2023,Sales Revenue,nan,2463873384.0,1
+PTL,Paramount Trading (Jamaica) Limited,2022,Sales Revenue,nan,1716938666.0,1
+138SL,138 Student Living Jamaica Limited,2022,Net Profit,net_profit,318362.0,1000
+138SL,138 Student Living Jamaica Limited,2021,Net Profit,net_profit,221279.0,1000
+138SL,138 Student Living Jamaica Limited,2023,Net Profit,net_profit,343001.0,1000
+138SL,138 Student Living Jamaica Limited,2024,Net Profit,net_profit,344799.0,1000
+138SL,138 Student Living Jamaica Limited,2020,Net Profit,net_profit,251726.0,1000
+ASBH,A.S. Bryden and Sons Holdings Limited,2023,Net Profit Attributable to Owners,net_profit,128766.0,1000
+ASBH,A.S. Bryden and Sons Holdings Limited,2024,Net Profit Attributable to Owners,net_profit,53726.0,1000
+BIL,Barita Investments Limited,2016,Net Profit,net_profit,207216.0,1000
+BIL,Barita Investments Limited,2019,Net Profit,net_profit,1712781.0,1000

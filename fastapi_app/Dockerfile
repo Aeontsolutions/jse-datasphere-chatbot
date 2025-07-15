@@ -1,7 +1,7 @@
 # Use Python 3.11 as base image
 FROM python:3.11-slim
 
-# Set working directory
+# Set working directory to project root
 WORKDIR /app
 
 # Set environment variables
@@ -9,7 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000 \
     HOST=0.0.0.0 \
-    CHROMA_PERSIST_DIRECTORY=/app/chroma_db
+    CHROMA_PERSIST_DIRECTORY=/app/chroma_db \
+    PYTHONPATH=/app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -18,19 +19,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file
-COPY requirements.txt .
+COPY requirements.txt ./requirements.txt
 
-# Copy companies.json
-COPY ./companies.json ./companies.json
+# Copy companies.json file
+COPY companies.json ./companies.json
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy the entire project
 COPY . .
 
 # Expose port
 EXPOSE 8000
 
-# Command to run the application
-CMD ["python", "main.py"]
+# Run the FastAPI app using uvicorn with absolute import path
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

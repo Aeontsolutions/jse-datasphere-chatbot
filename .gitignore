@@ -54,6 +54,10 @@ Thumbs.db
 # Chroma DB 
 ./chroma_db/*
 ./chroma/*
+**/chroma_db/
+**/chroma/
+test_chroma/
+**/test_chroma/
 
 summarizer.ipynb
 
@@ -61,3 +65,9 @@ summarizer.ipynb
 fastapi_app/.env
 fastapi_app/copilot/*
 fastapi_app/fastapi_app/*
+
+# Jupyter notebooks
+*.ipynb
+
+#AWS
+ecs-deployer_accessKeys.csv
