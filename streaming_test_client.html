@@ -136,9 +136,9 @@
         <h1>🤖 Jacie Streaming Chat Test</h1>
         
         <div class="endpoint-selection">
-            <button class="btn endpoint-btn active" onclick="selectEndpoint('chat')">Deep Research</button>
-            <button class="btn endpoint-btn" onclick="selectEndpoint('fast_chat')">Fast Chat (Vector DB)</button>
-            <button class="btn endpoint-btn" onclick="selectEndpoint('fast_chat_v2')">Financial Chat V2 (Streaming)</button>
+            <button class="btn endpoint-btn active" onclick="selectEndpoint('chat', true)">Deep Research</button>
+            <!--button class="btn endpoint-btn" onclick="selectEndpoint('fast_chat', true)">Fast Chat (Vector DB)</button-->
+            <button class="btn endpoint-btn" onclick="selectEndpoint('fast_chat_v2', false)">Chat</button>
         </div>
         
         <div class="options">
@@ -200,18 +200,22 @@
 
     <script>
         let currentEndpoint = 'chat';
+        let useStreaming = true;
         let conversationHistory = [];
         let debugMode = false;
         let connectionStartTime = null;
 
-        function selectEndpoint(endpoint) {
+        function selectEndpoint(endpoint, streaming) {
             currentEndpoint = endpoint;
+            useStreaming = streaming;
             
             // Update button states
             document.querySelectorAll('.endpoint-btn').forEach(btn => {
                 btn.classList.remove('active');
             });
             event.target.classList.add('active');
+            
+            logDebug(`🔗 Selected endpoint: ${endpoint} (${streaming ? 'Streaming' : 'Non-Streaming'})`);
         }
 
         async function startStreamingChat() {
@@ -230,15 +234,20 @@
             document.getElementById('sendBtn').disabled = true;
             
             // Reset progress
-            updateProgress('start', 'Starting...', 0);
+            if (useStreaming) {
+                updateProgress('start', 'Starting streaming request...', 0);
+            } else {
+                updateProgress('start', 'Making non-streaming request...', 0);
+            }
             
             // Start timing
             connectionStartTime = Date.now();
             
             // Log request details
-            logDebug(`🚀 Starting streaming chat request`);
+            const requestType = useStreaming ? 'streaming' : 'non-streaming';
+            logDebug(`🚀 Starting ${requestType} chat request`);
             logDebug(`📝 Query: "${query}"`);
-            logDebug(`🔗 Endpoint: ${currentEndpoint}/stream`);
+            logDebug(`🔗 Endpoint: ${currentEndpoint}${useStreaming ? '/stream' : ''}`);
             logDebug(`⚙️ Auto-load: ${autoLoad}, Memory: ${memoryEnabled}`);
             
             // Prepare request data
@@ -249,87 +258,127 @@
                 conversation_history: memoryEnabled ? conversationHistory : null
             };
             
-            // Start streaming
-            const url = `http://localhost:8000/${currentEndpoint}/stream`;
+            // Determine URL based on streaming preference
+            const url = `http://localhost:8000/${currentEndpoint}${useStreaming ? '/stream' : ''}`;
             
-            // Use EventSource-like approach with fetch
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(requestData)
-            });
-            
-            if (!response.ok) {
-                const errorMsg = `HTTP error! status: ${response.status}`;
-                logDebug(`❌ ${errorMsg}`);
-                throw new Error(errorMsg);
-            }
-            
-            logDebug(`✅ Connection established successfully`);
-            document.getElementById('connectionStatus').textContent = 'Connected - Receiving stream...';
-            document.getElementById('connectionStatus').style.color = '#28a745';
-            
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            
-            try {
-                while (true) {
-                    const { done, value } = await reader.read();
-                    
-                    if (done) {
-                        const duration = Date.now() - connectionStartTime;
-                        logDebug(`🏁 Stream completed in ${duration}ms`);
-                        console.log('Stream completed');
-                        break;
-                    }
-                    
-                    // Decode the chunk and add to buffer
-                    const chunk = decoder.decode(value, { stream: true });
-                    buffer += chunk;
-                    
-                    // Process complete lines
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop() || ''; // Keep incomplete line in buffer
-                    
-                    let currentEvent = '';
-                    
-                    for (const line of lines) {
-                        if (line.trim() === '') continue; // Skip empty lines
+                        if (useStreaming) {
+                // Use streaming approach with fetch
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestData)
+                });
+                
+                if (!response.ok) {
+                    const errorMsg = `HTTP error! status: ${response.status}`;
+                    logDebug(`❌ ${errorMsg}`);
+                    throw new Error(errorMsg);
+                }
+                
+                logDebug(`✅ Connection established successfully`);
+                document.getElementById('connectionStatus').textContent = 'Connected - Receiving stream...';
+                document.getElementById('connectionStatus').style.color = '#28a745';
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
                         
-                        if (debugMode) {
-                            console.log('Processing line:', line);
+                        if (done) {
+                            const duration = Date.now() - connectionStartTime;
+                            logDebug(`🏁 Stream completed in ${duration}ms`);
+                            console.log('Stream completed');
+                            break;
                         }
                         
-                        if (line.startsWith('event: ')) {
-                            currentEvent = line.substring(7);
-                            logDebug(`📡 Event: ${currentEvent}`);
-                            if (debugMode) console.log('Found event:', currentEvent);
-                        } else if (line.startsWith('data: ')) {
-                            const data = line.substring(6);
-                            logDebug(`📦 Data: ${data.substring(0, 100)}${data.length > 100 ? '...' : ''}`);
-                            if (debugMode) console.log('Found data:', data);
+                        // Decode the chunk and add to buffer
+                        const chunk = decoder.decode(value, { stream: true });
+                        buffer += chunk;
+                        
+                        // Process complete lines
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+                        
+                        let currentEvent = '';
+                        
+                        for (const line of lines) {
+                            if (line.trim() === '') continue; // Skip empty lines
                             
-                            try {
-                                const parsed = JSON.parse(data);
-                                handleStreamEvent(currentEvent || 'unknown', parsed);
-                            } catch (e) {
-                                logDebug(`⚠️ Parse error: ${e.message}`);
-                                if (debugMode) console.log('Parse error for data:', data, e);
-                                // Ignore parse errors for heartbeats
+                            if (debugMode) {
+                                console.log('Processing line:', line);
+                            }
+                            
+                            if (line.startsWith('event: ')) {
+                                currentEvent = line.substring(7);
+                                logDebug(`📡 Event: ${currentEvent}`);
+                                if (debugMode) console.log('Found event:', currentEvent);
+                            } else if (line.startsWith('data: ')) {
+                                const data = line.substring(6);
+                                logDebug(`📦 Data: ${data.substring(0, 100)}${data.length > 100 ? '...' : ''}`);
+                                if (debugMode) console.log('Found data:', data);
+                                
+                                try {
+                                    const parsed = JSON.parse(data);
+                                    handleStreamEvent(currentEvent || 'unknown', parsed);
+                                } catch (e) {
+                                    logDebug(`⚠️ Parse error: ${e.message}`);
+                                    if (debugMode) console.log('Parse error for data:', data, e);
+                                    // Ignore parse errors for heartbeats
+                                }
                             }
                         }
                     }
+                } catch (error) {
+                    const duration = Date.now() - connectionStartTime;
+                    logDebug(`💥 Stream error after ${duration}ms: ${error.message}`);
+                    console.error('Stream processing error:', error);
+                    showError(`Error: ${error.message}`);
+                } finally {
+                    document.getElementById('sendBtn').disabled = false;
                 }
-            } catch (error) {
-                const duration = Date.now() - connectionStartTime;
-                logDebug(`💥 Stream error after ${duration}ms: ${error.message}`);
-                console.error('Stream processing error:', error);
-                showError(`Error: ${error.message}`);
-            } finally {
-                document.getElementById('sendBtn').disabled = false;
+            } else {
+                // Use non-streaming approach
+                logDebug(`📡 Making non-streaming request to ${url}`);
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestData)
+                });
+                
+                if (!response.ok) {
+                    const errorMsg = `HTTP error! status: ${response.status}`;
+                    logDebug(`❌ ${errorMsg}`);
+                    throw new Error(errorMsg);
+                }
+                
+                logDebug(`✅ Non-streaming request completed successfully`);
+                
+                try {
+                    const result = await response.json();
+                    const duration = Date.now() - connectionStartTime;
+                    logDebug(`🏁 Non-streaming response received in ${duration}ms`);
+                    
+                    // Update progress to show completion
+                    updateProgress('complete', 'Request completed successfully', 100);
+                    
+                    // Show result directly (no streaming events)
+                    showResult(result);
+                } catch (error) {
+                    const duration = Date.now() - connectionStartTime;
+                    logDebug(`💥 Non-streaming error after ${duration}ms: ${error.message}`);
+                    console.error('Non-streaming processing error:', error);
+                    showError(`Error: ${error.message}`);
+                } finally {
+                    document.getElementById('sendBtn').disabled = false;
+                }
             }
         }
         
@@ -460,6 +509,17 @@
                 "Test query with special characters: @#$%^&*()",
                 "Very long query to test how the system handles extended input and whether it properly processes streaming responses with multiple progress updates and detailed information about the financial data processing pipeline"
             ];
+            
+            // Add financial-specific queries for non-streaming endpoint
+            if (currentEndpoint === 'fast_chat_v2' && !useStreaming) {
+                testQueries.push(
+                    "What is the current share price of MTN Group?",
+                    "Show me the quarterly earnings for 2023",
+                    "What are the top 5 companies by market cap?",
+                    "Compare MTN vs Vodacom financial performance",
+                    "What is the P/E ratio for major JSE companies?"
+                );
+            }
             
             const queryInput = document.getElementById('queryInput');
             const randomQuery = testQueries[Math.floor(Math.random() * testQueries.length)];

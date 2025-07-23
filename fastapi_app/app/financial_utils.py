@@ -40,13 +40,29 @@ class FinancialDataManager:
         self.location = os.getenv("BIGQUERY_LOCATION", "US")
         self.metadata: Optional[Dict] = None
         self.model = None
+        self.bq_client = None
+        
+        # Validate required environment variables
+        if not all([self.project_id, self.dataset, self.table]):
+            missing_vars = []
+            if not self.project_id:
+                missing_vars.append("GCP_PROJECT_ID")
+            if not self.dataset:
+                missing_vars.append("BIGQUERY_DATASET")
+            if not self.table:
+                missing_vars.append("BIGQUERY_TABLE")
+            raise ValueError(f"Missing required BigQuery environment variables: {', '.join(missing_vars)}")
+        
         self._initialize_ai_model()
         try:
             self._initialize_bigquery_client()
+            self.load_metadata_from_bigquery()
         except Exception as e:
-            logger.error(f"Failed to initialize BigQuery client: {e}")
+            logger.error(f"Failed to initialize BigQuery client or load metadata: {e}")
             self.bq_client = None
-        self.load_metadata_from_bigquery()
+            self.metadata = None
+            # Re-raise the exception so the main app knows initialization failed
+            raise
 
     def _initialize_bigquery_client(self):
         credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
@@ -90,55 +106,62 @@ class FinancialDataManager:
                 SELECT DISTINCT Company FROM `{self.project_id}.{self.dataset}.{self.table}`
             """
             companies = [get_row_attr(row, 'Company') for row in self.bq_client.query(companies_query).result()]
+            logger.info(f"Loaded {len(companies)} companies from BigQuery")
+            
             # Symbols
             symbols_query = f"""
                 SELECT DISTINCT Symbol FROM `{self.project_id}.{self.dataset}.{self.table}`
             """
             symbols = [get_row_attr(row, 'Symbol') for row in self.bq_client.query(symbols_query).result()]
+            logger.info(f"Loaded {len(symbols)} symbols from BigQuery")
+            
             # Years
             years_query = f"""
                 SELECT DISTINCT CAST(Year AS STRING) as Year FROM `{self.project_id}.{self.dataset}.{self.table}`
             """
             years = [get_row_attr(row, 'Year') for row in self.bq_client.query(years_query).result()]
+            logger.info(f"Loaded {len(years)} years from BigQuery")
+            
             # Standard Items
             items_query = f"""
                 SELECT DISTINCT standard_item FROM `{self.project_id}.{self.dataset}.{self.table}`
             """
             standard_items = [get_row_attr(row, 'standard_item') for row in self.bq_client.query(items_query).result()]
+            logger.info(f"Loaded {len(standard_items)} standard items from BigQuery")
             # Associations
             # company_to_symbol
             c2s_query = f"""
-                SELECT Company, ARRAY_AGG(DISTINCT Symbol) as symbols FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company
+                SELECT Company, ARRAY_AGG(DISTINCT Symbol IGNORE NULLS) as symbols FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company
             """
             company_to_symbol = {get_row_attr(row, 'Company'): get_row_attr(row, 'symbols') for row in self.bq_client.query(c2s_query).result()}
             # symbol_to_company
             s2c_query = f"""
-                SELECT Symbol, ARRAY_AGG(DISTINCT Company) as companies FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Symbol
+                SELECT Symbol, ARRAY_AGG(DISTINCT Company IGNORE NULLS) as companies FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Symbol
             """
             symbol_to_company = {get_row_attr(row, 'Symbol'): get_row_attr(row, 'companies') for row in self.bq_client.query(s2c_query).result()}
             # company_to_years
             c2y_query = f"""
-                SELECT Company, ARRAY_AGG(DISTINCT CAST(Year AS STRING)) as years FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company
+                SELECT Company, ARRAY_AGG(DISTINCT CAST(Year AS STRING) IGNORE NULLS) as years FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company
             """
             company_to_years = {get_row_attr(row, 'Company'): get_row_attr(row, 'years') for row in self.bq_client.query(c2y_query).result()}
             # company_to_items
             c2i_query = f"""
-                SELECT Company, ARRAY_AGG(DISTINCT standard_item) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company
+                SELECT Company, ARRAY_AGG(DISTINCT standard_item IGNORE NULLS) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company
             """
             company_to_items = {get_row_attr(row, 'Company'): get_row_attr(row, 'items') for row in self.bq_client.query(c2i_query).result()}
             # year_to_companies
             y2c_query = f"""
-                SELECT CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT Company) as companies FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Year
+                SELECT CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT Company IGNORE NULLS) as companies FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Year
             """
             year_to_companies = {get_row_attr(row, 'Year'): get_row_attr(row, 'companies') for row in self.bq_client.query(y2c_query).result()}
             # item_to_companies
             i2c_query = f"""
-                SELECT standard_item, ARRAY_AGG(DISTINCT Company) as companies FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY standard_item
+                SELECT standard_item, ARRAY_AGG(DISTINCT Company IGNORE NULLS) as companies FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY standard_item
             """
             item_to_companies = {get_row_attr(row, 'standard_item'): get_row_attr(row, 'companies') for row in self.bq_client.query(i2c_query).result()}
             # company_year_to_items
             cy2i_query = f"""
-                SELECT Company, CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT standard_item) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company, Year
+                SELECT Company, CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT standard_item IGNORE NULLS) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Company, Year
             """
             company_year_to_items = {}
             for row in self.bq_client.query(cy2i_query).result():
@@ -148,7 +171,7 @@ class FinancialDataManager:
                 company_year_to_items.setdefault(company, {})[year] = items
             # symbol_year_to_items
             sy2i_query = f"""
-                SELECT Symbol, CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT standard_item) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Symbol, Year
+                SELECT Symbol, CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT standard_item IGNORE NULLS) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Symbol, Year
             """
             symbol_year_to_items = {}
             for row in self.bq_client.query(sy2i_query).result():
@@ -158,15 +181,23 @@ class FinancialDataManager:
                 symbol_year_to_items.setdefault(symbol, {})[year] = items
             # year_to_items
             y2i_query = f"""
-                SELECT CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT standard_item) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Year
+                SELECT CAST(Year AS STRING) as Year, ARRAY_AGG(DISTINCT standard_item IGNORE NULLS) as items FROM `{self.project_id}.{self.dataset}.{self.table}` GROUP BY Year
             """
             year_to_items = {get_row_attr(row, 'Year'): get_row_attr(row, 'items') for row in self.bq_client.query(y2i_query).result()}
+            # Filter out None values and log some sample data
+            companies_filtered = [c for c in companies if c is not None]
+            symbols_filtered = [s for s in symbols if s is not None]
+            years_filtered = [y for y in years if y is not None]
+            standard_items_filtered = [i for i in standard_items if i is not None]
+            
+            logger.info(f"Filtered data - companies: {len(companies_filtered)}/{len(companies)}, symbols: {len(symbols_filtered)}/{len(symbols)}, years: {len(years_filtered)}/{len(years)}, items: {len(standard_items_filtered)}/{len(standard_items)}")
+            
             # Compose metadata
             self.metadata = {
-                "companies": sorted(companies),
-                "symbols": sorted(symbols),
-                "years": sorted(years),
-                "standard_items": sorted(standard_items),
+                "companies": sorted(companies_filtered),
+                "symbols": sorted(symbols_filtered),
+                "years": sorted(years_filtered),
+                "standard_items": sorted(standard_items_filtered),
                 "associations": {
                     "company_to_symbol": company_to_symbol,
                     "symbol_to_company": symbol_to_company,

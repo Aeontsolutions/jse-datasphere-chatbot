@@ -95,7 +95,10 @@ async def lifespan(app: FastAPI):
         # -----------------------
         try:
             app.state.financial_manager = FinancialDataManager()
-            logger.info("Financial data manager (BigQuery) initialized successfully")
+            if app.state.financial_manager.metadata:
+                logger.info("Financial data manager (BigQuery) initialized successfully with metadata")
+            else:
+                logger.warning("Financial data manager initialized but metadata loading failed")
         except Exception as financial_err:
             logger.error(f"Failed to initialize financial data manager: {financial_err}")
             app.state.financial_manager = None
@@ -175,10 +178,14 @@ async def health_check():
         
         financial_status = "unavailable"
         financial_records = 0
+        financial_metadata = False
         if hasattr(app.state, "financial_manager") and app.state.financial_manager:
             financial_status = "available"
-            if app.state.financial_manager.df is not None:
-                financial_records = len(app.state.financial_manager.df)
+            if app.state.financial_manager.metadata:
+                financial_metadata = True
+                # Count total records from metadata if available
+                if 'companies' in app.state.financial_manager.metadata:
+                    financial_records = len(app.state.financial_manager.metadata['companies'])
 
         return {
             "status": "healthy",
@@ -186,7 +193,8 @@ async def health_check():
             "metadata": metadata_status,
             "financial_data": {
                 "status": financial_status,
-                "records": financial_records
+                "metadata_loaded": financial_metadata,
+                "companies_count": financial_records
             }
         }
     except Exception as e:
