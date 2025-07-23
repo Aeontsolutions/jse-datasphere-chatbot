@@ -108,17 +108,39 @@ def handle_stream_event(event, data):
         print(f"\n🎉 SUCCESS! Response received:")
         print(f"    💬 Response length: {len(data.get('response', ''))} characters")
         
-        docs_loaded = data.get('documents_loaded', [])
-        if docs_loaded:
-            print(f"    📚 Documents loaded: {len(docs_loaded)}")
-            for doc in docs_loaded[:3]:  # Show first 3
-                print(f"       - {doc}")
-            if len(docs_loaded) > 3:
-                print(f"       ... and {len(docs_loaded) - 3} more")
-        
-        selection_msg = data.get('document_selection_message')
-        if selection_msg:
-            print(f"    🎯 Selection: {selection_msg}")
+        # Handle different response types
+        if 'documents_loaded' in data:
+            # Document-based response
+            docs_loaded = data.get('documents_loaded', [])
+            if docs_loaded:
+                print(f"    📚 Documents loaded: {len(docs_loaded)}")
+                for doc in docs_loaded[:3]:  # Show first 3
+                    print(f"       - {doc}")
+                if len(docs_loaded) > 3:
+                    print(f"       ... and {len(docs_loaded) - 3} more")
+            
+            selection_msg = data.get('document_selection_message')
+            if selection_msg:
+                print(f"    🎯 Selection: {selection_msg}")
+        elif 'data_found' in data:
+            # Financial data response
+            print(f"    📊 Data found: {data.get('data_found', False)}")
+            print(f"    📈 Records returned: {data.get('record_count', 0)}")
+            
+            filters = data.get('filters_used', {})
+            if filters:
+                companies = filters.get('companies', [])
+                years = filters.get('years', [])
+                if companies:
+                    print(f"    🏢 Companies: {', '.join(companies)}")
+                if years:
+                    print(f"    📅 Years: {', '.join(years)}")
+            
+            warnings = data.get('warnings', [])
+            if warnings:
+                print(f"    ⚠️  Warnings: {len(warnings)}")
+                for warning in warnings[:2]:  # Show first 2 warnings
+                    print(f"       - {warning}")
             
         # Show first part of response
         response_text = data.get('response', '')
@@ -148,10 +170,11 @@ def main():
     
     print(f"📝 Using query: '{test_query}'")
     
-    # Test both endpoints
+    # Test all streaming endpoints
     endpoints = [
         "/chat/stream",
-        "/fast_chat/stream"
+        "/fast_chat/stream",
+        "/fast_chat_v2/stream"  # New financial streaming endpoint
     ]
     
     for endpoint in endpoints:

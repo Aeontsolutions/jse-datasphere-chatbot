@@ -1,8 +1,11 @@
 import json
 import asyncio
+import logging
 from datetime import datetime
 from typing import AsyncGenerator, Optional, Dict, Any
 from app.models import ProgressUpdate
+
+logger = logging.getLogger(__name__)
 
 class ProgressTracker:
     """
@@ -34,14 +37,17 @@ class ProgressTracker:
         )
         
         await self.updates_queue.put(update)
+        logger.info(f"Emitted progress: {step} - {progress}% - {message}")  # Changed to info level
     
     async def emit_final_result(self, result: Dict[str, Any]):
         """Emit the final result"""
         await self.updates_queue.put({"type": "result", "data": result})
+        logger.info("Emitted final result")
     
     async def emit_error(self, error: str):
         """Emit an error"""
         await self.updates_queue.put({"type": "error", "error": error})
+        logger.error(f"Emitted error: {error}")
     
     async def stream_updates(self) -> AsyncGenerator[str, None]:
         """Generate SSE-formatted updates"""
@@ -57,21 +63,40 @@ class ProgressTracker:
                 
                 if isinstance(update, ProgressUpdate):
                     # Progress update
-                    event_data = update.model_dump_json()
-                    yield f"event: progress\ndata: {event_data}\n\n"
+                    try:
+                        event_data = update.model_dump_json()
+                        logger.info(f"Streaming progress event: {update.step} - {update.progress}%")
+                        yield f"event: progress\ndata: {event_data}\n\n"
+                    except Exception as e:
+                        logger.error(f"Error serializing progress update: {e}")
+                        yield f"event: error\ndata: {json.dumps({'error': 'Failed to serialize progress update'})}\n\n"
+                        break
                 elif isinstance(update, dict):
                     if update.get("type") == "result":
                         # Final result
-                        yield f"event: result\ndata: {json.dumps(update['data'])}\n\n"
+                        try:
+                            yield f"event: result\ndata: {json.dumps(update['data'])}\n\n"
+                        except Exception as e:
+                            logger.error(f"Error serializing final result: {e}")
+                            yield f"event: error\ndata: {json.dumps({'error': 'Failed to serialize final result'})}\n\n"
                         break
                     elif update.get("type") == "error":
                         # Error
-                        yield f"event: error\ndata: {json.dumps({'error': update['error']})}\n\n"
+                        try:
+                            yield f"event: error\ndata: {json.dumps({'error': update['error']})}\n\n"
+                        except Exception as e:
+                            logger.error(f"Error serializing error message: {e}")
+                            yield f"event: error\ndata: {json.dumps({'error': 'Failed to serialize error message'})}\n\n"
                         break
                 
         except Exception as e:
+            logger.error(f"Unexpected error in stream_updates: {e}")
             # Send error and close
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            try:
+                yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            except Exception:
+                # Last resort - send a simple error message
+                yield "event: error\ndata: {\"error\": \"Internal streaming error\"}\n\n"
 
 def format_sse_message(event: str, data: str) -> str:
     """Format a message for Server-Sent Events"""

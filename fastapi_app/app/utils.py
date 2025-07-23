@@ -609,7 +609,7 @@ def auto_load_relevant_documents(s3_client, query, metadata, current_document_te
 def generate_chat_response(query, document_texts, conversation_history=None, auto_load_message=None):
     """Generate chat response using Gemini model"""
     try:
-        model = GenerativeModel("gemini-2.5-pro-preview-05-06")
+        model = GenerativeModel("gemini-2.5-pro")
         
         # Format conversation history if available
         conversation_context = ""

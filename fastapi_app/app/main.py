@@ -195,6 +195,26 @@ async def health_check():
             "error": f"Health check degraded: {str(e)}"
         }
 
+@app.get("/health/stream")
+async def health_stream():
+    """Simple streaming health check to test SSE functionality"""
+    async def generate_health_stream():
+        yield "event: status\ndata: {\"message\": \"Streaming health check started\"}\n\n"
+        await asyncio.sleep(0.1)
+        yield "event: status\ndata: {\"message\": \"Streaming is working correctly\"}\n\n"
+        await asyncio.sleep(0.1)
+        yield "event: complete\ndata: {\"status\": \"healthy\", \"streaming\": \"enabled\"}\n\n"
+    
+    return StreamingResponse(
+        generate_health_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
@@ -310,14 +330,16 @@ async def chat_stream(
             use_fast_mode=False
         )
         
-        # Return streaming response
+        # Return streaming response with proper headers for SSE
         return StreamingResponse(
             tracker.stream_updates(),
-            media_type="text/plain",
+            media_type="text/event-stream",
             headers={
-                "Cache-Control": "no-cache",
+                "Cache-Control": "no-cache, no-transform",
                 "Connection": "keep-alive",
-                "Content-Type": "text/event-stream",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control",
             }
         )
     except Exception as e:
@@ -621,14 +643,16 @@ async def fast_chat_stream(
             use_fast_mode=True
         )
         
-        # Return streaming response
+        # Return streaming response with proper headers for SSE
         return StreamingResponse(
             tracker.stream_updates(),
-            media_type="text/plain",
+            media_type="text/event-stream",
             headers={
-                "Cache-Control": "no-cache",
+                "Cache-Control": "no-cache, no-transform",
                 "Connection": "keep-alive",
-                "Content-Type": "text/event-stream",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control",
             }
         )
     except Exception as e:
@@ -712,6 +736,54 @@ async def fast_chat_v2(
     except Exception as e:
         logger.error(f"Error in fast_chat_v2 endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing financial data query: {str(e)}")
+
+@app.post("/fast_chat_v2/stream")
+async def fast_chat_v2_stream(
+    request: StreamingChatRequest,
+    financial_manager: Any = Depends(get_financial_manager),
+):
+    """
+    Stream financial data query responses with real-time progress updates using Server-Sent Events
+    
+    This endpoint provides the same functionality as /fast_chat_v2 but streams progress updates
+    to the client. It provides real-time updates on:
+    - Natural language query parsing
+    - Data availability validation
+    - Financial database queries
+    - AI response generation
+    
+    The stream will emit 'progress' events with status updates and a final 'result' 
+    event with the complete response.
+    """
+    logger.info(
+        f"/fast_chat_v2/stream called. query='{request.query[:200]}', memory_enabled={request.memory_enabled}"
+    )
+    
+    try:
+        # Import the streaming financial chat processor
+        from app.streaming_financial_chat import process_streaming_financial_chat
+        
+        # Start the streaming financial chat process
+        tracker = await process_streaming_financial_chat(
+            request=request,
+            financial_manager=financial_manager
+        )
+        
+        # Return streaming response with proper headers for SSE
+        return StreamingResponse(
+            tracker.stream_updates(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control",
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in fast_chat_v2 stream endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error starting financial data stream: {str(e)}")
 
 @app.get("/financial/metadata")
 async def get_financial_metadata(

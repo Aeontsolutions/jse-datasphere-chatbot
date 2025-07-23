@@ -114,6 +114,21 @@
         .endpoint-btn.active {
             background: #007bff;
         }
+        .debug-panel {
+            transition: all 0.3s ease;
+        }
+        .debug-panel:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .progress-container.connecting {
+            border-left-color: #ffc107;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -121,8 +136,9 @@
         <h1>🤖 Jacie Streaming Chat Test</h1>
         
         <div class="endpoint-selection">
-            <button class="btn endpoint-btn active" onclick="selectEndpoint('chat')">Traditional Chat</button>
+            <button class="btn endpoint-btn active" onclick="selectEndpoint('chat')">Deep Research</button>
             <button class="btn endpoint-btn" onclick="selectEndpoint('fast_chat')">Fast Chat (Vector DB)</button>
+            <button class="btn endpoint-btn" onclick="selectEndpoint('fast_chat_v2')">Financial Chat V2 (Streaming)</button>
         </div>
         
         <div class="options">
@@ -134,6 +150,10 @@
                 <input type="checkbox" id="memoryEnabled" checked>
                 <label for="memoryEnabled">Enable memory (conversation history)</label>
             </div>
+            <div class="option">
+                <button class="btn" onclick="loadTestQueries()" style="background: #28a745; font-size: 12px; padding: 6px 12px;">Load Test Queries</button>
+                <span style="margin-left: 10px; font-size: 12px; color: #666;">Quick test queries for different scenarios</span>
+            </div>
         </div>
         
         <textarea 
@@ -143,7 +163,7 @@
             rows="3"
         ></textarea>
         
-        <button class="btn" onclick="startStreamingChat()" id="sendBtn">
+        <button class="btn" onclick="startStreamingChat().catch(console.error)" id="sendBtn">
             Send Message
         </button>
         <button class="btn" onclick="clearChat()" style="background: #6c757d;">
@@ -156,6 +176,7 @@
                 <div class="progress-fill" id="progressFill"></div>
             </div>
             <div class="step-info" id="stepInfo">Step: starting</div>
+            <div id="connectionStatus" style="font-size: 12px; color: #666; margin-top: 5px;">Connecting...</div>
         </div>
         
         <div class="response-container hidden" id="responseContainer">
@@ -163,11 +184,25 @@
             <div id="responseText"></div>
             <div id="responseDetails" style="margin-top: 15px; font-size: 14px; color: #666;"></div>
         </div>
+        
+        <!-- Debug Panel for Testing -->
+        <div class="debug-panel" id="debugPanel" style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 6px; border: 1px solid #dee2e6;">
+            <h4 style="margin-top: 0; color: #495057;">🔧 Debug Panel</h4>
+            <div style="margin-bottom: 10px;">
+                <label style="font-weight: 500; margin-right: 10px;">
+                    <input type="checkbox" id="debugMode" onchange="toggleDebugMode()"> Enable Debug Mode
+                </label>
+                <button class="btn" onclick="clearDebugLog()" style="background: #6c757d; font-size: 12px; padding: 6px 12px;">Clear Log</button>
+            </div>
+            <div id="debugLog" style="background: #fff; border: 1px solid #dee2e6; border-radius: 4px; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; display: none;"></div>
+        </div>
     </div>
 
     <script>
         let currentEndpoint = 'chat';
         let conversationHistory = [];
+        let debugMode = false;
+        let connectionStartTime = null;
 
         function selectEndpoint(endpoint) {
             currentEndpoint = endpoint;
@@ -179,7 +214,7 @@
             event.target.classList.add('active');
         }
 
-        function startStreamingChat() {
+        async function startStreamingChat() {
             const query = document.getElementById('queryInput').value.trim();
             if (!query) {
                 alert('Please enter a question');
@@ -197,6 +232,15 @@
             // Reset progress
             updateProgress('start', 'Starting...', 0);
             
+            // Start timing
+            connectionStartTime = Date.now();
+            
+            // Log request details
+            logDebug(`🚀 Starting streaming chat request`);
+            logDebug(`📝 Query: "${query}"`);
+            logDebug(`🔗 Endpoint: ${currentEndpoint}/stream`);
+            logDebug(`⚙️ Auto-load: ${autoLoad}, Memory: ${memoryEnabled}`);
+            
             // Prepare request data
             const requestData = {
                 query: query,
@@ -208,73 +252,118 @@
             // Start streaming
             const url = `http://localhost:8000/${currentEndpoint}/stream`;
             
-            fetch(url, {
+            // Use EventSource-like approach with fetch
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(requestData)
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                
-                function processStream() {
-                    return reader.read().then(({ done, value }) => {
-                        if (done) {
-                            document.getElementById('sendBtn').disabled = false;
-                            return;
-                        }
-                        
-                        const chunk = decoder.decode(value);
-                        const lines = chunk.split('\n');
-                        
-                        for (const line of lines) {
-                            if (line.startsWith('event: ')) {
-                                const event = line.substring(7);
-                                continue;
-                            }
-                            if (line.startsWith('data: ')) {
-                                const data = line.substring(6);
-                                try {
-                                    const parsed = JSON.parse(data);
-                                    handleStreamEvent(event || 'unknown', parsed);
-                                } catch (e) {
-                                    // Ignore parse errors for heartbeats
-                                }
-                            }
-                        }
-                        
-                        return processStream();
-                    });
-                }
-                
-                return processStream();
-            })
-            .catch(error => {
-                console.error('Stream error:', error);
-                showError(`Error: ${error.message}`);
-                document.getElementById('sendBtn').disabled = false;
             });
+            
+            if (!response.ok) {
+                const errorMsg = `HTTP error! status: ${response.status}`;
+                logDebug(`❌ ${errorMsg}`);
+                throw new Error(errorMsg);
+            }
+            
+            logDebug(`✅ Connection established successfully`);
+            document.getElementById('connectionStatus').textContent = 'Connected - Receiving stream...';
+            document.getElementById('connectionStatus').style.color = '#28a745';
+            
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) {
+                        const duration = Date.now() - connectionStartTime;
+                        logDebug(`🏁 Stream completed in ${duration}ms`);
+                        console.log('Stream completed');
+                        break;
+                    }
+                    
+                    // Decode the chunk and add to buffer
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
+                    
+                    // Process complete lines
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || ''; // Keep incomplete line in buffer
+                    
+                    let currentEvent = '';
+                    
+                    for (const line of lines) {
+                        if (line.trim() === '') continue; // Skip empty lines
+                        
+                        if (debugMode) {
+                            console.log('Processing line:', line);
+                        }
+                        
+                        if (line.startsWith('event: ')) {
+                            currentEvent = line.substring(7);
+                            logDebug(`📡 Event: ${currentEvent}`);
+                            if (debugMode) console.log('Found event:', currentEvent);
+                        } else if (line.startsWith('data: ')) {
+                            const data = line.substring(6);
+                            logDebug(`📦 Data: ${data.substring(0, 100)}${data.length > 100 ? '...' : ''}`);
+                            if (debugMode) console.log('Found data:', data);
+                            
+                            try {
+                                const parsed = JSON.parse(data);
+                                handleStreamEvent(currentEvent || 'unknown', parsed);
+                            } catch (e) {
+                                logDebug(`⚠️ Parse error: ${e.message}`);
+                                if (debugMode) console.log('Parse error for data:', data, e);
+                                // Ignore parse errors for heartbeats
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                const duration = Date.now() - connectionStartTime;
+                logDebug(`💥 Stream error after ${duration}ms: ${error.message}`);
+                console.error('Stream processing error:', error);
+                showError(`Error: ${error.message}`);
+            } finally {
+                document.getElementById('sendBtn').disabled = false;
+            }
         }
         
         function handleStreamEvent(event, data) {
+            const duration = Date.now() - connectionStartTime;
+            logDebug(`⏱️ [${duration}ms] Processing ${event} event`);
+            
+            if (debugMode) {
+                console.log('Received SSE event:', event, data);
+            }
+            
             switch (event) {
                 case 'progress':
+                    logDebug(`📊 Progress: ${data.step} - ${data.progress}% - ${data.message}`);
+                    if (debugMode) console.log('Processing progress update:', data.step, data.message, data.progress);
                     updateProgress(data.step, data.message, data.progress, data.details);
                     break;
                 case 'result':
+                    logDebug(`✅ Final result received`);
+                    if (debugMode) console.log('Processing final result');
                     showResult(data);
                     break;
                 case 'error':
+                    logDebug(`❌ Error event: ${data.error}`);
+                    if (debugMode) console.log('Processing error:', data.error);
                     showError(data.error);
                     break;
                 case 'heartbeat':
+                    logDebug(`💓 Heartbeat received`);
                     // Keep connection alive, do nothing
+                    break;
+                default:
+                    logDebug(`❓ Unknown event type: ${event}`);
+                    if (debugMode) console.log('Unknown event type:', event);
                     break;
             }
         }
@@ -335,11 +424,55 @@
             conversationHistory = [];
         }
         
+        // Debug utility functions
+        function toggleDebugMode() {
+            debugMode = document.getElementById('debugMode').checked;
+            const debugLog = document.getElementById('debugLog');
+            debugLog.style.display = debugMode ? 'block' : 'none';
+            
+            if (debugMode) {
+                logDebug('🔧 Debug mode enabled');
+            }
+        }
+        
+        function logDebug(message) {
+            const debugLog = document.getElementById('debugLog');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.style.marginBottom = '2px';
+            logEntry.innerHTML = `<span style="color: #6c757d;">[${timestamp}]</span> ${message}`;
+            debugLog.appendChild(logEntry);
+            debugLog.scrollTop = debugLog.scrollHeight;
+        }
+        
+        function clearDebugLog() {
+            const debugLog = document.getElementById('debugLog');
+            debugLog.innerHTML = '';
+        }
+        
+        function loadTestQueries() {
+            const testQueries = [
+                "What are the main financial highlights for MTN Group?",
+                "Show me the revenue trends for the last 3 years",
+                "What are the key risks mentioned in the annual reports?",
+                "Compare the performance of different sectors",
+                "What is the dividend policy of major companies?",
+                "Test query with special characters: @#$%^&*()",
+                "Very long query to test how the system handles extended input and whether it properly processes streaming responses with multiple progress updates and detailed information about the financial data processing pipeline"
+            ];
+            
+            const queryInput = document.getElementById('queryInput');
+            const randomQuery = testQueries[Math.floor(Math.random() * testQueries.length)];
+            queryInput.value = randomQuery;
+            
+            logDebug(`📝 Loaded test query: "${randomQuery}"`);
+        }
+        
         // Enable Enter key to send message
         document.getElementById('queryInput').addEventListener('keydown', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                startStreamingChat();
+                startStreamingChat().catch(console.error);
             }
         });
     </script>

@@ -61,9 +61,13 @@ async def _process_chat_async(
     
     try:
         await tracker.emit_progress("start", "Starting chat processing...", 5.0)
+        await asyncio.sleep(0.1)  # Give time for the event to be processed
         
+        # Check metadata availability with better error handling
         if not metadata:
-            await tracker.emit_error("Metadata not available. Please check S3 access.")
+            await tracker.emit_progress("error_check", "Checking system configuration...", 10.0)
+            await asyncio.sleep(0.1)
+            await tracker.emit_error("Metadata not available. Please check S3 access and ensure AWS credentials are configured properly.")
             return
         
         if use_fast_mode:
@@ -85,6 +89,7 @@ async def _process_fast_chat(
     """Process chat using vector database (fast mode)"""
     
     await tracker.emit_progress("query_prep", "Preparing search query...", 10.0)
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     # Step 1: Build enhanced query
     retrieval_query = request.query
@@ -95,6 +100,7 @@ async def _process_fast_chat(
         retrieval_query = " ".join(recent_history + [request.query])
     
     await tracker.emit_progress("doc_selection", "Selecting relevant documents...", 25.0)
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     # Step 2: Semantic pre-selection of documents
     auto_load_message: Optional[str] = None
@@ -128,8 +134,10 @@ async def _process_fast_chat(
                 35.0,
                 {"companies": companies, "documents": len(semantic_filenames)}
             )
+            await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     await tracker.emit_progress("vector_search", "Searching vector database...", 50.0)
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     # Step 3: Query ChromaDB
     where_filter = {"filename": {"$in": semantic_filenames}} if semantic_filenames else None
@@ -152,8 +160,10 @@ async def _process_fast_chat(
         65.0,
         {"documents_found": len(sorted_results)}
     )
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     await tracker.emit_progress("ai_generation", "Generating AI response...", 80.0)
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     # Step 4: Generate response
     response_text = qa_bot(
@@ -163,6 +173,7 @@ async def _process_fast_chat(
     )
     
     await tracker.emit_progress("finalizing", "Finalizing response...", 95.0)
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     # Step 5: Update conversation history
     updated_conversation_history = None
@@ -192,6 +203,7 @@ async def _process_fast_chat(
     }
     
     await tracker.emit_progress("complete", "Response generation complete!", 100.0)
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     await tracker.emit_final_result(result)
 
 async def _process_traditional_chat(
@@ -203,30 +215,46 @@ async def _process_traditional_chat(
     """Process chat using traditional S3 document loading"""
     
     await tracker.emit_progress("doc_loading", "Loading relevant documents from S3...", 20.0)
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     # Initialize variables
     document_texts = {}
     document_selection_message = None
     loaded_docs = []
     
-    # Auto-load relevant documents if enabled
-    if request.auto_load_documents:
-        document_texts, document_selection_message, loaded_docs = auto_load_relevant_documents(
-            s3_client,
-            request.query,
-            metadata,
-            {},  # Start with empty document_texts since this is stateless
-            request.conversation_history
-        )
-        
-        await tracker.emit_progress(
-            "doc_loading", 
-            f"Loaded {len(loaded_docs)} documents from S3", 
-            60.0,
-            {"documents_loaded": len(loaded_docs)}
-        )
+    # Check if S3 client is available
+    if not s3_client:
+        await tracker.emit_progress("doc_loading", "S3 client not available, skipping document loading", 30.0)
+        document_selection_message = "S3 client not available - no documents loaded"
+    else:
+        # Auto-load relevant documents if enabled
+        if request.auto_load_documents:
+            try:
+                document_texts, document_selection_message, loaded_docs = auto_load_relevant_documents(
+                    s3_client,
+                    request.query,
+                    metadata,
+                    {},  # Start with empty document_texts since this is stateless
+                    request.conversation_history
+                )
+                
+                await tracker.emit_progress(
+                    "doc_loading", 
+                    f"Loaded {len(loaded_docs)} documents from S3", 
+                    60.0,
+                    {"documents_loaded": len(loaded_docs)}
+                )
+                await asyncio.sleep(0.1)  # Give time for the event to be processed
+            except Exception as e:
+                logger.error(f"Error loading documents from S3: {str(e)}")
+                await tracker.emit_progress("doc_loading", f"Error loading documents: {str(e)}", 30.0)
+                document_selection_message = f"Error loading documents: {str(e)}"
+        else:
+            await tracker.emit_progress("doc_loading", "Document auto-loading disabled", 30.0)
+            document_selection_message = "Document auto-loading was disabled"
     
     await tracker.emit_progress("ai_generation", "Generating AI response...", 80.0)
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     # Generate response
     response_text = generate_chat_response(
@@ -237,6 +265,7 @@ async def _process_traditional_chat(
     )
     
     await tracker.emit_progress("finalizing", "Finalizing response...", 95.0)
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     # Update conversation history if memory is enabled
     updated_conversation_history = None
@@ -259,4 +288,5 @@ async def _process_traditional_chat(
     }
     
     await tracker.emit_progress("complete", "Response generation complete!", 100.0)
+    await asyncio.sleep(0.1)  # Give time for the event to be processed
     await tracker.emit_final_result(result) 

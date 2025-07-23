@@ -225,7 +225,7 @@ elif mode == "Streaming Chat":
     )
     
     if "Financial" in stream_endpoint:
-        endpoint_path = "/fast_chat_v2"  # Note: No streaming version yet, uses regular endpoint
+        endpoint_path = "/fast_chat_v2/stream"  # Now has streaming version
     elif "Traditional" in stream_endpoint:
         endpoint_path = "/chat/stream"
     else:
@@ -299,7 +299,7 @@ elif mode == "Streaming Chat":
                     "memory_enabled": memory_enabled,
                     "conversation_history": st.session_state.stream_chat_history if memory_enabled else None,
                 }
-                api_endpoint = endpoint_path  # No /stream variant for financial endpoint
+                api_endpoint = endpoint_path  # Now uses streaming endpoint
             else:
                 payload = {
                     "query": prompt,
@@ -307,16 +307,63 @@ elif mode == "Streaming Chat":
                     "auto_load_documents": auto_load,
                     "memory_enabled": memory_enabled,
                 }
-                api_endpoint = endpoint_path.replace('/stream', '')  # Use non-streaming endpoint for compatibility
+                api_endpoint = endpoint_path  # Use streaming endpoint
             
-            # Make the actual API call
-            response = requests.post(
-                f"{BASE_URL}{api_endpoint}",
-                json=payload,
-                timeout=300,
-            )
-            response.raise_for_status()
-            result = response.json()
+            # For streaming endpoints, we need to handle the stream differently
+            if "/stream" in api_endpoint:
+                # Make streaming API call
+                response = requests.post(
+                    f"{BASE_URL}{api_endpoint}",
+                    json=payload,
+                    timeout=300,
+                    stream=True,
+                )
+                response.raise_for_status()
+                
+                # Process streaming response
+                current_event = ""
+                buffer = ""
+                
+                for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
+                    if chunk:
+                        buffer += chunk
+                        lines = buffer.split('\n')
+                        
+                        # Process complete lines, keep incomplete line in buffer
+                        buffer = lines[-1] if not lines[-1].endswith('\n') else ""
+                        
+                        for line in lines[:-1] if not lines[-1].endswith('\n') else lines:
+                            line = line.strip()
+                            
+                            if line.startswith('event: '):
+                                current_event = line[7:]
+                            elif line.startswith('data: '):
+                                data_str = line[6:]
+                                if data_str and data_str != "{}":  # Ignore empty heartbeats
+                                    try:
+                                        data = json.loads(data_str)
+                                        if current_event == "progress":
+                                            progress_bar.progress(data.get("progress", 0) / 100)
+                                            status_text.text(data.get("message", ""))
+                                            if data.get("details"):
+                                                details_text.text(f"Details: {data.get('details')}")
+                                        elif current_event == "result":
+                                            result = data
+                                            break
+                                        elif current_event == "error":
+                                            st.error(f"Error: {data.get('error', 'Unknown error')}")
+                                            break
+                                    except json.JSONDecodeError:
+                                        pass
+            else:
+                # Make regular API call
+                response = requests.post(
+                    f"{BASE_URL}{api_endpoint}",
+                    json=payload,
+                    timeout=300,
+                )
+                response.raise_for_status()
+                result = response.json()
             
             # Final progress update
             progress_bar.progress(100)
