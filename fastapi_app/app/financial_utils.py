@@ -328,15 +328,15 @@ class FinancialDataManager:
                     'net profit': 'net_profit',
                     'gross profit': 'gross_profit',
                     'revenue': 'revenue',
-                    'eps': 'EPS',
+                    'eps': 'eps',
                     'profit': 'net_profit',
                     'net profit margin': 'net_profit_margin',
                     'gross profit margin': 'gross_profit_margin',
                     'operating profit': 'operating_profit',
                     'operating income': 'operating_profit',
-                    'return on equity': 'ROE',
-                    'return on asset': 'ROA',
-                    'return on assets': 'ROA',
+                    'return on equity': 'roe',
+                    'return on asset': 'roa',
+                    'return on assets': 'roa',
                     'current ratio': 'current_ratio',
                     'debt to equity ratio': 'debt_to_equity_ratio',
                     'efficiency ratio': 'efficiency_ratio',
@@ -393,6 +393,7 @@ class FinancialDataManager:
         # Normalize for case-insensitive matching
         all_companies = set(self.metadata.get('companies', []))
         all_symbols = set(self.metadata.get('symbols', []))
+        all_standard_items = set(self.metadata.get('standard_items', []))
         company_to_symbol = associations.get('company_to_symbol', {})
         symbol_to_company = associations.get('symbol_to_company', {})
 
@@ -453,6 +454,20 @@ class FinancialDataManager:
             elif result['companies']:
                 result['symbols'] = []
                 logger.error(f"No symbols found for companies: {result['companies']}")
+        
+        # --- Filter standard_items: only keep valid ones (case-insensitive) ---
+        if 'standard_items' in result and result['standard_items']:
+            valid_items = []
+            for item in result['standard_items']:
+                # Accept if exact match (case-insensitive)
+                for s in all_standard_items:
+                    if item.lower() == s.lower():
+                        valid_items.append(s)  # Keep the original case from metadata
+                        break
+            result['standard_items'] = valid_items
+            if len(valid_items) != len(result['standard_items']):
+                logger.warning(f"Some standard_items were not found in metadata")
+        
         return result
     
     def _fallback_parse_query(self, query: str, last_query_data: Optional[Dict] = None) -> FinancialDataFilters:
@@ -544,8 +559,11 @@ class FinancialDataManager:
             query += " AND CAST(Year AS STRING) IN UNNEST(@years)"
             params.append(bigquery.ArrayQueryParameter("years", "STRING", filters.years))
         if filters.standard_items:
-            query += " AND standard_item IN UNNEST(@items)"
-            params.append(bigquery.ArrayQueryParameter("items", "STRING", filters.standard_items))
+            # Use case-insensitive matching for standard_items
+            query += " AND LOWER(standard_item) IN UNNEST(@items)"
+            # Convert all standard_items to lowercase for case-insensitive matching
+            lowercase_items = [item.lower() for item in filters.standard_items]
+            params.append(bigquery.ArrayQueryParameter("items", "STRING", lowercase_items))
         job_config = bigquery.QueryJobConfig()
         if params:
             job_config.query_parameters = params
