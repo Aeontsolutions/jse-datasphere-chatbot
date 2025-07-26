@@ -7,6 +7,8 @@ from app.utils import (
     auto_load_relevant_documents, 
     generate_chat_response,
     semantic_document_selection,
+    auto_load_relevant_documents_async,
+    S3DownloadConfig,
 )
 from app.chroma_utils import (
     query_collection as chroma_query_collection,
@@ -214,7 +216,7 @@ async def _process_traditional_chat(
 ):
     """Process chat using traditional S3 document loading"""
     
-    await tracker.emit_progress("doc_loading", "Loading relevant documents from S3...", 20.0)
+    await tracker.emit_progress("doc_loading", "Initializing robust document download...", 20.0)
     await asyncio.sleep(0.1)  # Give time for the event to be processed
     
     # Initialize variables
@@ -222,33 +224,68 @@ async def _process_traditional_chat(
     document_selection_message = None
     loaded_docs = []
     
-    # Check if S3 client is available
-    if not s3_client:
-        await tracker.emit_progress("doc_loading", "S3 client not available, skipping document loading", 30.0)
-        document_selection_message = "S3 client not available - no documents loaded"
+    # Check if metadata is available for async processing
+    if not metadata:
+        await tracker.emit_progress("doc_loading", "Metadata not available, skipping document loading", 30.0)
+        document_selection_message = "Metadata not available - no documents loaded"
     else:
         # Auto-load relevant documents if enabled
         if request.auto_load_documents:
             try:
-                document_texts, document_selection_message, loaded_docs = auto_load_relevant_documents(
-                    s3_client,
-                    request.query,
-                    metadata,
-                    {},  # Start with empty document_texts since this is stateless
-                    request.conversation_history
+                # Create download configuration for robust downloads
+                download_config = S3DownloadConfig(
+                    max_retries=3,
+                    retry_delay=1.0,
+                    timeout=120.0,
+                    concurrent_downloads=3  # Limit concurrency for streaming
+                )
+                
+                # Create progress callback to emit streaming updates
+                async def download_progress_callback(step: str, message: str):
+                    # Map download steps to progress percentages
+                    progress_map = {
+                        "document_selection_start": 25.0,
+                        "document_selection_complete": 35.0,
+                        "concurrent_download_start": 40.0,
+                        "single_download_start": 45.0,
+                        "download_start": 50.0,
+                        "download_complete": 55.0,
+                        "text_extraction": 60.0,
+                        "extraction_complete": 65.0,
+                        "single_download_complete": 70.0,
+                        "concurrent_download_complete": 75.0,
+                        "documents_already_loaded": 45.0,
+                        "download_failed": 40.0,
+                        "download_error": 40.0,
+                        "metadata_download_start": 30.0,
+                        "metadata_download_complete": 35.0,
+                    }
+                    
+                    progress = progress_map.get(step, 50.0)
+                    await tracker.emit_progress("doc_loading", message, progress)
+                
+                # Use async document loading with progress tracking
+                document_texts, document_selection_message, loaded_docs = await auto_load_relevant_documents_async(
+                    query=request.query,
+                    metadata=metadata,
+                    conversation_history=request.conversation_history,
+                    current_document_texts={},  # Start with empty document_texts since this is stateless
+                    config=download_config,
+                    progress_callback=download_progress_callback
                 )
                 
                 await tracker.emit_progress(
                     "doc_loading", 
-                    f"Loaded {len(loaded_docs)} documents from S3", 
-                    60.0,
-                    {"documents_loaded": len(loaded_docs)}
+                    f"Robustly loaded {len(loaded_docs)} documents using async downloads", 
+                    75.0,
+                    {"documents_loaded": len(loaded_docs), "download_method": "async_concurrent"}
                 )
                 await asyncio.sleep(0.1)  # Give time for the event to be processed
+                
             except Exception as e:
-                logger.error(f"Error loading documents from S3: {str(e)}")
-                await tracker.emit_progress("doc_loading", f"Error loading documents: {str(e)}", 30.0)
-                document_selection_message = f"Error loading documents: {str(e)}"
+                logger.error(f"Error in async document loading: {str(e)}")
+                await tracker.emit_progress("doc_loading", f"Async download error: {str(e)}", 30.0)
+                document_selection_message = f"Error in async document loading: {str(e)}"
         else:
             await tracker.emit_progress("doc_loading", "Document auto-loading disabled", 30.0)
             document_selection_message = "Document auto-loading was disabled"
