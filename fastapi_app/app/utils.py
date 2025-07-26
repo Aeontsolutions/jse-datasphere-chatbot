@@ -196,9 +196,9 @@ def load_metadata_from_s3(s3_client):
 class S3DownloadConfig:
     """Configuration for S3 download operations"""
     def __init__(self,
-                 max_retries: int = 3,
-                 retry_delay: float = 1.0,
-                 max_retry_delay: float = 60.0,
+                 max_retries: int = 2,  # Reduced from 3
+                 retry_delay: float = 0.5,  # Reduced from 1.0
+                 max_retry_delay: float = 10.0,  # Reduced from 60.0
                  timeout: float = 300.0,
                  chunk_size: int = 8192,
                  concurrent_downloads: int = 5):
@@ -338,6 +338,22 @@ async def download_and_extract_from_s3_async(s3_path: str,
             except Exception as e:
                 error_msg = f"Download attempt {attempt + 1} failed: {str(e)}"
                 logger.warning(error_msg)
+                
+                # Fail fast for NoSuchKey errors - retrying won't help
+                if "NoSuchKey" in str(e) or "The specified key does not exist" in str(e):
+                    download_time = time.time() - start_time
+                    final_error = f"File does not exist in S3: {s3_path} - {str(e)}"
+                    logger.error(final_error)
+                    
+                    if progress_callback:
+                        await progress_callback("download_failed", final_error)
+                    
+                    return DownloadResult(
+                        success=False, 
+                        error=final_error,
+                        download_time=download_time,
+                        retry_count=retry_count
+                    )
                 
                 if attempt == config.max_retries - 1:
                     # Final attempt failed
@@ -980,105 +996,57 @@ def semantic_document_selection_llm_fallback(query, metadata, conversation_histo
     Now optimized with Google Gemini context caching to reduce latency from ~20s to ~2-3s.
     """
     try:
-        # Try to get cached model first for faster performance
-        cached_model, using_cache = get_cached_model(metadata)
+        # Fallback to traditional approach if caching fails
+        logger.info("Cache unavailable, using traditional LLM fallback (~20s expected)")
+        model = genai.GenerativeModel("gemini-2.5-flash-lite")
         
-        if using_cache and cached_model:
-            logger.info("Using cached metadata context for LLM fallback (~2-3s expected)")
-            model = cached_model
-            
-            # Format conversation history if available
-            conversation_context = ""
-            if conversation_history and len(conversation_history) > 0:
-                # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
-                recent_history = conversation_history[-10:]
-                conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
-                conversation_context = f"""
-                Previous conversation history:
-                {conversation_context}
-                """
-            
-            # Simplified prompt since metadata is already cached in the model context
-            prompt = f"""
+        # Format metadata in a readable format for the LLM
+        metadata_str = json.dumps(metadata, indent=2)
+        
+        # Format conversation history if available
+        conversation_context = ""
+        if conversation_history and len(conversation_history) > 0:
+            # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
+            recent_history = conversation_history[-10:]
+            conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+            conversation_context = f"""
+            Previous conversation history:
             {conversation_context}
-            
-            Current user question: "{query}"
-            
-            Based on this question and conversation history, select the most relevant documents from the available metadata.
-            
-            For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
-            Consider aliases, abbreviations, or partial references to companies.
-            Consider the full context of the conversation when determining relevance.
-            
-            IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
-            
-            Return your response as a valid JSON object with this structure:
-            {{
-              "companies_mentioned": ["company1", "company2"], 
-              "documents_to_load": [
-                {{
-                  "company": "company name",
-                  "document_link": "url",
-                  "filename": "filename",
-                  "reason": "brief explanation why this document is relevant"
-                }}
-              ]
-            }}
-            
-            ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
-            """
-        else:
-            # Fallback to traditional approach if caching fails
-            logger.info("Cache unavailable, using traditional LLM fallback (~20s expected)")
-            model = GenerativeModel("gemini-2.0-flash-001")
-            
-            # Format metadata in a readable format for the LLM
-            metadata_str = json.dumps(metadata, indent=2)
-            
-            # Format conversation history if available
-            conversation_context = ""
-            if conversation_history and len(conversation_history) > 0:
-                # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
-                recent_history = conversation_history[-10:]
-                conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
-                conversation_context = f"""
-                Previous conversation history:
-                {conversation_context}
-                """
-            
-            # Full prompt with metadata included (original behavior)
-            prompt = f"""
-            Based on the following user question, conversation history, and available document metadata, determine which documents are most relevant to answer the question.
-            
-            {conversation_context}
-            
-            Current user question: "{query}"
-            
-            Available document metadata:
-            {metadata_str}
-            
-            For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
-            Consider aliases, abbreviations, or partial references to companies.
-            Consider the full context of the conversation when determining relevance.
-            
-            IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
-            
-            Return your response as a valid JSON object with this structure:
-            {{
-              "companies_mentioned": ["company1", "company2"], 
-              "documents_to_load": [
-                {{
-                  "company": "company name",
-                  "document_link": "url",
-                  "filename": "filename",
-                  "reason": "brief explanation why this document is relevant"
-                }}
-              ]
-            }}
-            
-            ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
             """
         
+        # Full prompt with metadata included (original behavior)
+        prompt = f"""
+        Based on the following user question, conversation history, and available document metadata, determine which documents are most relevant to answer the question.
+        
+        {conversation_context}
+        
+        Current user question: "{query}"
+        
+        Available document metadata:
+        {metadata_str}
+        
+        For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
+        Consider aliases, abbreviations, or partial references to companies.
+        Consider the full context of the conversation when determining relevance.
+        
+        IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
+        
+        Return your response as a valid JSON object with this structure:
+        {{
+          "companies_mentioned": ["company1", "company2"], 
+          "documents_to_load": [
+            {{
+              "company": "company name",
+              "document_link": "url",
+              "filename": "filename",
+              "reason": "brief explanation why this document is relevant"
+            }}
+          ]
+        }}
+        
+        ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
+        """
+
         response = model.generate_content(prompt)
         response_text = response.text
         
@@ -1092,10 +1060,7 @@ def semantic_document_selection_llm_fallback(query, metadata, conversation_histo
             
             recommendation = json.loads(response_text)
             
-            if using_cache:
-                logger.info("Successfully completed LLM fallback with cached context")
-            else:
-                logger.info("Successfully completed LLM fallback with traditional approach")
+            logger.info("Successfully completed LLM fallback with traditional approach")
                 
             return recommendation
         except json.JSONDecodeError as e:

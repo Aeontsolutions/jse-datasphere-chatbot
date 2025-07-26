@@ -234,8 +234,8 @@ async def _process_traditional_chat(
             try:
                 # Create download configuration for robust downloads
                 download_config = S3DownloadConfig(
-                    max_retries=3,
-                    retry_delay=1.0,
+                    max_retries=2,  # Reduced from 3
+                    retry_delay=0.5,  # Reduced from 1.0
                     timeout=120.0,
                     concurrent_downloads=3  # Limit concurrency for streaming
                 )
