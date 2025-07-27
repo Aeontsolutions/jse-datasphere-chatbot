@@ -50,6 +50,7 @@ Thumbs.db
 # PDF files uploaded by users
 *.pdf
 *.txt
+!requirements.txt
 
 # Chroma DB 
 ./chroma_db/*
