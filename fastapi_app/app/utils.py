@@ -3,12 +3,17 @@ import json
 import logging
 import tempfile
 import hashlib
+import asyncio
+import aiofiles
 from io import BytesIO
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+import time
 
 import boto3
-import PyPDF2
+import aioboto3
+import pypdf
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from google.cloud import aiplatform
@@ -91,7 +96,7 @@ def init_vertex_ai():
 def extract_text_from_pdf(pdf_file):
     """Extract text from a PDF file"""
     try:
-        pdf_reader = PyPDF2.PdfReader(pdf_file)
+        pdf_reader = pypdf.PdfReader(pdf_file)
         text = ""
         for page_num in range(len(pdf_reader.pages)):
             page = pdf_reader.pages[page_num]
@@ -183,6 +188,560 @@ def load_metadata_from_s3(s3_client):
     except Exception as e:
         logger.error(f"Error loading metadata from S3: {str(e)}")
         return None
+
+# =============================================================================
+# ASYNC S3 DOWNLOAD FUNCTIONS WITH ROBUST ERROR HANDLING
+# =============================================================================
+
+class S3DownloadConfig:
+    """Configuration for S3 download operations"""
+    def __init__(self,
+                 max_retries: int = 2,  # Reduced from 3
+                 retry_delay: float = 0.5,  # Reduced from 1.0
+                 max_retry_delay: float = 10.0,  # Reduced from 60.0
+                 timeout: float = 300.0,
+                 chunk_size: int = 8192,
+                 concurrent_downloads: int = 5):
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.max_retry_delay = max_retry_delay
+        self.timeout = timeout
+        self.chunk_size = chunk_size
+        self.concurrent_downloads = concurrent_downloads
+
+class DownloadResult:
+    """Result of a download operation"""
+    def __init__(self, success: bool, content: Optional[str] = None, 
+                 error: Optional[str] = None, file_path: Optional[str] = None,
+                 download_time: float = 0.0, retry_count: int = 0):
+        self.success = success
+        self.content = content
+        self.error = error
+        self.file_path = file_path
+        self.download_time = download_time
+        self.retry_count = retry_count
+
+async def init_async_s3_client():
+    """Initialize and return an async S3 client using environment variables"""
+    aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
+    aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    aws_region = os.getenv("AWS_DEFAULT_REGION")
+    
+    if not all([aws_access_key_id, aws_secret_access_key, aws_region]):
+        logger.error("AWS credentials not found in environment variables")
+        raise ValueError("AWS credentials not found in environment variables")
+    
+    try:
+        session = aioboto3.Session(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            region_name=aws_region
+        )
+        
+        logger.info("Successfully created async AWS S3 session")
+        return session
+    except Exception as e:
+        logger.error(f"Error creating async AWS S3 session: {str(e)}")
+        raise
+
+async def download_and_extract_from_s3_async(s3_path: str, 
+                                           config: Optional[S3DownloadConfig] = None,
+                                           progress_callback: Optional[callable] = None) -> DownloadResult:
+    """
+    Asynchronously download a PDF from S3 and extract its text with robust error handling.
+    
+    Args:
+        s3_path: S3 path in format s3://bucket/key
+        config: Download configuration options
+        progress_callback: Optional callback for progress updates
+    
+    Returns:
+        DownloadResult with success status, content, and metadata
+    """
+    if config is None:
+        config = S3DownloadConfig()
+    
+    start_time = time.time()
+    retry_count = 0
+    
+    try:
+        # Parse S3 path
+        if not s3_path.startswith("s3://"):
+            error_msg = f"Invalid S3 path format: {s3_path}"
+            logger.error(error_msg)
+            return DownloadResult(success=False, error=error_msg)
+        
+        path_without_prefix = s3_path[5:]  # Remove "s3://"
+        bucket_name = path_without_prefix.split('/')[0]
+        key = '/'.join(path_without_prefix.split('/')[1:])
+        
+        logger.info(f"Starting async download: Bucket='{bucket_name}', Key='{key}'")
+        
+        if progress_callback:
+            await progress_callback("download_start", f"Starting download of {os.path.basename(key)}")
+        
+        # Retry loop with exponential backoff
+        for attempt in range(config.max_retries):
+            try:
+                retry_count = attempt
+                if attempt > 0:
+                    delay = min(config.retry_delay * (2 ** (attempt - 1)), config.max_retry_delay)
+                    logger.info(f"Retrying download after {delay:.1f}s (attempt {attempt + 1}/{config.max_retries})")
+                    await asyncio.sleep(delay)
+                
+                # Initialize async S3 session
+                session = await init_async_s3_client()
+                
+                async with session.client('s3') as s3_client:
+                    # Download file with timeout
+                    download_task = asyncio.create_task(
+                        _download_s3_object_async(s3_client, bucket_name, key, config)
+                    )
+                    
+                    try:
+                        file_content = await asyncio.wait_for(download_task, timeout=config.timeout)
+                    except asyncio.TimeoutError:
+                        raise Exception(f"Download timeout after {config.timeout}s")
+                    
+                    if progress_callback:
+                        await progress_callback("download_complete", f"Downloaded {len(file_content)} bytes")
+                    
+                    # Extract text from PDF in a thread pool to avoid blocking
+                    if progress_callback:
+                        await progress_callback("text_extraction", "Extracting text from PDF")
+                    
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        loop = asyncio.get_event_loop()
+                        text = await loop.run_in_executor(
+                            executor, 
+                            _extract_text_from_pdf_bytes, 
+                            file_content
+                        )
+                    
+                    if text is None:
+                        raise Exception("Failed to extract text from PDF")
+                    
+                    download_time = time.time() - start_time
+                    
+                    if progress_callback:
+                        await progress_callback("extraction_complete", f"Extracted {len(text)} characters")
+                    
+                    logger.info(f"Successfully downloaded and extracted: {s3_path} ({download_time:.2f}s, {retry_count} retries)")
+                    
+                    return DownloadResult(
+                        success=True, 
+                        content=text, 
+                        download_time=download_time,
+                        retry_count=retry_count
+                    )
+            
+            except Exception as e:
+                error_msg = f"Download attempt {attempt + 1} failed: {str(e)}"
+                logger.warning(error_msg)
+                
+                # Fail fast for NoSuchKey errors - retrying won't help
+                if "NoSuchKey" in str(e) or "The specified key does not exist" in str(e):
+                    download_time = time.time() - start_time
+                    final_error = f"File does not exist in S3: {s3_path} - {str(e)}"
+                    logger.error(final_error)
+                    
+                    if progress_callback:
+                        await progress_callback("download_failed", final_error)
+                    
+                    return DownloadResult(
+                        success=False, 
+                        error=final_error,
+                        download_time=download_time,
+                        retry_count=retry_count
+                    )
+                
+                if attempt == config.max_retries - 1:
+                    # Final attempt failed
+                    download_time = time.time() - start_time
+                    final_error = f"Failed to download {s3_path} after {config.max_retries} attempts: {str(e)}"
+                    logger.error(final_error)
+                    
+                    if progress_callback:
+                        await progress_callback("download_failed", final_error)
+                    
+                    return DownloadResult(
+                        success=False, 
+                        error=final_error,
+                        download_time=download_time,
+                        retry_count=retry_count
+                    )
+                # Continue to next retry
+    
+    except Exception as e:
+        download_time = time.time() - start_time
+        error_msg = f"Unexpected error downloading {s3_path}: {str(e)}"
+        logger.error(error_msg)
+        
+        if progress_callback:
+            await progress_callback("download_error", error_msg)
+        
+        return DownloadResult(
+            success=False, 
+            error=error_msg,
+            download_time=download_time,
+            retry_count=retry_count
+        )
+
+async def _download_s3_object_async(s3_client, bucket_name: str, key: str, config: S3DownloadConfig) -> bytes:
+    """Download S3 object and return its content as bytes"""
+    try:
+        # Use get_object to stream the content
+        response = await s3_client.get_object(Bucket=bucket_name, Key=key)
+        
+        # Read the content in chunks to handle large files
+        content = b""
+        chunk_count = 0
+        
+        async for chunk in response['Body']:
+            content += chunk
+            chunk_count += 1
+            
+            # Optional: Add progress tracking for large files
+            if chunk_count % 100 == 0:
+                logger.debug(f"Downloaded {len(content)} bytes so far...")
+        
+        return content
+        
+    except Exception as e:
+        logger.error(f"Error downloading S3 object {bucket_name}/{key}: {str(e)}")
+        raise
+
+def _extract_text_from_pdf_bytes(pdf_bytes: bytes) -> Optional[str]:
+    """Extract text from PDF bytes (runs in thread pool to avoid blocking)"""
+    try:
+        pdf_file = BytesIO(pdf_bytes)
+        pdf_reader = pypdf.PdfReader(pdf_file)
+        
+        text = ""
+        for page_num in range(len(pdf_reader.pages)):
+            page = pdf_reader.pages[page_num]
+            page_text = page.extract_text()
+            text += page_text + "\n\n"
+        
+        return text
+    except Exception as e:
+        logger.error(f"Error extracting text from PDF bytes: {str(e)}")
+        return None
+
+async def download_metadata_from_s3_async(bucket_name: str, key: str = "metadata.json",
+                                        config: Optional[S3DownloadConfig] = None,
+                                        progress_callback: Optional[callable] = None) -> DownloadResult:
+    """
+    Asynchronously download metadata JSON file from S3 with robust error handling.
+    
+    Args:
+        bucket_name: S3 bucket name
+        key: S3 object key
+        config: Download configuration
+        progress_callback: Optional callback for progress updates
+    
+    Returns:
+        DownloadResult with success status and metadata content
+    """
+    if config is None:
+        config = S3DownloadConfig()
+    
+    start_time = time.time()
+    retry_count = 0
+    
+    try:
+        logger.info(f"Starting async metadata download: Bucket='{bucket_name}', Key='{key}'")
+        
+        if progress_callback:
+            await progress_callback("metadata_download_start", f"Downloading metadata: {key}")
+        
+        # Retry loop with exponential backoff
+        for attempt in range(config.max_retries):
+            try:
+                retry_count = attempt
+                if attempt > 0:
+                    delay = min(config.retry_delay * (2 ** (attempt - 1)), config.max_retry_delay)
+                    logger.info(f"Retrying metadata download after {delay:.1f}s (attempt {attempt + 1}/{config.max_retries})")
+                    await asyncio.sleep(delay)
+                
+                # Initialize async S3 session
+                session = await init_async_s3_client()
+                
+                async with session.client('s3') as s3_client:
+                    # Download with timeout
+                    download_task = asyncio.create_task(
+                        _download_s3_object_async(s3_client, bucket_name, key, config)
+                    )
+                    
+                    try:
+                        file_content = await asyncio.wait_for(download_task, timeout=config.timeout)
+                    except asyncio.TimeoutError:
+                        raise Exception(f"Metadata download timeout after {config.timeout}s")
+                    
+                    # Decode the JSON content
+                    metadata_content = file_content.decode('utf-8')
+                    
+                    # Validate JSON format
+                    try:
+                        json.loads(metadata_content)
+                    except json.JSONDecodeError as e:
+                        raise Exception(f"Invalid JSON metadata: {str(e)}")
+                    
+                    download_time = time.time() - start_time
+                    
+                    if progress_callback:
+                        await progress_callback("metadata_download_complete", f"Downloaded metadata ({len(metadata_content)} bytes)")
+                    
+                    logger.info(f"Successfully downloaded metadata: {bucket_name}/{key} ({download_time:.2f}s)")
+                    
+                    return DownloadResult(
+                        success=True, 
+                        content=metadata_content, 
+                        download_time=download_time,
+                        retry_count=retry_count
+                    )
+            
+            except Exception as e:
+                error_msg = f"Metadata download attempt {attempt + 1} failed: {str(e)}"
+                logger.warning(error_msg)
+                
+                if attempt == config.max_retries - 1:
+                    # Final attempt failed
+                    download_time = time.time() - start_time
+                    final_error = f"Failed to download metadata {bucket_name}/{key} after {config.max_retries} attempts: {str(e)}"
+                    logger.error(final_error)
+                    
+                    if progress_callback:
+                        await progress_callback("metadata_download_failed", final_error)
+                    
+                    return DownloadResult(
+                        success=False, 
+                        error=final_error,
+                        download_time=download_time,
+                        retry_count=retry_count
+                    )
+    
+    except Exception as e:
+        download_time = time.time() - start_time
+        error_msg = f"Unexpected error downloading metadata {bucket_name}/{key}: {str(e)}"
+        logger.error(error_msg)
+        
+        if progress_callback:
+            await progress_callback("metadata_download_error", error_msg)
+        
+        return DownloadResult(
+            success=False, 
+            error=error_msg,
+            download_time=download_time,
+            retry_count=retry_count
+        )
+
+async def load_metadata_from_s3_async(config: Optional[S3DownloadConfig] = None,
+                                    progress_callback: Optional[callable] = None) -> Optional[Dict]:
+    """
+    Asynchronously load metadata from S3 bucket specified in environment variables.
+    
+    Args:
+        config: Download configuration
+        progress_callback: Optional callback for progress updates
+    
+    Returns:
+        Parsed metadata dictionary or None if failed
+    """
+    try:
+        bucket_name = os.getenv("DOCUMENT_METADATA_S3_BUCKET")
+        if not bucket_name:
+            error_msg = "DOCUMENT_METADATA_S3_BUCKET not found in environment variables"
+            logger.error(error_msg)
+            if progress_callback:
+                await progress_callback("metadata_error", error_msg)
+            return None
+        
+        # Default key for the metadata file
+        metadata_key = "metadata.json"
+        
+        # Download metadata from S3 asynchronously
+        result = await download_metadata_from_s3_async(bucket_name, metadata_key, config, progress_callback)
+        
+        if not result.success:
+            logger.error(f"Failed to download metadata: {result.error}")
+            return None
+        
+        # Parse the downloaded metadata
+        try:
+            metadata = parse_metadata_file(result.content)
+            if progress_callback:
+                await progress_callback("metadata_parsed", f"Parsed metadata for {len(metadata) if metadata else 0} companies")
+            return metadata
+        except Exception as e:
+            error_msg = f"Failed to parse metadata: {str(e)}"
+            logger.error(error_msg)
+            if progress_callback:
+                await progress_callback("metadata_parse_error", error_msg)
+            return None
+            
+    except Exception as e:
+        error_msg = f"Error loading metadata from S3: {str(e)}"
+        logger.error(error_msg)
+        if progress_callback:
+            await progress_callback("metadata_load_error", error_msg)
+        return None
+
+async def auto_load_relevant_documents_async(query: str, metadata: Dict, 
+                                           conversation_history: Optional[List] = None,
+                                           current_document_texts: Optional[Dict] = None,
+                                           config: Optional[S3DownloadConfig] = None,
+                                           progress_callback: Optional[callable] = None) -> Tuple[Dict[str, str], str, List[str]]:
+    """
+    Asynchronously load relevant documents based on query and conversation history with concurrent downloads.
+    
+    Args:
+        query: User query
+        metadata: Document metadata
+        conversation_history: Optional conversation context
+        current_document_texts: Existing loaded documents
+        config: Download configuration
+        progress_callback: Optional callback for progress updates
+    
+    Returns:
+        Tuple of (document_texts, message, loaded_docs)
+    """
+    if config is None:
+        config = S3DownloadConfig()
+    
+    document_texts = current_document_texts.copy() if current_document_texts else {}
+    loaded_docs = []
+    
+    try:
+        if progress_callback:
+            await progress_callback("document_selection_start", "Analyzing query to select relevant documents")
+        
+        # Use LLM to determine which documents to load, including conversation history
+        recommendation = semantic_document_selection(query, metadata, conversation_history)
+        
+        if not recommendation or "documents_to_load" not in recommendation:
+            message = "No relevant documents were identified for your query."
+            if progress_callback:
+                await progress_callback("document_selection_complete", message)
+            return document_texts, message, []
+        
+        docs_to_load = recommendation["documents_to_load"]
+        companies_mentioned = recommendation.get("companies_mentioned", [])
+        
+        if progress_callback:
+            await progress_callback("document_selection_complete", 
+                                   f"Selected {len(docs_to_load)} documents from {len(companies_mentioned)} companies")
+        
+        # Filter documents that aren't already loaded
+        docs_to_download = []
+        for doc_info in docs_to_load[:3]:  # Limit to 3 documents
+            doc_name = doc_info["filename"]
+            if doc_name not in document_texts:
+                docs_to_download.append(doc_info)
+        
+        if not docs_to_download:
+            message = "All relevant documents are already loaded."
+            if progress_callback:
+                await progress_callback("documents_already_loaded", message)
+            return document_texts, message, []
+        
+        if progress_callback:
+            await progress_callback("concurrent_download_start", 
+                                   f"Starting concurrent download of {len(docs_to_download)} documents")
+        
+        # Create download tasks for concurrent execution
+        download_tasks = []
+        for doc_info in docs_to_download:
+            task = _download_single_document_async(doc_info, config, progress_callback)
+            download_tasks.append(task)
+        
+        # Execute downloads concurrently with semaphore to limit concurrent connections
+        semaphore = asyncio.Semaphore(config.concurrent_downloads)
+        download_results = await asyncio.gather(
+            *[_download_with_semaphore(semaphore, task) for task in download_tasks],
+            return_exceptions=True
+        )
+        
+        # Process results
+        successful_downloads = 0
+        failed_downloads = 0
+        
+        for i, result in enumerate(download_results):
+            doc_info = docs_to_download[i]
+            doc_name = doc_info["filename"]
+            
+            if isinstance(result, Exception):
+                logger.error(f"Download task failed for {doc_name}: {str(result)}")
+                failed_downloads += 1
+            elif isinstance(result, DownloadResult):
+                if result.success and result.content:
+                    document_texts[doc_name] = result.content
+                    loaded_docs.append(doc_name)
+                    successful_downloads += 1
+                    logger.info(f"Successfully loaded {doc_name} ({result.download_time:.2f}s, {result.retry_count} retries)")
+                else:
+                    logger.error(f"Failed to load document {doc_name}: {result.error}")
+                    failed_downloads += 1
+            else:
+                logger.error(f"Unexpected result type for {doc_name}: {type(result)}")
+                failed_downloads += 1
+        
+        # Generate summary message
+        if successful_downloads > 0:
+            message = f"Successfully loaded {successful_downloads} documents concurrently"
+            if failed_downloads > 0:
+                message += f" ({failed_downloads} failed)"
+            message += ":\n"
+            
+            for doc_name in loaded_docs:
+                matching_doc = next((d for d in docs_to_load if d["filename"] == doc_name), None)
+                if matching_doc:
+                    message += f"• {doc_name} - {matching_doc.get('reason', '')}\n"
+        else:
+            message = f"Failed to load any documents. Please check S3 access permissions."
+            if failed_downloads > 0:
+                message += f" ({failed_downloads} download failures)"
+        
+        if progress_callback:
+            await progress_callback("concurrent_download_complete", 
+                                   f"Completed: {successful_downloads} successful, {failed_downloads} failed")
+        
+        return document_texts, message, loaded_docs
+    
+    except Exception as e:
+        error_msg = f"Error in async document loading: {str(e)}"
+        logger.error(error_msg)
+        if progress_callback:
+            await progress_callback("document_load_error", error_msg)
+        return document_texts, error_msg, []
+
+async def _download_single_document_async(doc_info: Dict, config: S3DownloadConfig, 
+                                        progress_callback: Optional[callable] = None) -> DownloadResult:
+    """Download a single document asynchronously"""
+    doc_link = doc_info["document_link"]
+    doc_name = doc_info["filename"]
+    
+    try:
+        if progress_callback:
+            await progress_callback("single_download_start", f"Downloading {doc_name}")
+        
+        result = await download_and_extract_from_s3_async(doc_link, config, progress_callback)
+        
+        if progress_callback:
+            status = "success" if result.success else "failed"
+            await progress_callback("single_download_complete", f"{doc_name}: {status}")
+        
+        return result
+    
+    except Exception as e:
+        error_msg = f"Error downloading {doc_name}: {str(e)}"
+        logger.error(error_msg)
+        return DownloadResult(success=False, error=error_msg)
+
+async def _download_with_semaphore(semaphore: asyncio.Semaphore, download_task) -> DownloadResult:
+    """Execute download task with semaphore to limit concurrent connections"""
+    async with semaphore:
+        return await download_task
 
 # Global variable to store the cached context
 _metadata_cache = None
@@ -437,105 +996,57 @@ def semantic_document_selection_llm_fallback(query, metadata, conversation_histo
     Now optimized with Google Gemini context caching to reduce latency from ~20s to ~2-3s.
     """
     try:
-        # Try to get cached model first for faster performance
-        cached_model, using_cache = get_cached_model(metadata)
+        # Fallback to traditional approach if caching fails
+        logger.info("Cache unavailable, using traditional LLM fallback (~20s expected)")
+        model = genai.GenerativeModel("gemini-2.5-flash-lite")
         
-        if using_cache and cached_model:
-            logger.info("Using cached metadata context for LLM fallback (~2-3s expected)")
-            model = cached_model
-            
-            # Format conversation history if available
-            conversation_context = ""
-            if conversation_history and len(conversation_history) > 0:
-                # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
-                recent_history = conversation_history[-10:]
-                conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
-                conversation_context = f"""
-                Previous conversation history:
-                {conversation_context}
-                """
-            
-            # Simplified prompt since metadata is already cached in the model context
-            prompt = f"""
+        # Format metadata in a readable format for the LLM
+        metadata_str = json.dumps(metadata, indent=2)
+        
+        # Format conversation history if available
+        conversation_context = ""
+        if conversation_history and len(conversation_history) > 0:
+            # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
+            recent_history = conversation_history[-10:]
+            conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
+            conversation_context = f"""
+            Previous conversation history:
             {conversation_context}
-            
-            Current user question: "{query}"
-            
-            Based on this question and conversation history, select the most relevant documents from the available metadata.
-            
-            For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
-            Consider aliases, abbreviations, or partial references to companies.
-            Consider the full context of the conversation when determining relevance.
-            
-            IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
-            
-            Return your response as a valid JSON object with this structure:
-            {{
-              "companies_mentioned": ["company1", "company2"], 
-              "documents_to_load": [
-                {{
-                  "company": "company name",
-                  "document_link": "url",
-                  "filename": "filename",
-                  "reason": "brief explanation why this document is relevant"
-                }}
-              ]
-            }}
-            
-            ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
-            """
-        else:
-            # Fallback to traditional approach if caching fails
-            logger.info("Cache unavailable, using traditional LLM fallback (~20s expected)")
-            model = GenerativeModel("gemini-2.0-flash-001")
-            
-            # Format metadata in a readable format for the LLM
-            metadata_str = json.dumps(metadata, indent=2)
-            
-            # Format conversation history if available
-            conversation_context = ""
-            if conversation_history and len(conversation_history) > 0:
-                # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
-                recent_history = conversation_history[-10:]
-                conversation_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
-                conversation_context = f"""
-                Previous conversation history:
-                {conversation_context}
-                """
-            
-            # Full prompt with metadata included (original behavior)
-            prompt = f"""
-            Based on the following user question, conversation history, and available document metadata, determine which documents are most relevant to answer the question.
-            
-            {conversation_context}
-            
-            Current user question: "{query}"
-            
-            Available document metadata:
-            {metadata_str}
-            
-            For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
-            Consider aliases, abbreviations, or partial references to companies.
-            Consider the full context of the conversation when determining relevance.
-            
-            IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
-            
-            Return your response as a valid JSON object with this structure:
-            {{
-              "companies_mentioned": ["company1", "company2"], 
-              "documents_to_load": [
-                {{
-                  "company": "company name",
-                  "document_link": "url",
-                  "filename": "filename",
-                  "reason": "brief explanation why this document is relevant"
-                }}
-              ]
-            }}
-            
-            ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
             """
         
+        # Full prompt with metadata included (original behavior)
+        prompt = f"""
+        Based on the following user question, conversation history, and available document metadata, determine which documents are most relevant to answer the question.
+        
+        {conversation_context}
+        
+        Current user question: "{query}"
+        
+        Available document metadata:
+        {metadata_str}
+        
+        For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
+        Consider aliases, abbreviations, or partial references to companies.
+        Consider the full context of the conversation when determining relevance.
+        
+        IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
+        
+        Return your response as a valid JSON object with this structure:
+        {{
+          "companies_mentioned": ["company1", "company2"], 
+          "documents_to_load": [
+            {{
+              "company": "company name",
+              "document_link": "url",
+              "filename": "filename",
+              "reason": "brief explanation why this document is relevant"
+            }}
+          ]
+        }}
+        
+        ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
+        """
+
         response = model.generate_content(prompt)
         response_text = response.text
         
@@ -549,10 +1060,7 @@ def semantic_document_selection_llm_fallback(query, metadata, conversation_histo
             
             recommendation = json.loads(response_text)
             
-            if using_cache:
-                logger.info("Successfully completed LLM fallback with cached context")
-            else:
-                logger.info("Successfully completed LLM fallback with traditional approach")
+            logger.info("Successfully completed LLM fallback with traditional approach")
                 
             return recommendation
         except json.JSONDecodeError as e:
