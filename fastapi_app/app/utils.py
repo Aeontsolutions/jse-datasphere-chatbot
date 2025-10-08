@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 # # Load environment variables
 # load_dotenv()
 
+METADATA_KEY = "metadata_with_mapping_2025-09-14.json"
+
 # Initialize AWS S3 client
 def init_s3_client():
     """Initialize and return an S3 client using environment variables"""
@@ -176,7 +178,7 @@ def load_metadata_from_s3(s3_client):
             return None
         
         # Default key for the metadata file
-        metadata_key = "metadata.json"
+        metadata_key = METADATA_KEY
         
         # Download metadata from S3
         metadata_content = download_metadata_from_s3(s3_client, bucket_name, metadata_key)
@@ -558,7 +560,7 @@ async def load_metadata_from_s3_async(config: Optional[S3DownloadConfig] = None,
             return None
         
         # Default key for the metadata file
-        metadata_key = "metadata.json"
+        metadata_key = METADATA_KEY
         
         # Download metadata from S3 asynchronously
         result = await download_metadata_from_s3_async(bucket_name, metadata_key, config, progress_callback)
