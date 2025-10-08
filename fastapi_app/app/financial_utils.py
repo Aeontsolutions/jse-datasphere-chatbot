@@ -722,8 +722,18 @@ class FinancialDataManager:
             1. {"Acknowledges this is a follow-up and references previous context" if is_follow_up else "Confirms what data was found"}
             2. Highlights key insights or patterns
             3. Formats numbers appropriately (e.g., millions, billions)
-            4. Suggests relevant follow-up questions based on what was found
+            4. Suggests relevant follow-up questions that involve querying more financial data
             5. {"Maintains conversational continuity" if is_follow_up else "Sets up potential follow-up questions"}
+            
+            IMPORTANT: Only suggest follow-up questions about querying financial data from the database. 
+            Do NOT suggest creating charts, performing calculations, generating reports, or any other actions.
+            Valid follow-up suggestions include:
+            - Asking about different years (e.g., "What about 2022?" or "How did this compare in 2021?")
+            - Asking about different companies or competitors
+            - Asking about different financial metrics (revenue, profit margins, ratios, etc.)
+            - Asking for comparative analysis between companies or time periods
+            - Asking about specific financial items not yet shown
+            
             Keep the response concise but informative. Be conversational and natural.
         """
         try:
