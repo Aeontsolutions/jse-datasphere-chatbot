@@ -700,7 +700,7 @@ class FinancialDataManager:
         
         # Keywords that indicate detailed/granular financial data requests
         detailed_query_keywords = [
-            # 'balance sheet', 'income statement', 'cash flow', 'statement',
+            'balance sheet', 'income statement', 'cash flow', 'statement',
             'detailed', 'granular', 'comprehensive', 'full financial',
             'complete financials', 'all financial data', 'entire',
             'breakdown', 'line item', 'specific items', 'detailed analysis',
