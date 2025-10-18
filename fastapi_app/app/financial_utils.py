@@ -772,7 +772,6 @@ class FinancialDataManager:
             Do NOT suggest creating charts, performing calculations, generating reports, or any other actions.
             Valid follow-up suggestions include:
             - Asking about different years (e.g., "What about 2022?" or "How did this compare in 2021?")
-            - Asking about different companies or competitors
             - Asking about different financial metrics (revenue, profit margins, ratios, etc.)
             - Asking for comparative analysis between companies or time periods
             - Asking about specific financial items not yet shown
