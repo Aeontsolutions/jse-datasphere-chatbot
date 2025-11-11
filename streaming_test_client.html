@@ -259,7 +259,9 @@
             };
             
             // Determine URL based on streaming preference
-            const url = `http://localhost:8000/${currentEndpoint}${useStreaming ? '/stream' : ''}`;
+            // const baseUrl = 'http://jse-da-Publi-1wgQS45FnwpV-1192199831.us-east-1.elb.amazonaws.com'; //    Remote Dev
+            const baseUrl = 'http://⁠jse-da-Publi-ehai7dwBXRyV-969154490.us-east-1.elb.amazonaws.com⁠'; // Remote Prod
+            const url = `${baseUrl}/${currentEndpoint}${useStreaming ? '/stream' : ''}`;
             
                         if (useStreaming) {
                 // Use streaming approach with fetch

@@ -695,13 +695,53 @@ class FinancialDataManager:
         logger.info(f"Returning availability_info: {availability_info}")
         return availability_info
     
+    def _should_recommend_deep_research(self, records: List[FinancialDataRecord], query: str, interpretation: str) -> bool:
+        """Determine if we should recommend Deep Research based on query and results"""
+        
+        # Keywords that indicate detailed/granular financial data requests
+        detailed_query_keywords = [
+            'balance sheet', 'income statement', 'cash flow', 'statement',
+            'detailed', 'granular', 'comprehensive', 'full financial',
+            'complete financials', 'all financial data', 'entire',
+            'breakdown', 'line item', 'specific items', 'detailed analysis',
+            'in-depth', 'thorough', 'extensive', 'complete breakdown'
+        ]
+        
+        query_lower = query.lower()
+        interpretation_lower = interpretation.lower()
+        
+        # Case 1: No data found at all
+        if not records:
+            return True
+            
+        # Case 2: Very limited data found (less than 3 records)
+        if len(records) < 3:
+            return True
+            
+        # Case 3: Query contains keywords suggesting need for detailed/granular data
+        if any(keyword in query_lower or keyword in interpretation_lower for keyword in detailed_query_keywords):
+            return True
+            
+        return False
+    
     def format_response(self, records: List[FinancialDataRecord], query: str, interpretation: str, is_follow_up: bool = False, conversation_history: Optional[List[Dict[str, str]]] = None) -> str:
         """Format the query results into a readable response with conversation awareness"""
+        
+        # Detect if we should recommend Deep Research
+        should_recommend_deep_research = self._should_recommend_deep_research(records, query, interpretation)
+        
         if not records:
-            return "No data found matching your query criteria."
+            if should_recommend_deep_research:
+                return "No data found matching your query criteria. For more comprehensive financial information and detailed analysis, you might want to try Deep Research, our comprehensive research tool, which may have access to more granular financial data."
+            else:
+                return "No data found matching your query criteria."
+        
         if not self.model:
             # Fallback to basic formatting
-            return f"Found {len(records)} records matching your query. Here's a summary of the data."
+            if should_recommend_deep_research:
+                return f"Found {len(records)} records matching your query. Here's a summary of the data. For more detailed analysis, consider trying Deep Research, our comprehensive research tool."
+            else:
+                return f"Found {len(records)} records matching your query. Here's a summary of the data."
         # Use Gemini to create a natural language response
         data_summary = [r.dict() for r in records[:20]]  # Limit to first 20 records for prompt
         # Get conversation context for more natural responses
@@ -718,12 +758,24 @@ class FinancialDataManager:
             Query Interpretation: "{interpretation}"
             Data Found ({len(records)} total records, showing first {min(20, len(records))}):
             {json.dumps(data_summary, indent=2)}
+            {"DEEP_RESEARCH_RECOMMENDATION: The system has detected this query may benefit from more comprehensive data. Include a recommendation to try Deep Research." if should_recommend_deep_research else ""}
+            
             Create a natural language response that:
             1. {"Acknowledges this is a follow-up and references previous context" if is_follow_up else "Confirms what data was found"}
             2. Highlights key insights or patterns
             3. Formats numbers appropriately (e.g., millions, billions)
-            4. Suggests relevant follow-up questions based on what was found
+            4. Suggests relevant follow-up questions that involve querying more financial data
             5. {"Maintains conversational continuity" if is_follow_up else "Sets up potential follow-up questions"}
+            {f"6. IMPORTANT: Include a recommendation to try 'Deep Research, our comprehensive research tool' for more detailed financial information, as the current data may be limited for this type of query." if should_recommend_deep_research else ""}
+            
+            IMPORTANT: Only suggest follow-up questions about querying financial data from the database. 
+            Do NOT suggest creating charts, performing calculations, generating reports, or any other actions.
+            Valid follow-up suggestions include:
+            - Asking about different years (e.g., "What about 2022?" or "How did this compare in 2021?")
+            - Asking about different financial metrics (revenue, profit margins, ratios, etc.)
+            - Asking for comparative analysis between companies or time periods
+            - Asking about specific financial items not yet shown
+            
             Keep the response concise but informative. Be conversational and natural.
         """
         try:
