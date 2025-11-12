@@ -244,6 +244,16 @@ async def chat(
     logger.info(
         f"/chat called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
     )
+    
+    # Log conversation history for debugging
+    if request.conversation_history:
+        logger.info(f"📜 Conversation history received: {len(request.conversation_history)} messages")
+        for idx, msg in enumerate(request.conversation_history[-5:]):  # Log last 5 messages
+            content_preview = msg.get('content', '')[:100]
+            logger.info(f"  [{idx}] {msg.get('role', 'unknown')}: {content_preview}...")
+    else:
+        logger.info("📜 No conversation history received")
+    
     try:
         # Check if metadata is available
         if not metadata:
@@ -328,6 +338,15 @@ async def chat_stream(
     logger.info(
         f"/chat/stream called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
     )
+    
+    # Log conversation history for debugging
+    if request.conversation_history:
+        logger.info(f"📜 Conversation history received: {len(request.conversation_history)} messages")
+        for idx, msg in enumerate(request.conversation_history[-5:]):  # Log last 5 messages
+            content_preview = msg.get('content', '')[:100]
+            logger.info(f"  [{idx}] {msg.get('role', 'unknown')}: {content_preview}...")
+    else:
+        logger.info("📜 No conversation history received")
     
     try:
         # Start the streaming chat process
@@ -689,6 +708,16 @@ async def fast_chat_v2(
     queries the financial database, and returns formatted responses with data insights.
     """
     logger.info(f"/fast_chat_v2 called. query='{request.query[:200]}', memory_enabled={request.memory_enabled}")
+    
+    # Log conversation history for debugging
+    if request.conversation_history:
+        logger.info(f"📜 Conversation history received: {len(request.conversation_history)} messages")
+        for idx, msg in enumerate(request.conversation_history[-5:]):  # Log last 5 messages
+            content_preview = msg.get('content', '')[:100]
+            logger.info(f"  [{idx}] {msg.get('role', 'unknown')}: {content_preview}...")
+    else:
+        logger.info("📜 No conversation history received")
+    
     try:
         if not financial_manager:
             raise HTTPException(
@@ -766,6 +795,15 @@ async def fast_chat_v2_stream(
     logger.info(
         f"/fast_chat_v2/stream called. query='{request.query[:200]}', memory_enabled={request.memory_enabled}"
     )
+    
+    # Log conversation history for debugging
+    if request.conversation_history:
+        logger.info(f"📜 Conversation history received: {len(request.conversation_history)} messages")
+        for idx, msg in enumerate(request.conversation_history[-5:]):  # Log last 5 messages
+            content_preview = msg.get('content', '')[:100]
+            logger.info(f"  [{idx}] {msg.get('role', 'unknown')}: {content_preview}...")
+    else:
+        logger.info("📜 No conversation history received")
     
     try:
         # Import the streaming financial chat processor
