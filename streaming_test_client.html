@@ -151,6 +151,18 @@
                 <label for="memoryEnabled">Enable memory (conversation history)</label>
             </div>
             <div class="option">
+                <label style="font-weight: 500; margin-right: 15px;">Environment:</label>
+                <label style="margin-right: 15px;">
+                    <input type="radio" name="environment" value="local" checked onchange="updateEnvironment()"> Local
+                </label>
+                <label style="margin-right: 15px;">
+                    <input type="radio" name="environment" value="dev" onchange="updateEnvironment()"> Dev
+                </label>
+                <label>
+                    <input type="radio" name="environment" value="prod" onchange="updateEnvironment()"> Prod
+                </label>
+            </div>
+            <div class="option">
                 <button class="btn" onclick="loadTestQueries()" style="background: #28a745; font-size: 12px; padding: 6px 12px;">Load Test Queries</button>
                 <span style="margin-left: 10px; font-size: 12px; color: #666;">Quick test queries for different scenarios</span>
             </div>
@@ -204,6 +216,22 @@
         let conversationHistory = [];
         let debugMode = false;
         let connectionStartTime = null;
+        let currentEnvironment = 'local';
+        
+        // Environment base URLs
+        const environmentUrls = {
+            local: 'http://0.0.0.0:8000',
+            dev: 'http://jse-da-Publi-1wgQS45FnwpV-1192199831.us-east-1.elb.amazonaws.com',
+            prod: 'http://jse-da-Publi-ehai7dwBXRyV-969154490.us-east-1.elb.amazonaws.com'
+        };
+        
+        function updateEnvironment() {
+            const selected = document.querySelector('input[name="environment"]:checked');
+            if (selected) {
+                currentEnvironment = selected.value;
+                logDebug(`🌐 Environment switched to: ${currentEnvironment} (${environmentUrls[currentEnvironment]})`);
+            }
+        }
 
         function selectEndpoint(endpoint, streaming) {
             currentEndpoint = endpoint;
@@ -243,11 +271,16 @@
             // Start timing
             connectionStartTime = Date.now();
             
+            // Determine URL based on selected environment and streaming preference
+            const baseUrl = environmentUrls[currentEnvironment];
+            const url = `${baseUrl}/${currentEndpoint}${useStreaming ? '/stream' : ''}`;
+            
             // Log request details
             const requestType = useStreaming ? 'streaming' : 'non-streaming';
             logDebug(`🚀 Starting ${requestType} chat request`);
             logDebug(`📝 Query: "${query}"`);
-            logDebug(`🔗 Endpoint: ${currentEndpoint}${useStreaming ? '/stream' : ''}`);
+            logDebug(`🌐 Environment: ${currentEnvironment}`);
+            logDebug(`🔗 URL: ${url}`);
             logDebug(`⚙️ Auto-load: ${autoLoad}, Memory: ${memoryEnabled}`);
             
             // Prepare request data
@@ -257,11 +290,6 @@
                 memory_enabled: memoryEnabled,
                 conversation_history: memoryEnabled ? conversationHistory : null
             };
-            
-            // Determine URL based on streaming preference
-            // const baseUrl = 'http://jse-da-Publi-1wgQS45FnwpV-1192199831.us-east-1.elb.amazonaws.com'; //    Remote Dev
-            const baseUrl = 'http://⁠jse-da-Publi-ehai7dwBXRyV-969154490.us-east-1.elb.amazonaws.com⁠'; // Remote Prod
-            const url = `${baseUrl}/${currentEndpoint}${useStreaming ? '/stream' : ''}`;
             
                         if (useStreaming) {
                 // Use streaming approach with fetch
