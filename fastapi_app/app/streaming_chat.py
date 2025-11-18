@@ -24,7 +24,8 @@ async def process_streaming_chat(
     metadata: Dict,
     collection: Any = None,
     meta_collection: Any = None,
-    use_fast_mode: bool = False
+    use_fast_mode: bool = False,
+    tracker: Optional[ProgressTracker] = None,
 ) -> ProgressTracker:
     """
     Process a chat request with streaming progress updates
@@ -41,7 +42,7 @@ async def process_streaming_chat(
         ProgressTracker instance that can be used to stream updates
     """
     
-    tracker = ProgressTracker()
+    tracker = tracker or ProgressTracker()
     
     # Start the processing in the background
     asyncio.create_task(_process_chat_async(

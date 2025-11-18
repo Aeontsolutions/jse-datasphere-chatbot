@@ -2,20 +2,32 @@ import json
 import asyncio
 import logging
 from datetime import datetime
-from typing import AsyncGenerator, Optional, Dict, Any
+from typing import AsyncGenerator, Optional, Dict, Any, Protocol
 from app.models import ProgressUpdate
 
 logger = logging.getLogger(__name__)
+
+
+class ProgressEventSink(Protocol):
+    async def on_progress(self, update: ProgressUpdate) -> None:
+        ...
+
+    async def on_result(self, result: Dict[str, Any]) -> None:
+        ...
+
+    async def on_error(self, error: str) -> None:
+        ...
 
 class ProgressTracker:
     """
     Utility class for tracking and streaming progress updates via Server-Sent Events
     """
     
-    def __init__(self):
+    def __init__(self, event_sink: Optional[ProgressEventSink] = None):
         self.current_step = ""
         self.current_progress = 0.0
         self.updates_queue = asyncio.Queue()
+        self.event_sink = event_sink
         
     async def emit_progress(
         self, 
@@ -37,16 +49,22 @@ class ProgressTracker:
         )
         
         await self.updates_queue.put(update)
+        if self.event_sink:
+            await self.event_sink.on_progress(update)
         logger.info(f"Emitted progress: {step} - {progress}% - {message}")  # Changed to info level
     
     async def emit_final_result(self, result: Dict[str, Any]):
         """Emit the final result"""
         await self.updates_queue.put({"type": "result", "data": result})
+        if self.event_sink:
+            await self.event_sink.on_result(result)
         logger.info("Emitted final result")
     
     async def emit_error(self, error: str):
         """Emit an error"""
         await self.updates_queue.put({"type": "error", "error": error})
+        if self.event_sink:
+            await self.event_sink.on_error(error)
         logger.error(f"Emitted error: {error}")
     
     async def stream_updates(self) -> AsyncGenerator[str, None]:

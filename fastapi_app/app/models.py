@@ -1,3 +1,4 @@
+from enum import Enum
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 
@@ -214,3 +215,30 @@ class FinancialDataResponse(BaseModel):
         default=None,
         description="Suggestions for alternative queries"
     )
+
+
+class JobStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    expired = "expired"
+
+
+class JobCreateResponse(BaseModel):
+    job_id: str = Field(..., description="Identifier for the newly created job")
+    status: JobStatus = Field(..., description="Initial job status")
+    job_type: str = Field(..., description="Logical job category")
+    polling_url: str = Field(..., description="Relative URL to poll for job status")
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str = Field(..., description="Job identifier")
+    status: JobStatus = Field(..., description="Current job status")
+    job_type: str = Field(..., description="Logical job category")
+    created_at: str = Field(..., description="Creation timestamp in ISO format")
+    updated_at: str = Field(..., description="Last update timestamp in ISO format")
+    progress: List[ProgressUpdate] = Field(default_factory=list, description="Historical progress updates")
+    latest_progress: Optional[ProgressUpdate] = Field(default=None, description="Most recent progress update")
+    result: Optional[Dict[str, Any]] = Field(default=None, description="Final job payload if completed")
+    error: Optional[str] = Field(default=None, description="Error message if job failed")
