@@ -40,6 +40,7 @@ from app.chroma_utils import (
 from app.streaming_chat import process_streaming_chat
 from app.financial_utils import FinancialDataManager
 from app.job_store import JobStore, JobProgressSink
+from app.redis_job_store import RedisJobStore
 from app.progress_tracker import ProgressTracker
 
 from dotenv import load_dotenv
@@ -119,14 +120,44 @@ async def lifespan(app: FastAPI):
             logger.error(f"Failed to initialize financial data manager: {financial_err}")
             app.state.financial_manager = None
         # -----------------------
-        # Initialize in-memory job store
+        # Initialize Job Store (Redis or In-Memory)
         # -----------------------
-        app.state.job_store = JobStore(
-            ttl_seconds=ASYNC_JOB_TTL_SECONDS,
-            max_progress_history=ASYNC_JOB_PROGRESS_HISTORY,
-        )
+        # Check for REDIS_URL (standard) or RedisUrl (CloudFormation output) or REDISURL (Copilot default)
+        redis_url = os.getenv("REDIS_URL") or os.getenv("RedisUrl") or os.getenv("REDISURL")
+        
+        if redis_url:
+            try:
+                # Initialize and TEST connection
+                job_store = RedisJobStore(
+                    redis_url=redis_url,
+                    ttl_seconds=ASYNC_JOB_TTL_SECONDS,
+                    max_progress_history=ASYNC_JOB_PROGRESS_HISTORY,
+                )
+                # Verify connection works
+                await job_store._redis.ping()
+                
+                app.state.job_store = job_store
+                logger.info("Redis job store initialized and connected successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Redis job store (connection failed): {e}. Falling back to in-memory.")
+                app.state.job_store = JobStore(
+                    ttl_seconds=ASYNC_JOB_TTL_SECONDS,
+                    max_progress_history=ASYNC_JOB_PROGRESS_HISTORY,
+                )
+        else:
+            app.state.job_store = JobStore(
+                ttl_seconds=ASYNC_JOB_TTL_SECONDS,
+                max_progress_history=ASYNC_JOB_PROGRESS_HISTORY,
+            )
         logger.info("Job store initialized | async_job_mode=%s", ASYNC_JOB_MODE)
         yield
+        
+        # Cleanup
+        if hasattr(app.state, "job_store") and hasattr(app.state.job_store, "close"):
+            logger.info("Closing job store connection...")
+            await app.state.job_store.close()
+            logger.info("Job store connection closed")
+            
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
         # We'll continue and let individual endpoints handle errors
@@ -140,9 +171,11 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+# Note: When allow_credentials=True, cannot use allow_origins=["*"]
+# Using regex to allow all origins while being compatible with credentials
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origin_regex=r".*",  # Allows all origins (compatible with credentials)
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers

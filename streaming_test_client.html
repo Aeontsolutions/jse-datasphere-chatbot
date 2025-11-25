@@ -302,6 +302,7 @@
                                 headers: {
                                     'Content-Type': 'application/json',
                                 },
+                                credentials: 'include',  // Required for sticky session cookies
                                 body: JSON.stringify(requestData)
                             });
                 
@@ -384,6 +385,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
+                    credentials: 'include',  // Required for sticky session cookies
                     body: JSON.stringify(requestData)
                 });
                 
@@ -474,7 +476,9 @@
             stopJobPolling();
             const poll = async () => {
                 try {
-                    const response = await fetch(statusUrl);
+                    const response = await fetch(statusUrl, {
+                        credentials: 'include'  // Required for sticky session cookies
+                    });
                     if (!response.ok) {
                         throw new Error(`Job polling failed (${response.status})`);
                     }
