@@ -8,7 +8,8 @@ logger = logging.getLogger(__name__)
 
 async def process_streaming_financial_chat(
     request: StreamingChatRequest,
-    financial_manager: Any
+    financial_manager: Any,
+    tracker: Optional[ProgressTracker] = None
 ) -> ProgressTracker:
     """
     Process a financial data query with streaming progress updates
@@ -16,12 +17,14 @@ async def process_streaming_financial_chat(
     Args:
         request: The streaming chat request
         financial_manager: Financial data manager instance
+        tracker: Optional progress tracker (creates new one if not provided)
     
     Returns:
         ProgressTracker instance that can be used to stream updates
     """
     
-    tracker = ProgressTracker()
+    if tracker is None:
+        tracker = ProgressTracker()
     
     # Start the processing in the background
     asyncio.create_task(_process_financial_chat_async(
