@@ -1,34 +1,37 @@
 # AWS Copilot Examples Version Information
 # This file tracks the version of all example configuration files
 
-Version: 1.0.0
-Last Updated: 2025-01-XX
+version: 1.0.0
+last_updated: "2025-01-XX"
 
-## Files Included in This Version
+files_included:
+  - path: api/manifest.yml.example
+    version: v1.0.0
+  - path: chroma/manifest.yml.example
+    version: v1.0.0
+  - path: api/addons/redis.yml.example
+    version: v1.0.0
+  - path: environments/dev/manifest.yml.example
+    version: v1.0.0
+  - path: environments/staging/manifest.yml.example
+    version: v1.0.0
+  - path: environments/prod/manifest.yml.example
+    version: v1.0.0
+  - path: environments/test/manifest.yml.example
+    version: v1.0.0
 
-- api/manifest.yml.example (v1.0.0)
-- chroma/manifest.yml.example (v1.0.0)
-- api/addons/redis.yml.example (v1.0.0)
-- environments/dev/manifest.yml.example (v1.0.0)
-- environments/staging/manifest.yml.example (v1.0.0)
-- environments/prod/manifest.yml.example (v1.0.0)
-- environments/test/manifest.yml.example (v1.0.0)
+changelog:
+  - version: "1.0.0"
+    date: "2025-01-XX"
+    changes:
+      - "Initial release of sanitized example files"
+      - "All sensitive data replaced with placeholders"
+      - "Added comprehensive README documentation"
+      - "Included version headers in all files"
+      - "Added .env.example file"
 
-## Changelog
-
-### Version 1.0.0 (2025-01-XX)
-- Initial release of sanitized example files
-- All sensitive data replaced with placeholders
-- Added comprehensive README documentation
-- Included version headers in all files
-- Added .env.example file
-
-## Versioning Guidelines
-
-When updating these examples:
-1. Increment the version number (major.minor.patch)
-2. Update the "Last Updated" date
-3. Add an entry to the changelog
-4. Update version headers in all modified files
-
-
+versioning_guidelines:
+  - "Increment the version number (major.minor.patch)"
+  - "Update the 'Last Updated' date"
+  - "Add an entry to the changelog"
+  - "Update version headers in all modified files"
