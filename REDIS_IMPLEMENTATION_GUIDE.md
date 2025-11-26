@@ -50,3 +50,4 @@ Redis job store initialized | url=redis://...
 
 You can verify the fix by disabling sticky sessions (optional) or simply testing with the chat client. The 404 errors should disappear completely, regardless of which instance serves the request.
 
+

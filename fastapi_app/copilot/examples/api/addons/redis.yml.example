@@ -1,0 +1,70 @@
+# AWS Copilot Addon Example - Redis
+# Version: 1.0.0
+# Last Updated: 2025-01-XX
+#
+# This is a sanitized example file safe for GitHub.
+#
+# CloudFormation template for Redis addon using AWS ElastiCache
+# This creates a Redis cluster accessible to your Copilot services
+
+Parameters:
+  App:
+    Type: String
+    Description: Your application's name.
+  Env:
+    Type: String
+    Description: The environment name your service, job, or workflow is being deployed to.
+  Name:
+    Type: String
+    Description: The name of the service, job, or workflow.
+
+Resources:
+  # Security Group for Redis
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow access to Redis from the service
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${App}-${Env}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId:
+            Fn::ImportValue:
+              !Sub "${App}-${Env}-EnvironmentSecurityGroup"
+
+  # Redis Subnet Group
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: Subnets for Redis
+      SubnetIds:
+        Fn::Split:
+          - ","
+          - Fn::ImportValue:
+              !Sub "${App}-${Env}-PrivateSubnets"
+
+  # Redis Cluster (Single Node for cost efficiency)
+  # Using cache.t3.micro which is free-tier eligible in some regions or very cheap
+  # For production, consider using cache.t3.small or larger
+  RedisCluster:
+    Type: AWS::ElastiCache::CacheCluster
+    Properties:
+      CacheNodeType: cache.t3.micro  # Adjust based on your needs (cache.t3.small, cache.t3.medium, etc.)
+      Engine: redis
+      NumCacheNodes: 1
+      VpcSecurityGroupIds:
+        - !Ref RedisSecurityGroup
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      Port: 6379
+
+Outputs:
+  # This output will be injected as the REDIS_URL environment variable
+  # Note: Output names must be alphanumeric. Copilot uppercases them and adds them as env vars.
+  RedisUrl:
+    Description: "The connection URL for Redis"
+    Value: !Sub "redis://${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}/0"
+
+
