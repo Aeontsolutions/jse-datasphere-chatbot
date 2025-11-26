@@ -64,7 +64,11 @@ summarizer.ipynb
 
 # FastAPI app
 fastapi_app/.env
-fastapi_app/copilot/*
+# Exclude actual Copilot configs (with secrets), but allow examples
+fastapi_app/copilot/api/manifest.yml
+fastapi_app/copilot/chroma/manifest.yml
+fastapi_app/copilot/api/addons/*.yml
+fastapi_app/copilot/environments/*/manifest.yml
 fastapi_app/fastapi_app/*
 
 # Jupyter notebooks

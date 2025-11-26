@@ -217,10 +217,13 @@
         let debugMode = false;
         let connectionStartTime = null;
         let currentEnvironment = 'local';
+        let activeJobId = null;
+        let jobPollingTimer = null;
+        const JOB_POLL_INTERVAL_MS = 1000;
         
         // Environment base URLs
         const environmentUrls = {
-            local: 'http://0.0.0.0:8000',
+            local: 'http://localhost:8000',
             dev: 'http://jse-da-Publi-1wgQS45FnwpV-1192199831.us-east-1.elb.amazonaws.com',
             prod: 'http://jse-da-Publi-ehai7dwBXRyV-969154490.us-east-1.elb.amazonaws.com'
         };
@@ -260,6 +263,8 @@
             document.getElementById('progressContainer').classList.remove('hidden');
             document.getElementById('responseContainer').classList.add('hidden');
             document.getElementById('sendBtn').disabled = true;
+            stopJobPolling();
+            activeJobId = null;
             
             // Reset progress
             if (useStreaming) {
@@ -292,86 +297,86 @@
             };
             
                         if (useStreaming) {
-                // Use streaming approach with fetch
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(requestData)
-                });
+                            const response = await fetch(url, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                credentials: 'include',  // Required for sticky session cookies
+                                body: JSON.stringify(requestData)
+                            });
                 
-                if (!response.ok) {
-                    const errorMsg = `HTTP error! status: ${response.status}`;
-                    logDebug(`❌ ${errorMsg}`);
-                    throw new Error(errorMsg);
-                }
-                
-                logDebug(`✅ Connection established successfully`);
-                document.getElementById('connectionStatus').textContent = 'Connected - Receiving stream...';
-                document.getElementById('connectionStatus').style.color = '#28a745';
-                
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                
-                try {
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        
-                        if (done) {
-                            const duration = Date.now() - connectionStartTime;
-                            logDebug(`🏁 Stream completed in ${duration}ms`);
-                            console.log('Stream completed');
-                            break;
-                        }
-                        
-                        // Decode the chunk and add to buffer
-                        const chunk = decoder.decode(value, { stream: true });
-                        buffer += chunk;
-                        
-                        // Process complete lines
-                        const lines = buffer.split('\n');
-                        buffer = lines.pop() || ''; // Keep incomplete line in buffer
-                        
-                        let currentEvent = '';
-                        
-                        for (const line of lines) {
-                            if (line.trim() === '') continue; // Skip empty lines
-                            
-                            if (debugMode) {
-                                console.log('Processing line:', line);
+                            if (!response.ok) {
+                                const errorMsg = `HTTP error! status: ${response.status}`;
+                                logDebug(`❌ ${errorMsg}`);
+                                throw new Error(errorMsg);
                             }
-                            
-                            if (line.startsWith('event: ')) {
-                                currentEvent = line.substring(7);
-                                logDebug(`📡 Event: ${currentEvent}`);
-                                if (debugMode) console.log('Found event:', currentEvent);
-                            } else if (line.startsWith('data: ')) {
-                                const data = line.substring(6);
-                                logDebug(`📦 Data: ${data.substring(0, 100)}${data.length > 100 ? '...' : ''}`);
-                                if (debugMode) console.log('Found data:', data);
-                                
+
+                            const contentType = response.headers.get('content-type') || '';
+                            if (contentType.includes('text/event-stream')) {
+                                logDebug(`✅ Connection established successfully (SSE)`);
+                                document.getElementById('connectionStatus').textContent = 'Connected - Receiving stream...';
+                                document.getElementById('connectionStatus').style.color = '#28a745';
+                    
+                                const reader = response.body.getReader();
+                                const decoder = new TextDecoder();
+                                let buffer = '';
+                    
                                 try {
-                                    const parsed = JSON.parse(data);
-                                    handleStreamEvent(currentEvent || 'unknown', parsed);
-                                } catch (e) {
-                                    logDebug(`⚠️ Parse error: ${e.message}`);
-                                    if (debugMode) console.log('Parse error for data:', data, e);
-                                    // Ignore parse errors for heartbeats
+                                    while (true) {
+                                        const { done, value } = await reader.read();
+                            
+                                        if (done) {
+                                            const duration = Date.now() - connectionStartTime;
+                                            logDebug(`🏁 Stream completed in ${duration}ms`);
+                                            console.log('Stream completed');
+                                            break;
+                                        }
+                            
+                                        const chunk = decoder.decode(value, { stream: true });
+                                        buffer += chunk;
+                            
+                                        const lines = buffer.split('\n');
+                                        buffer = lines.pop() || '';
+                            
+                                        let currentEvent = '';
+                            
+                                        for (const line of lines) {
+                                            if (line.trim() === '') continue;
+                                
+                                            if (debugMode) {
+                                                console.log('Processing line:', line);
+                                            }
+                                
+                                            if (line.startsWith('event: ')) {
+                                                currentEvent = line.substring(7);
+                                                logDebug(`📡 Event: ${currentEvent}`);
+                                            } else if (line.startsWith('data: ')) {
+                                                const data = line.substring(6);
+                                                logDebug(`📦 Data: ${data.substring(0, 100)}${data.length > 100 ? '...' : ''}`);
+                                    
+                                                try {
+                                                    const parsed = JSON.parse(data);
+                                                    handleStreamEvent(currentEvent || 'unknown', parsed);
+                                                } catch (e) {
+                                                    logDebug(`⚠️ Parse error: ${e.message}`);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch (error) {
+                                    const duration = Date.now() - connectionStartTime;
+                                    logDebug(`💥 Stream error after ${duration}ms: ${error.message}`);
+                                    console.error('Stream processing error:', error);
+                                    showError(`Error: ${error.message}`);
+                                } finally {
+                                    document.getElementById('sendBtn').disabled = false;
                                 }
+                            } else {
+                                logDebug('ℹ️ Server responded with job payload instead of SSE stream');
+                                await handleJobModeResponse(response, baseUrl);
                             }
-                        }
-                    }
-                } catch (error) {
-                    const duration = Date.now() - connectionStartTime;
-                    logDebug(`💥 Stream error after ${duration}ms: ${error.message}`);
-                    console.error('Stream processing error:', error);
-                    showError(`Error: ${error.message}`);
-                } finally {
-                    document.getElementById('sendBtn').disabled = false;
-                }
-            } else {
+                        } else {
                 // Use non-streaming approach
                 logDebug(`📡 Making non-streaming request to ${url}`);
                 
@@ -380,6 +385,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
+                    credentials: 'include',  // Required for sticky session cookies
                     body: JSON.stringify(requestData)
                 });
                 
@@ -446,6 +452,99 @@
                     break;
             }
         }
+
+        async function handleJobModeResponse(response, baseUrl) {
+            try {
+                const jobPayload = await response.json();
+                if (!jobPayload.job_id) {
+                    throw new Error('Invalid job response payload');
+                }
+                const pollingPath = jobPayload.polling_url || `/jobs/${jobPayload.job_id}`;
+                const statusUrl = pollingPath.startsWith('http') ? pollingPath : `${baseUrl}${pollingPath}`;
+                activeJobId = jobPayload.job_id;
+                logDebug(`🆔 Job created: ${jobPayload.job_id}`);
+                document.getElementById('connectionStatus').textContent = 'Job queued - polling status...';
+                document.getElementById('connectionStatus').style.color = '#ffc107';
+                startJobPolling(statusUrl);
+            } catch (error) {
+                logDebug(`❌ Failed to parse job response: ${error.message}`);
+                showError(`Job creation error: ${error.message}`);
+            }
+        }
+
+        function startJobPolling(statusUrl) {
+            stopJobPolling();
+            const poll = async () => {
+                try {
+                    const response = await fetch(statusUrl, {
+                        credentials: 'include'  // Required for sticky session cookies
+                    });
+                    if (!response.ok) {
+                        throw new Error(`Job polling failed (${response.status})`);
+                    }
+                    const jobStatus = await response.json();
+                    handleJobStatus(jobStatus);
+                } catch (error) {
+                    logDebug(`⚠️ Job polling error: ${error.message}`);
+                    stopJobPolling();
+                    showError(`Job polling error: ${error.message}`);
+                }
+            };
+            poll();
+            jobPollingTimer = setInterval(() => {
+                poll();
+            }, JOB_POLL_INTERVAL_MS);
+        }
+
+        function stopJobPolling() {
+            if (jobPollingTimer) {
+                clearInterval(jobPollingTimer);
+                jobPollingTimer = null;
+            }
+        }
+
+        function handleJobStatus(jobStatus) {
+            const status = jobStatus.status || 'unknown';
+            const jobId = jobStatus.job_id || activeJobId || 'unknown';
+            logDebug(`📬 Job status (${jobId}): ${status}`);
+            activeJobId = jobId;
+
+            const statusColors = {
+                queued: '#ffc107',
+                running: '#17a2b8',
+                succeeded: '#28a745',
+                failed: '#dc3545'
+            };
+
+            document.getElementById('connectionStatus').textContent = `Job ${status}`;
+            document.getElementById('connectionStatus').style.color = statusColors[status] || '#17a2b8';
+
+            updateProgressFromJob(jobStatus);
+
+            if (status === 'succeeded') {
+                stopJobPolling();
+                if (jobStatus.result) {
+                    showResult(jobStatus.result);
+                } else {
+                    showError('Job completed without a result payload');
+                }
+            } else if (status === 'failed') {
+                stopJobPolling();
+                showError(jobStatus.error || 'Job failed');
+            }
+        }
+
+        function updateProgressFromJob(jobStatus) {
+            const latest = jobStatus.latest_progress
+                || (jobStatus.progress && jobStatus.progress.length > 0
+                    ? jobStatus.progress[jobStatus.progress.length - 1]
+                    : null);
+            if (latest) {
+                updateProgress(latest.step || 'processing', latest.message || '', latest.progress || 0, latest.details);
+            } else {
+                updateProgress('queued', 'Job queued...', 0);
+            }
+        }
         
         function updateProgress(step, message, progress, details) {
             document.getElementById('statusMessage').textContent = message;
@@ -461,6 +560,8 @@
         }
         
         function showResult(result) {
+            stopJobPolling();
+            activeJobId = null;
             document.getElementById('progressContainer').classList.add('hidden');
             document.getElementById('responseContainer').classList.remove('hidden');
             document.getElementById('responseContainer').classList.remove('error');
@@ -486,6 +587,8 @@
         }
         
         function showError(error) {
+            stopJobPolling();
+            activeJobId = null;
             document.getElementById('progressContainer').classList.add('hidden');
             document.getElementById('responseContainer').classList.remove('hidden');
             document.getElementById('responseContainer').classList.add('error');
@@ -501,6 +604,8 @@
             document.getElementById('progressContainer').classList.add('hidden');
             document.getElementById('responseContainer').classList.add('hidden');
             conversationHistory = [];
+            stopJobPolling();
+            activeJobId = null;
         }
         
         // Debug utility functions

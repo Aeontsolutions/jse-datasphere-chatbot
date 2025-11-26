@@ -1,0 +1,127 @@
+# AWS Copilot Manifest Example - API Service
+# Version: 1.0.0
+# Last Updated: 2025-01-XX
+#
+# This is a sanitized example file safe for GitHub.
+# Replace all placeholder values (marked with <PLACEHOLDER>) with your actual values.
+#
+# The manifest for the "api" service.
+# Read the full specification for the "Load Balanced Web Service" type at:
+#  https://aws.github.io/copilot-cli/docs/manifest/lb-web-service/
+
+# Your service name will be used in naming your resources like log groups, ECS services, etc.
+name: api
+type: Load Balanced Web Service
+
+# Distribute traffic to your service.
+http:
+  # Requests to this path will be forwarded to your service.
+  # To match all requests you can use the "/" path.
+  path: '/'
+  # You can specify a custom health check path. The default is "/".
+  healthcheck: 
+    path: '/health'
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 30s
+  # Enable sticky sessions for async job polling consistency
+  stickiness: true
+
+# Configuration for your containers and service.
+image:
+  # Docker build arguments. For additional overrides: https://aws.github.io/copilot-cli/docs/manifest/lb-web-service/#image-build
+  build: Dockerfile
+  # Port exposed through your container to route traffic to it.
+  port: 8000
+
+# Increased resources for financial data processing (fast_chat_v2 loads 2099+ records)
+cpu: 512       # Number of CPU units for the task (increased from 256)
+memory: 1024   # Amount of memory in MiB used by the task (increased from 512)
+platform: linux/x86_64  # See https://aws.github.io/copilot-cli/docs/manifest/lb-web-service/#platform
+count: 1       # Number of tasks that should be running in your service.
+exec: true     # Enable running commands in your container.
+
+# Allow time for in-flight requests and async jobs to complete during deployments
+taskdef_overrides:
+  - path: ContainerDefinitions[0].StopTimeout
+    value: 120  # Wait 2 minutes before force-killing container (default is 30s)
+network:
+  connect: true # Enable Service Connect for intra-environment traffic between services.
+
+# storage:
+  # readonly_fs: true       # Limit to read-only access to mounted root filesystems.
+
+# Environment variables for the application
+# IMPORTANT: For production, use AWS Secrets Manager instead of plain text variables
+# See the secrets section below for the recommended approach
+variables:
+  # AWS Configuration
+  AWS_ACCESS_KEY_ID: <YOUR_AWS_ACCESS_KEY_ID>
+  AWS_SECRET_ACCESS_KEY: <YOUR_AWS_SECRET_ACCESS_KEY>
+  AWS_DEFAULT_REGION: <YOUR_AWS_REGION>  # e.g., us-east-1
+  DOCUMENT_METADATA_S3_BUCKET: <YOUR_S3_BUCKET_NAME>
+  
+  # Google AI Configuration (required for fast_chat_v2 endpoint)
+  GOOGLE_API_KEY: <YOUR_GOOGLE_API_KEY>
+  SUMMARIZER_API_KEY: <YOUR_GOOGLE_API_KEY>
+  CHATBOT_API_KEY: <YOUR_GOOGLE_API_KEY>
+  # GCP Service Account JSON as a string (escape newlines with \n)
+  GCP_SERVICE_ACCOUNT_INFO: '<YOUR_GCP_SERVICE_ACCOUNT_JSON_STRING>'
+
+  # GCP project ID
+  GCP_PROJECT_ID: <YOUR_GCP_PROJECT_ID>
+  BIGQUERY_DATASET: <YOUR_BIGQUERY_DATASET>
+  BIGQUERY_TABLE: <YOUR_BIGQUERY_TABLE>
+  BIGQUERY_LOCATION: <YOUR_BIGQUERY_LOCATION>  # e.g., US, EU
+  
+  # ChromaDB Configuration
+  CHROMA_PERSIST_DIRECTORY: /app/chroma_db
+  CHROMA_HOST: "http://chroma:8000"
+  
+  # Application Configuration
+  FORCE_LLM_FALLBACK: "true"
+  LOG_LEVEL: "INFO"
+
+  # ASYNC Job Configuration
+  ASYNC_JOB_MODE: "true"
+  ASYNC_JOB_TTL_SECONDS: "900"  # 15 minutes - jobs expire after this time
+  ASYNC_JOB_MAX_PROGRESS_HISTORY: "50"  # Keep last 50 progress updates
+
+# RECOMMENDED: Move secrets to AWS Secrets Manager for better security
+# Uncomment and configure the secrets section below, then remove sensitive variables above
+secrets:
+  # GOOGLE_API_KEY: /copilot/${COPILOT_APPLICATION_NAME}/${COPILOT_ENVIRONMENT_NAME}/secrets/GOOGLE_API_KEY
+  # SUMMARIZER_API_KEY: /copilot/${COPILOT_APPLICATION_NAME}/${COPILOT_ENVIRONMENT_NAME}/secrets/GOOGLE_API_KEY
+  # CHATBOT_API_KEY: /copilot/${COPILOT_APPLICATION_NAME}/${COPILOT_ENVIRONMENT_NAME}/secrets/GOOGLE_API_KEY
+  # AWS_ACCESS_KEY_ID: /copilot/${COPILOT_APPLICATION_NAME}/${COPILOT_ENVIRONMENT_NAME}/secrets/AWS_ACCESS_KEY_ID
+  # AWS_SECRET_ACCESS_KEY: /copilot/${COPILOT_APPLICATION_NAME}/${COPILOT_ENVIRONMENT_NAME}/secrets/AWS_SECRET_ACCESS_KEY
+  # GCP_SERVICE_ACCOUNT_INFO: /copilot/${COPILOT_APPLICATION_NAME}/${COPILOT_ENVIRONMENT_NAME}/secrets/GCP_SERVICE_ACCOUNT_INFO
+  
+# You can override any of the values defined above by environment.
+environments:
+  staging:
+    # Staging-specific overrides
+    count: 1
+    cpu: 512
+    memory: 1024
+  prod:
+    # Production overrides - can scale up further if needed
+    count: 2               # Multiple instances for high availability
+    cpu: 1024              # More CPU for production load
+    memory: 2048           # More memory for production
+    deployment:
+      rolling: 'recreate'  # Zero-downtime deployments
+    http:
+      deregistration_delay: 120s  # Keep routing traffic for 2 min during shutdown
+      stickiness: true     # CRITICAL: Must re-declare stickiness when overriding http
+    variables:
+      # Re-enable async job mode with proper sticky sessions
+      ASYNC_JOB_MODE: "true"
+  test:
+    # Test environment - minimal resources
+    count: 1
+    cpu: 512
+    memory: 1024
+
+

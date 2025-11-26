@@ -1,11 +1,12 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 import os
 import json
 import logging
 import time
 import uuid
+import asyncio
 from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
 
@@ -16,7 +17,8 @@ from app.models import (
     ChromaMetaUpdateRequest, ChromaMetaUpdateResponse,
     ChromaMetaQueryRequest, ChromaMetaQueryResponse,
     StreamingChatRequest,
-    FinancialDataRequest, FinancialDataResponse, FinancialDataFilters
+    FinancialDataRequest, FinancialDataResponse, FinancialDataFilters,
+    JobCreateResponse, JobStatusResponse, JobStatus,
 )
 from app.utils import (
     init_s3_client, 
@@ -37,6 +39,9 @@ from app.chroma_utils import (
 )
 from app.streaming_chat import process_streaming_chat
 from app.financial_utils import FinancialDataManager
+from app.job_store import JobStore, JobProgressSink
+from app.redis_job_store import RedisJobStore
+from app.progress_tracker import ProgressTracker
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -48,6 +53,18 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+ASYNC_JOB_MODE = _env_bool("ASYNC_JOB_MODE", True)
+ASYNC_JOB_TTL_SECONDS = int(os.getenv("ASYNC_JOB_TTL_SECONDS", "900"))
+ASYNC_JOB_PROGRESS_HISTORY = int(os.getenv("ASYNC_JOB_MAX_PROGRESS_HISTORY", "50"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -102,7 +119,45 @@ async def lifespan(app: FastAPI):
         except Exception as financial_err:
             logger.error(f"Failed to initialize financial data manager: {financial_err}")
             app.state.financial_manager = None
+        # -----------------------
+        # Initialize Job Store (Redis or In-Memory)
+        # -----------------------
+        # Check for REDIS_URL (standard) or RedisUrl (CloudFormation output) or REDISURL (Copilot default)
+        redis_url = os.getenv("REDIS_URL") or os.getenv("RedisUrl") or os.getenv("REDISURL")
+        
+        if redis_url:
+            try:
+                # Initialize and TEST connection
+                job_store = RedisJobStore(
+                    redis_url=redis_url,
+                    ttl_seconds=ASYNC_JOB_TTL_SECONDS,
+                    max_progress_history=ASYNC_JOB_PROGRESS_HISTORY,
+                )
+                # Verify connection works
+                await job_store._redis.ping()
+                
+                app.state.job_store = job_store
+                logger.info("Redis job store initialized and connected successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Redis job store (connection failed): {e}. Falling back to in-memory.")
+                app.state.job_store = JobStore(
+                    ttl_seconds=ASYNC_JOB_TTL_SECONDS,
+                    max_progress_history=ASYNC_JOB_PROGRESS_HISTORY,
+                )
+        else:
+            app.state.job_store = JobStore(
+                ttl_seconds=ASYNC_JOB_TTL_SECONDS,
+                max_progress_history=ASYNC_JOB_PROGRESS_HISTORY,
+            )
+        logger.info("Job store initialized | async_job_mode=%s", ASYNC_JOB_MODE)
         yield
+        
+        # Cleanup
+        if hasattr(app.state, "job_store") and hasattr(app.state.job_store, "close"):
+            logger.info("Closing job store connection...")
+            await app.state.job_store.close()
+            logger.info("Job store connection closed")
+            
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
         # We'll continue and let individual endpoints handle errors
@@ -116,9 +171,11 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+# Note: When allow_credentials=True, cannot use allow_origins=["*"]
+# Using regex to allow all origins while being compatible with credentials
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origin_regex=r".*",  # Allows all origins (compatible with credentials)
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
@@ -164,6 +221,13 @@ def get_meta_collection():
 # Dependency to get financial data manager
 def get_financial_manager():
     return getattr(app.state, 'financial_manager', None)
+
+
+def get_job_store() -> JobStore:
+    job_store = getattr(app.state, 'job_store', None)
+    if not job_store:
+        raise HTTPException(status_code=503, detail="Job store not initialized")
+    return job_store
 
 @app.get("/")
 async def root():
@@ -321,7 +385,8 @@ async def chat(
 async def chat_stream(
     request: StreamingChatRequest,
     s3_client: Any = Depends(get_s3_client),
-    metadata: Dict = Depends(get_metadata)
+    metadata: Dict = Depends(get_metadata),
+    job_store: JobStore = Depends(get_job_store),
 ):
     """
     Stream chat responses with real-time progress updates using Server-Sent Events
@@ -349,29 +414,55 @@ async def chat_stream(
         logger.info("📜 No conversation history received")
     
     try:
-        # Start the streaming chat process
-        tracker = await process_streaming_chat(
-            request=request,
-            s3_client=s3_client,
-            metadata=metadata,
-            use_fast_mode=False
+        if not ASYNC_JOB_MODE:
+            # SSE streaming mode - return immediate streaming response
+            tracker = await process_streaming_chat(
+                request=request,
+                s3_client=s3_client,
+                metadata=metadata,
+                use_fast_mode=False,
+            )
+            return StreamingResponse(
+                tracker.stream_updates(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",  # Disable nginx buffering
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "Cache-Control",
+                }
+            )
+
+        # Async job mode - create job and return immediately
+        job_id = await job_store.create_job("chat_stream", request.model_dump())
+        
+        # Fire-and-forget: start processing in background
+        asyncio.create_task(
+            _process_chat_job_background(
+                job_id=job_id,
+                request=request,
+                s3_client=s3_client,
+                metadata=metadata,
+                job_store=job_store,
+            )
         )
         
-        # Return streaming response with proper headers for SSE
-        return StreamingResponse(
-            tracker.stream_updates(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",  # Disable nginx buffering
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Cache-Control",
-            }
+        # Return immediately with job ID
+        response_payload = JobCreateResponse(
+            job_id=job_id,
+            status=JobStatus.queued,
+            job_type="chat_stream",
+            polling_url=f"/jobs/{job_id}",
         )
+        logger.info(f"Created async job {job_id} for chat_stream")
+        return JSONResponse(status_code=202, content=response_payload.model_dump())
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in chat stream endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error starting chat stream: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating chat job: {str(e)}")
 
 @app.post("/chroma/update", response_model=ChromaAddResponse)
 async def chroma_update(
@@ -641,6 +732,7 @@ async def fast_chat_stream(
     metadata: Dict = Depends(get_metadata),
     collection: Any = Depends(get_chroma_collection),
     meta_collection: Any = Depends(get_meta_collection),
+    job_store: JobStore = Depends(get_job_store),
 ):
     """
     Stream fast chat responses with real-time progress updates using Server-Sent Events
@@ -660,31 +752,70 @@ async def fast_chat_stream(
     )
     
     try:
-        # Start the streaming fast chat process
-        tracker = await process_streaming_chat(
-            request=request,
-            s3_client=s3_client,
-            metadata=metadata,
-            collection=collection,
-            meta_collection=meta_collection,
-            use_fast_mode=True
+        if not ASYNC_JOB_MODE:
+            # SSE streaming mode - return immediate streaming response
+            tracker = await process_streaming_chat(
+                request=request,
+                s3_client=s3_client,
+                metadata=metadata,
+                collection=collection,
+                meta_collection=meta_collection,
+                use_fast_mode=True,
+            )
+            return StreamingResponse(
+                tracker.stream_updates(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",  # Disable nginx buffering
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "Cache-Control",
+                }
+            )
+
+        # Async job mode - create job and return immediately
+        job_id = await job_store.create_job("fast_chat_stream", request.model_dump())
+        
+        # Fire-and-forget: start processing in background
+        asyncio.create_task(
+            _process_fast_chat_job_background(
+                job_id=job_id,
+                request=request,
+                s3_client=s3_client,
+                metadata=metadata,
+                collection=collection,
+                meta_collection=meta_collection,
+                job_store=job_store,
+            )
         )
         
-        # Return streaming response with proper headers for SSE
-        return StreamingResponse(
-            tracker.stream_updates(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",  # Disable nginx buffering
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Cache-Control",
-            }
+        # Return immediately with job ID
+        response_payload = JobCreateResponse(
+            job_id=job_id,
+            status=JobStatus.queued,
+            job_type="fast_chat_stream",
+            polling_url=f"/jobs/{job_id}",
         )
+        logger.info(f"Created async job {job_id} for fast_chat_stream")
+        return JSONResponse(status_code=202, content=response_payload.model_dump())
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in fast_chat stream endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error starting fast chat stream: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating fast_chat job: {str(e)}")
+
+
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job_status_endpoint(
+    job_id: str,
+    job_store: JobStore = Depends(get_job_store),
+):
+    job_status = await job_store.get_job_status(job_id)
+    if not job_status:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job_status
 
 # ---------------------------------------------------------------------------
 # Financial Data Query Endpoint (V2)
@@ -778,6 +909,7 @@ async def fast_chat_v2(
 async def fast_chat_v2_stream(
     request: StreamingChatRequest,
     financial_manager: Any = Depends(get_financial_manager),
+    job_store: JobStore = Depends(get_job_store),
 ):
     """
     Stream financial data query responses with real-time progress updates using Server-Sent Events
@@ -809,27 +941,54 @@ async def fast_chat_v2_stream(
         # Import the streaming financial chat processor
         from app.streaming_financial_chat import process_streaming_financial_chat
         
-        # Start the streaming financial chat process
-        tracker = await process_streaming_financial_chat(
-            request=request,
-            financial_manager=financial_manager
+        if not ASYNC_JOB_MODE:
+            # SSE streaming mode - return immediate streaming response
+            tracker = await process_streaming_financial_chat(
+                request=request,
+                financial_manager=financial_manager
+            )
+            
+            # Return streaming response with proper headers for SSE
+            return StreamingResponse(
+                tracker.stream_updates(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",  # Disable nginx buffering
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "Cache-Control",
+                }
+            )
+        
+        # Async job mode - create job and return immediately
+        job_id = await job_store.create_job("financial_stream", request.model_dump())
+        
+        # Fire-and-forget: start processing in background
+        asyncio.create_task(
+            _process_financial_job_background(
+                job_id=job_id,
+                request=request,
+                financial_manager=financial_manager,
+                job_store=job_store,
+            )
         )
         
-        # Return streaming response with proper headers for SSE
-        return StreamingResponse(
-            tracker.stream_updates(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",  # Disable nginx buffering
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Cache-Control",
-            }
+        # Return immediately with job ID
+        response_payload = JobCreateResponse(
+            job_id=job_id,
+            status=JobStatus.queued,
+            job_type="financial_stream",
+            polling_url=f"/jobs/{job_id}",
         )
+        logger.info(f"Created async job {job_id} for financial_stream")
+        return JSONResponse(status_code=202, content=response_payload.model_dump())
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in fast_chat_v2 stream endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error starting financial data stream: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating financial job: {str(e)}")
 
 @app.get("/financial/metadata")
 async def get_financial_metadata(
@@ -912,3 +1071,113 @@ async def refresh_cache_endpoint():
     except Exception as e:
         logger.error(f"Error refreshing cache: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error refreshing cache: {str(e)}")
+
+
+# ==============================================================================
+# BACKGROUND JOB PROCESSORS
+# ==============================================================================
+
+async def _process_chat_job_background(
+    job_id: str,
+    request: StreamingChatRequest,
+    s3_client: Any,
+    metadata: Dict,
+    job_store: JobStore,
+):
+    """
+    Background task to process chat job with progress tracking.
+    This function runs asynchronously and updates the job store with progress.
+    """
+    try:
+        logger.info(f"Starting background processing for job {job_id}")
+        await job_store.mark_running(job_id)
+        
+        # Create tracker with job store sink for progress updates
+        tracker = ProgressTracker(event_sink=JobProgressSink(job_store, job_id))
+        
+        # Process the streaming chat
+        await process_streaming_chat(
+            request=request,
+            s3_client=s3_client,
+            metadata=metadata,
+            use_fast_mode=False,
+            tracker=tracker,
+        )
+        
+        logger.info(f"Successfully completed background job {job_id}")
+        
+    except Exception as job_error:
+        logger.error(f"Job {job_id} failed with error: {str(job_error)}", exc_info=True)
+        await job_store.fail_job(job_id, str(job_error))
+
+
+async def _process_fast_chat_job_background(
+    job_id: str,
+    request: StreamingChatRequest,
+    s3_client: Any,
+    metadata: Dict,
+    collection: Any,
+    meta_collection: Any,
+    job_store: JobStore,
+):
+    """
+    Background task to process fast_chat job with progress tracking.
+    Uses vector database for faster responses.
+    """
+    try:
+        logger.info(f"Starting background fast_chat processing for job {job_id}")
+        await job_store.mark_running(job_id)
+        
+        # Create tracker with job store sink for progress updates
+        tracker = ProgressTracker(event_sink=JobProgressSink(job_store, job_id))
+        
+        # Process the streaming fast chat
+        await process_streaming_chat(
+            request=request,
+            s3_client=s3_client,
+            metadata=metadata,
+            collection=collection,
+            meta_collection=meta_collection,
+            use_fast_mode=True,
+            tracker=tracker,
+        )
+        
+        logger.info(f"Successfully completed background fast_chat job {job_id}")
+        
+    except Exception as job_error:
+        logger.error(f"Fast_chat job {job_id} failed with error: {str(job_error)}", exc_info=True)
+        await job_store.fail_job(job_id, str(job_error))
+
+
+async def _process_financial_job_background(
+    job_id: str,
+    request: StreamingChatRequest,
+    financial_manager: Any,
+    job_store: JobStore,
+):
+    """
+    Background task to process financial data job with progress tracking.
+    Queries financial database with natural language.
+    """
+    try:
+        logger.info(f"Starting background financial processing for job {job_id}")
+        await job_store.mark_running(job_id)
+        
+        # Import the streaming financial chat processor
+        from app.streaming_financial_chat import process_streaming_financial_chat
+        
+        # Create tracker with job store sink for progress updates
+        tracker = ProgressTracker(event_sink=JobProgressSink(job_store, job_id))
+        
+        # Process the streaming financial chat
+        await process_streaming_financial_chat(
+            request=request,
+            financial_manager=financial_manager,
+            tracker=tracker,
+        )
+        
+        logger.info(f"Successfully completed background financial job {job_id}")
+        
+    except Exception as job_error:
+        logger.error(f"Financial job {job_id} failed with error: {str(job_error)}", exc_info=True)
+        await job_store.fail_job(job_id, str(job_error))
