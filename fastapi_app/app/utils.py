@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # # Load environment variables
 # load_dotenv()
 
-METADATA_KEY = "metadata_with_mapping_2025-09-14.json"
+METADATA_KEY = "metadata_2025-11-26.json"
 
 # Initialize AWS S3 client
 def init_s3_client():
