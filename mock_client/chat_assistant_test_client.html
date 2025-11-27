@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JSE Chat Assistant Test Client</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f5f5f5;
+      --panel: #ffffff;
+      --border: #e2e8f0;
+      --text: #1f2933;
+      --subtle: #61758a;
+      --fast: #ff7846;
+      --deep: #4f46e5;
+      --success: #16a34a;
+      --error: #dc2626;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .app-shell {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      min-height: 100vh;
+    }
+    aside {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .sidebar-header h1 {
+      margin: 0 0 4px;
+      font-size: 1.25rem;
+    }
+    .sidebar-header p {
+      margin: 0;
+      font-size: 0.9rem;
+      color: #94a3b8;
+    }
+    .mode-toggle {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      background: rgba(148, 163, 184, 0.12);
+      padding: 4px;
+      border-radius: 999px;
+      gap: 4px;
+    }
+    .mode-btn {
+      border: none;
+      border-radius: 999px;
+      padding: 10px 12px;
+      font-weight: 600;
+      cursor: pointer;
+      color: #cbd5f5;
+      background: transparent;
+      transition: all 0.2s ease;
+    }
+    .mode-btn.active.fast {
+      background: rgba(255, 120, 70, 0.2);
+      color: #ffe4d6;
+    }
+    .mode-btn.active.deep {
+      background: rgba(79, 70, 229, 0.35);
+      color: #eef2ff;
+    }
+    .environment {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 0.9rem;
+    }
+    .environment select {
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(15, 23, 42, 0.8);
+      color: #f8fafc;
+      padding: 8px;
+    }
+    .session-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .session-actions button {
+      flex: 1;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px dashed rgba(148, 163, 184, 0.6);
+      background: transparent;
+      color: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .sessions {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-right: 4px;
+    }
+    .session-card {
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 8px;
+      padding: 10px 12px;
+      cursor: pointer;
+      position: relative;
+      transition: border-color 0.2s ease;
+    }
+    .session-card.active {
+      border-color: #a5b4fc;
+      background: rgba(79, 70, 229, 0.25);
+    }
+    .session-card h3 {
+      margin: 0;
+      font-size: 0.95rem;
+    }
+    .session-card span {
+      font-size: 0.75rem;
+      color: #94a3b8;
+    }
+    .session-card button {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    main {
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .transcript {
+      flex: 1;
+      overflow-y: auto;
+      background: var(--panel);
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .message {
+      max-width: 80%;
+      padding: 14px 16px;
+      border-radius: 12px;
+      line-height: 1.4;
+    }
+    .message.user {
+      align-self: flex-end;
+      background: rgba(79, 70, 229, 0.15);
+      border: 1px solid rgba(79, 70, 229, 0.3);
+    }
+    .message.assistant {
+      align-self: flex-start;
+      background: rgba(15, 23, 42, 0.04);
+      border: 1px solid rgba(15, 23, 42, 0.08);
+    }
+    .message.system {
+      align-self: center;
+      background: rgba(71, 85, 105, 0.15);
+      border: 1px solid rgba(71, 85, 105, 0.25);
+    }
+    .message small {
+      display: block;
+      margin-top: 8px;
+      font-size: 0.75rem;
+      color: var(--subtle);
+    }
+    .streaming-panel {
+      background: var(--panel);
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      padding: 18px;
+      display: grid;
+      gap: 8px;
+    }
+    .streaming-panel header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .badge {
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge.fast {
+      background: rgba(255, 120, 70, 0.15);
+      color: #c2410c;
+    }
+    .badge.deep {
+      background: rgba(79, 70, 229, 0.15);
+      color: #4338ca;
+    }
+    .progress-shell {
+      background: rgba(15, 23, 42, 0.05);
+      border-radius: 999px;
+      height: 10px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #4f46e5, #10b981);
+      transition: width 0.25s ease;
+    }
+    .composer {
+      background: var(--panel);
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 120px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      padding: 12px;
+      font-size: 1rem;
+      resize: vertical;
+      font-family: inherit;
+    }
+    textarea:disabled {
+      background: #f1f5f9;
+    }
+    .composer-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .composer-actions button {
+      border-radius: 8px;
+      border: none;
+      padding: 10px 18px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .composer-actions button.primary {
+      background: #4f46e5;
+      color: #fff;
+    }
+    .composer-actions button.secondary {
+      background: rgba(15, 23, 42, 0.07);
+      color: var(--text);
+    }
+    .checkbox-group {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      font-size: 0.9rem;
+    }
+    .checkbox-group label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    .response-meta {
+      font-size: 0.85rem;
+      color: var(--subtle);
+    }
+    .streaming-error {
+      color: var(--error);
+      font-size: 0.9rem;
+    }
+    @media (max-width: 960px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+      aside {
+        flex-direction: row;
+        flex-wrap: wrap;
+      }
+      .sessions {
+        max-height: 220px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside>
+      <div class="sidebar-header">
+        <h1>Jacie Assistant</h1>
+        <p>Standalone test client for Fast & Deep chat flows.</p>
+      </div>
+      <div class="mode-toggle">
+        <button class="mode-btn active fast" data-mode="fast">🔥 Fast Financial</button>
+        <button class="mode-btn deep" data-mode="deep">📚 Deep Documents</button>
+      </div>
+      <div class="environment">
+        <label for="environmentSelect">Environment</label>
+        <select id="environmentSelect">
+          <option value="local">Local</option>
+          <option value="dev">Dev</option>
+          <option value="stage">Stage</option>
+          <option value="prod">Prod</option>
+        </select>
+      </div>
+      <div class="session-actions">
+        <button id="newSessionBtn">＋ New Session</button>
+      </div>
+      <div class="sessions" id="sessionList"></div>
+    </aside>
+    <main>
+      <section class="transcript" id="transcript"></section>
+      <section class="streaming-panel">
+        <header>
+          <div>
+            <strong>Streaming Monitor</strong>
+            <div class="response-meta" id="streamingStatus">Idle · Waiting for next request</div>
+          </div>
+          <span class="badge fast" id="modeBadge">Fast Mode</span>
+        </header>
+        <div class="progress-shell">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <div class="response-meta" id="streamingStep">Step: —</div>
+        <div class="response-meta" id="streamingDetails">Details will appear here during deep mode.</div>
+        <div class="response-meta" id="streamingResponse"></div>
+        <div class="streaming-error" id="streamingError"></div>
+      </section>
+      <section class="composer">
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="autoLoadToggle" checked /> Auto-load documents</label>
+          <label><input type="checkbox" id="memoryToggle" checked /> Conversation memory</label>
+        </div>
+        <textarea id="composerInput" placeholder="Ask anything about JSE Datasphere documents…"></textarea>
+        <div class="composer-actions">
+          <button class="secondary" id="resetSessionBtn">Reset Session</button>
+          <button class="primary" id="sendBtn">Send Message</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const STORAGE_KEYS = {
+      sessions: "chat-assistant-sessions",
+      messages: "chat-assistant-messages",
+    };
+
+    const ENV_URLS = {
+      local: "http://localhost:8000",
+      dev: "http://jse-da-Publi-1wgQS45FnwpV-1192199831.us-east-1.elb.amazonaws.com",
+      stage: "http://jse-da-Publi-wupYrzJkbRrm-92790362.us-east-1.elb.amazonaws.com",
+      prod: "http://jse-da-Publi-ehai7dwBXRyV-969154490.us-east-1.elb.amazonaws.com",
+    };
+
+    const defaultStreaming = () => ({
+      isStreaming: false,
+      progress: 0,
+      message: "Idle · Waiting for next request",
+      step: "—",
+      details: "Details will appear here during deep mode.",
+      response: "",
+      error: "",
+    });
+
+    const state = {
+      mode: "fast",
+      environment: "local",
+      sessions: [],
+      messagesBySession: {},
+      selectedSessionId: null,
+      streaming: defaultStreaming(),
+    };
+
+    const dom = {
+      sessionList: document.getElementById("sessionList"),
+      transcript: document.getElementById("transcript"),
+      streamingStatus: document.getElementById("streamingStatus"),
+      streamingStep: document.getElementById("streamingStep"),
+      streamingDetails: document.getElementById("streamingDetails"),
+      streamingResponse: document.getElementById("streamingResponse"),
+      streamingError: document.getElementById("streamingError"),
+      progressBar: document.getElementById("progressBar"),
+      modeBadge: document.getElementById("modeBadge"),
+      composerInput: document.getElementById("composerInput"),
+      autoLoadToggle: document.getElementById("autoLoadToggle"),
+      memoryToggle: document.getElementById("memoryToggle"),
+      sendBtn: document.getElementById("sendBtn"),
+      resetSessionBtn: document.getElementById("resetSessionBtn"),
+      newSessionBtn: document.getElementById("newSessionBtn"),
+      environmentSelect: document.getElementById("environmentSelect"),
+    };
+
+    function persistState() {
+      localStorage.setItem(STORAGE_KEYS.sessions, JSON.stringify(state.sessions));
+      localStorage.setItem(
+        STORAGE_KEYS.messages,
+        JSON.stringify(state.messagesBySession)
+      );
+    }
+
+    function restoreState() {
+      const storedSessions = localStorage.getItem(STORAGE_KEYS.sessions);
+      const storedMessages = localStorage.getItem(STORAGE_KEYS.messages);
+      if (storedSessions) {
+        state.sessions = JSON.parse(storedSessions);
+      }
+      if (storedMessages) {
+        state.messagesBySession = JSON.parse(storedMessages);
+      }
+      if (!state.sessions.length) {
+        createSession("First conversation");
+      } else {
+        state.selectedSessionId = state.sessions[0].id;
+      }
+    }
+
+    function createSession(title) {
+      const session = {
+        id: crypto.randomUUID(),
+        title: title || `Session ${state.sessions.length + 1}`,
+        createdAt: Date.now(),
+      };
+      state.sessions.unshift(session);
+      state.messagesBySession[session.id] = [];
+      state.selectedSessionId = session.id;
+      persistState();
+      renderSessions();
+      renderTranscript();
+    }
+
+    function deleteSession(id) {
+      state.sessions = state.sessions.filter((s) => s.id !== id);
+      delete state.messagesBySession[id];
+      if (state.selectedSessionId === id) {
+        state.selectedSessionId = state.sessions[0]?.id || null;
+      }
+      if (!state.sessions.length) {
+        createSession("New session");
+      } else {
+        persistState();
+        renderSessions();
+        renderTranscript();
+      }
+    }
+
+    function selectSession(id) {
+      state.selectedSessionId = id;
+      renderSessions();
+      renderTranscript();
+    }
+
+    function appendMessage(sessionId, role, content) {
+      if (!state.messagesBySession[sessionId]) {
+        state.messagesBySession[sessionId] = [];
+      }
+      state.messagesBySession[sessionId].push({
+        role,
+        content,
+        timestamp: new Date().toISOString(),
+      });
+      persistState();
+      renderTranscript();
+    }
+
+    function renderSessions() {
+      dom.sessionList.innerHTML = "";
+      state.sessions.forEach((session) => {
+        const wrapper = document.createElement("div");
+        wrapper.className = `session-card${
+          session.id === state.selectedSessionId ? " active" : ""
+        }`;
+        wrapper.innerHTML = `
+          <button title="Delete session" data-delete="${session.id}">✕</button>
+          <h3>${session.title}</h3>
+          <span>${new Date(session.createdAt).toLocaleString()}</span>
+        `;
+        wrapper.addEventListener("click", (evt) => {
+          if (evt.target.dataset.delete) return;
+          selectSession(session.id);
+        });
+        wrapper
+          .querySelector("button")
+          .addEventListener("click", (evt) => {
+            evt.stopPropagation();
+            deleteSession(session.id);
+          });
+        dom.sessionList.appendChild(wrapper);
+      });
+    }
+
+    function renderTranscript() {
+      const messages =
+        state.messagesBySession[state.selectedSessionId] || [];
+      dom.transcript.innerHTML = "";
+      if (!messages.length) {
+        const placeholder = document.createElement("div");
+        placeholder.className = "message system";
+        placeholder.textContent =
+          "No messages yet. Ask a question about the JSE dataset to get started.";
+        dom.transcript.appendChild(placeholder);
+        return;
+      }
+      messages.forEach((msg) => {
+        const bubble = document.createElement("div");
+        bubble.className = `message ${msg.role}`;
+        bubble.innerHTML = `
+          <div>${msg.content}</div>
+          <small>${new Date(msg.timestamp).toLocaleTimeString()}</small>
+        `;
+        dom.transcript.appendChild(bubble);
+      });
+      dom.transcript.scrollTop = dom.transcript.scrollHeight;
+    }
+
+    function setMode(mode) {
+      state.mode = mode;
+      document
+        .querySelectorAll(".mode-btn")
+        .forEach((btn) => btn.classList.remove("active"));
+      document
+        .querySelector(`.mode-btn[data-mode="${mode}"]`)
+        ?.classList.add("active");
+      dom.modeBadge.textContent = mode === "fast" ? "Fast Financial" : "Deep Documents";
+      dom.modeBadge.className = `badge ${mode}`;
+    }
+
+    function updateStreamingUI(patch = {}) {
+      state.streaming = { ...state.streaming, ...patch };
+      dom.streamingStatus.textContent = state.streaming.message;
+      dom.streamingStep.textContent = `Step: ${state.streaming.step}`;
+      dom.streamingDetails.textContent = state.streaming.details;
+      dom.streamingResponse.textContent = state.streaming.response;
+      dom.streamingError.textContent = state.streaming.error;
+      dom.progressBar.style.width = `${state.streaming.progress}%`;
+    }
+
+    function resetStreaming() {
+      updateStreamingUI(defaultStreaming());
+    }
+
+    function buildConversationHistory(sessionId) {
+      const history = state.messagesBySession[sessionId] || [];
+      return history
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({
+          role: m.role,
+          content: m.content,
+        }));
+    }
+
+    async function sendMessage() {
+      const prompt = dom.composerInput.value.trim();
+      if (!prompt || !state.selectedSessionId) return;
+
+      appendMessage(state.selectedSessionId, "user", prompt);
+      dom.composerInput.value = "";
+      dom.composerInput.disabled = true;
+      dom.sendBtn.disabled = true;
+      dom.resetSessionBtn.disabled = true;
+
+      const payload = {
+        query: prompt,
+        auto_load_documents: dom.autoLoadToggle.checked,
+        memory_enabled: dom.memoryToggle.checked,
+      };
+
+      if (payload.memory_enabled) {
+        payload.conversation_history = buildConversationHistory(
+          state.selectedSessionId
+        );
+      }
+
+      const baseUrl = ENV_URLS[state.environment];
+
+      try {
+        if (state.mode === "fast") {
+          resetStreaming();
+          updateStreamingUI({
+            message: "Fast chat request in-flight…",
+            step: "Calling /fast_chat_v2",
+            progress: 35,
+          });
+          const response = await fetch(`${baseUrl}/fast_chat_v2`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            throw new Error(`Fast chat failed (${response.status})`);
+          }
+          const data = await response.json();
+          handleAssistantReply(data, "fast");
+          updateStreamingUI({
+            message: "Fast chat complete",
+            step: "Response ready",
+            progress: 100,
+            response: "Response captured in transcript.",
+          });
+        } else {
+          await runStreamingRequest(`${baseUrl}/chat/stream`, payload);
+        }
+      } catch (err) {
+        console.error(err);
+        updateStreamingUI({
+          message: "Request failed",
+          error: err.message,
+          step: "Error",
+        });
+      } finally {
+        dom.composerInput.disabled = false;
+        dom.sendBtn.disabled = false;
+        dom.resetSessionBtn.disabled = false;
+      }
+    }
+
+    async function runStreamingRequest(url, payload) {
+      resetStreaming();
+      updateStreamingUI({
+        isStreaming: true,
+        message: "Creating async job…",
+        step: "Submitting request",
+        progress: 5,
+        details: "Waiting for job creation",
+      });
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Job creation failed (${response.status})`);
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+
+      // Check if it's an async job (202 Accepted)
+      if (response.status === 202) {
+        const jobData = await response.json();
+        updateStreamingUI({
+          message: `Job created: ${jobData.job_id}`,
+          step: "Polling for updates",
+          progress: 10,
+          details: `Job type: ${jobData.job_type}`,
+        });
+        await pollJobStatus(jobData.job_id);
+        return;
+      }
+
+      // Fallback for non-async mode (shouldn't happen in prod)
+      const fallback = await response.json();
+      handleAssistantReply(fallback, "deep");
+      updateStreamingUI({
+        message: "Fallback response received",
+        step: "Complete (non-async)",
+        progress: 100,
+      });
+    }
+
+    async function pollJobStatus(jobId) {
+      const baseUrl = ENV_URLS[state.environment];
+      const maxAttempts = 120; // 2 minutes max (120 * 1 second)
+      let attempts = 0;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+
+        try {
+          const response = await fetch(`${baseUrl}/jobs/${jobId}`, {
+            credentials: "include", // Required for sticky session cookies
+          });
+
+          if (!response.ok) {
+            throw new Error(`Job polling failed (${response.status})`);
+          }
+
+          const jobStatus = await response.json();
+
+          console.log("Job status:", jobStatus); // Debug log
+
+          // Update UI with latest progress
+          const latest = jobStatus.latest_progress ||
+            (jobStatus.progress && jobStatus.progress.length > 0
+              ? jobStatus.progress[jobStatus.progress.length - 1]
+              : null);
+
+          if (latest) {
+            updateStreamingUI({
+              message: latest.message || jobStatus.status,
+              step: latest.step || latest.current_step || jobStatus.status,
+              progress: latest.progress ?? (attempts * 0.5),
+              details: latest.details ? JSON.stringify(latest.details, null, 2) : `Polling attempt ${attempts}`,
+            });
+          } else {
+            updateStreamingUI({
+              message: `Job ${jobStatus.status}`,
+              step: jobStatus.status,
+              progress: attempts * 0.5,
+            });
+          }
+
+          // Check if job succeeded
+          if (jobStatus.status === "succeeded") {
+            if (jobStatus.result) {
+              handleAssistantReply(jobStatus.result, "deep");
+              updateStreamingUI({
+                isStreaming: false,
+                message: "Job completed successfully",
+                step: "complete",
+                progress: 100,
+                response: "Response captured in transcript.",
+              });
+            } else {
+              updateStreamingUI({
+                isStreaming: false,
+                message: "Job completed without result",
+                step: "error",
+                error: "Job succeeded but no result payload",
+              });
+            }
+            return;
+          }
+
+          // Check if job failed
+          if (jobStatus.status === "failed") {
+            updateStreamingUI({
+              isStreaming: false,
+              message: "Job failed",
+              step: "error",
+              error: jobStatus.error || "Unknown error",
+            });
+            return;
+          }
+
+          // Continue polling (wait 1 second between polls)
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+        } catch (err) {
+          console.error("Polling error:", err);
+          updateStreamingUI({
+            message: "Polling error",
+            error: err.message,
+          });
+          // Continue polling even on error
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+
+      // Timeout
+      updateStreamingUI({
+        isStreaming: false,
+        message: "Job polling timeout",
+        step: "timeout",
+        error: "Job did not complete within 2 minutes",
+      });
+    }
+
+    function handleAssistantReply(data, mode) {
+      const responseText =
+        data.response ||
+        data.answer ||
+        data.result ||
+        "No assistant response returned.";
+      appendMessage(state.selectedSessionId, "assistant", responseText);
+      const docs = data.documents_loaded;
+      const extraDetails = [];
+      if (docs?.length) {
+        extraDetails.push(`Loaded ${docs.length} documents`);
+      }
+      if (data.document_selection_message) {
+        extraDetails.push(data.document_selection_message);
+      }
+      if (data.record_count) {
+        extraDetails.push(`${data.record_count} financial records analyzed`);
+      }
+      if (extraDetails.length) {
+        appendMessage(
+          state.selectedSessionId,
+          "system",
+          `${mode === "deep" ? "Deep" : "Fast"} mode insight:\n- ${extraDetails.join(
+            "\n- "
+          )}`
+        );
+      }
+    }
+
+    function resetSessionMessages() {
+      if (!state.selectedSessionId) return;
+      state.messagesBySession[state.selectedSessionId] = [];
+      persistState();
+      renderTranscript();
+      resetStreaming();
+    }
+
+    function init() {
+      restoreState();
+      renderSessions();
+      renderTranscript();
+
+      document.querySelectorAll(".mode-btn").forEach((btn) => {
+        btn.addEventListener("click", () => setMode(btn.dataset.mode));
+      });
+
+      dom.environmentSelect.addEventListener("change", (evt) => {
+        state.environment = evt.target.value;
+      });
+
+      dom.newSessionBtn.addEventListener("click", () => {
+        createSession("Untitled session");
+      });
+
+      dom.sendBtn.addEventListener("click", () => sendMessage());
+      dom.composerInput.addEventListener("keydown", (evt) => {
+        if (evt.key === "Enter" && (evt.metaKey || evt.ctrlKey)) {
+          evt.preventDefault();
+          sendMessage();
+        }
+      });
+      dom.resetSessionBtn.addEventListener("click", resetSessionMessages);
+      setMode("fast");
+    }
+
+    init();
+  </script>
+</body>
+</html>
+
