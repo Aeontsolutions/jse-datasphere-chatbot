@@ -52,7 +52,7 @@
     }
     .mode-toggle {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       background: rgba(148, 163, 184, 0.12);
       padding: 4px;
       border-radius: 999px;
@@ -315,7 +315,8 @@
       </div>
       <div class="mode-toggle">
         <button class="mode-btn active fast" data-mode="fast">🔥 Fast Financial</button>
-        <button class="mode-btn deep" data-mode="deep">📚 Deep Documents</button>
+        <button class="mode-btn deep" data-mode="deep">📚 Deep Sync</button>
+        <button class="mode-btn deep" data-mode="deep-stream">🌊 Deep Stream</button>
       </div>
       <div class="environment">
         <label for="environmentSelect">Environment</label>
@@ -544,8 +545,13 @@
       document
         .querySelector(`.mode-btn[data-mode="${mode}"]`)
         ?.classList.add("active");
-      dom.modeBadge.textContent = mode === "fast" ? "Fast Financial" : "Deep Documents";
-      dom.modeBadge.className = `badge ${mode}`;
+      const badgeText = {
+        fast: "Fast Financial",
+        deep: "Deep Sync",
+        "deep-stream": "Deep Stream"
+      };
+      dom.modeBadge.textContent = badgeText[mode] || mode;
+      dom.modeBadge.className = `badge ${mode.includes('deep') ? 'deep' : 'fast'}`;
     }
 
     function updateStreamingUI(patch = {}) {
@@ -621,7 +627,31 @@
             progress: 100,
             response: "Response captured in transcript.",
           });
-        } else {
+        } else if (state.mode === "deep") {
+          resetStreaming();
+          updateStreamingUI({
+            message: "Deep chat request in-flight…",
+            step: "Calling /chat",
+            progress: 35,
+          });
+          const response = await fetch(`${baseUrl}/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            throw new Error(`Deep chat failed (${response.status})`);
+          }
+          const data = await response.json();
+          handleAssistantReply(data, "deep");
+          updateStreamingUI({
+            message: "Deep chat complete",
+            step: "Response ready",
+            progress: 100,
+            response: "Response captured in transcript.",
+          });
+        } else if (state.mode === "deep-stream") {
           await runStreamingRequest(`${baseUrl}/chat/stream`, payload);
         }
       } catch (err) {
