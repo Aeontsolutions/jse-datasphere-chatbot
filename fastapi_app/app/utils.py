@@ -19,7 +19,6 @@ from google.oauth2 import service_account
 from google.cloud import aiplatform
 from vertexai.preview.generative_models import GenerativeModel
 import google.generativeai as genai
-from app.chroma_utils import query_meta_collection, get_companies_from_query
 
 # Configure logging
 logging.basicConfig(
@@ -915,80 +914,9 @@ def semantic_document_selection(query, metadata, conversation_history=None, meta
         Dictionary with companies_mentioned and documents_to_load
     """
     # ------------------------------------------------------------------
-    # Optional override: skip embedding search entirely (test LLM fallback)
+    # ChromaDB has been deprecated - always use LLM-based selection
     # ------------------------------------------------------------------
-    if os.getenv("FORCE_LLM_FALLBACK", "false").lower() == "true":
-        logger.info("FORCE_LLM_FALLBACK is set – bypassing embedding-based selection")
-        return semantic_document_selection_llm_fallback(query, metadata, conversation_history)
-
-    # Try embedding-based approach first if meta_collection is available
-    if meta_collection is not None:
-        try:
-            logger.info("Attempting embedding-based document selection")
-            
-            # Extract companies from the query
-            companies_from_query = get_companies_from_query(query)
-            logger.info(f"Extracted companies from query: {companies_from_query}")
-            
-            all_documents_to_load = []
-            all_companies_mentioned = set()
-            
-            if companies_from_query:
-                # Run individual searches for each detected company
-                for company in companies_from_query:
-                    logger.info(f"Searching for documents from company: {company}")
-                    company_result = query_meta_collection(
-                        meta_collection=meta_collection,
-                        query=query,
-                        n_results=3,  # Get top 3 documents per company
-                        where={"company": {"$eq": company}},
-                        conversation_history=conversation_history
-                    )
-                    
-                    if company_result and company_result.get("documents_to_load"):
-                        all_documents_to_load.extend(company_result["documents_to_load"])
-                        all_companies_mentioned.update(company_result.get("companies_mentioned", []))
-                        logger.info(f"Found {len(company_result['documents_to_load'])} documents for {company}")
-                
-                # Deduplicate documents by filename
-                seen_filenames = set()
-                deduplicated_documents = []
-                for doc in all_documents_to_load:
-                    if doc["filename"] not in seen_filenames:
-                        deduplicated_documents.append(doc)
-                        seen_filenames.add(doc["filename"])
-                
-                if deduplicated_documents:
-                    result = {
-                        "companies_mentioned": list(all_companies_mentioned),
-                        "documents_to_load": deduplicated_documents
-                    }
-                    logger.info(f"Multi-company embedding-based selection found {len(deduplicated_documents)} documents from {len(all_companies_mentioned)} companies")
-                    return result
-                else:
-                    logger.info("Multi-company search returned no results, trying broader search")
-            
-            # Fallback to broader search if no companies detected or no results
-            logger.info("Running broader embedding search (no company-specific filtering)")
-            result = query_meta_collection(
-                meta_collection=meta_collection,
-                query=query,
-                n_results=15,  # Increased for broader search
-                conversation_history=conversation_history
-            )
-            
-            if result and result.get("documents_to_load"):
-                logger.info(f"Broader embedding-based selection found {len(result['documents_to_load'])} documents")
-                return result
-            else:
-                logger.info("Embedding-based selection returned no results, falling back to LLM")
-        except Exception as e:
-            logger.warning(f"Embedding-based selection failed: {str(e)}, falling back to LLM")
-    else:
-        logger.info("No meta_collection provided, using LLM approach")
-    
-    # Fallback to LLM-based approach
-    logger.info("Using LLM fallback for document selection")
+    logger.info("Using LLM-based document selection (ChromaDB deprecated)")
     return semantic_document_selection_llm_fallback(query, metadata, conversation_history)
 
 # Function to use the LLM to determine which documents to load based on the query and conversation history (FALLBACK)

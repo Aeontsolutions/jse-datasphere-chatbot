@@ -11,31 +11,19 @@ from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
 
 from app.models import (
-    ChatRequest, ChatResponse, 
-    ChromaAddRequest, ChromaAddResponse, 
-    ChromaQueryRequest, ChromaQueryResponse,
-    ChromaMetaUpdateRequest, ChromaMetaUpdateResponse,
-    ChromaMetaQueryRequest, ChromaMetaQueryResponse,
+    ChatRequest, ChatResponse,
     StreamingChatRequest,
     FinancialDataRequest, FinancialDataResponse, FinancialDataFilters,
     JobCreateResponse, JobStatusResponse, JobStatus,
 )
 from app.utils import (
-    init_s3_client, 
-    init_vertex_ai, 
-    load_metadata_from_s3, 
-    auto_load_relevant_documents, 
+    init_s3_client,
+    init_vertex_ai,
+    load_metadata_from_s3,
+    auto_load_relevant_documents,
     generate_chat_response,
-    semantic_document_selection,
     refresh_metadata_cache,
     get_cache_status,
-)
-from app.chroma_utils import (
-    init_chroma_client,
-    get_or_create_collection,
-    add_documents as chroma_add_documents,
-    query_collection as chroma_query_collection,
-    qa_bot,
 )
 from app.streaming_chat import process_streaming_chat
 from app.financial_utils import FinancialDataManager
@@ -79,34 +67,6 @@ async def lifespan(app: FastAPI):
             logger.info(f"Metadata loaded: {len(app.state.metadata)} companies found")
         else:
             logger.warning("Failed to load metadata from S3")
-        # -----------------------
-        # Initialise ChromaDB
-        # -----------------------
-        try:
-            app.state.chroma_client = init_chroma_client()
-            app.state.chroma_collection = get_or_create_collection(app.state.chroma_client)
-            try:
-                collection_size = app.state.chroma_collection.count()
-            except Exception:
-                collection_size = "unknown"
-                logger.warning("Could not retrieve Chroma collection size during startup.")
-            logger.info(
-                "ChromaDB initialised and collection ready | collection_size=%s",
-                collection_size,
-            )
-            # Initialize the metadata collection for semantic document selection
-            app.state.meta_collection = get_or_create_collection(app.state.chroma_client, "doc_meta")
-            try:
-                meta_collection_size = app.state.meta_collection.count()
-            except Exception:
-                meta_collection_size = "unknown"
-                logger.warning("Could not retrieve metadata collection size during startup.")
-            logger.info(
-                "Metadata collection initialised | collection_size=%s",
-                meta_collection_size,
-            )
-        except Exception as chroma_err:
-            logger.error(f"Failed to initialise ChromaDB: {chroma_err}")
         # -----------------------
         # Initialize Financial Data Manager (BigQuery)
         # -----------------------
@@ -209,14 +169,6 @@ def get_s3_client():
 # Dependency to get metadata
 def get_metadata():
     return app.state.metadata
-
-# Dependency to get Chroma collection
-def get_chroma_collection():
-    return app.state.chroma_collection
-
-# Dependency to get metadata collection
-def get_meta_collection():
-    return app.state.meta_collection
 
 # Dependency to get financial data manager
 def get_financial_manager():
@@ -463,349 +415,6 @@ async def chat_stream(
     except Exception as e:
         logger.error(f"Error in chat stream endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error creating chat job: {str(e)}")
-
-@app.post("/chroma/update", response_model=ChromaAddResponse)
-async def chroma_update(
-    request: ChromaAddRequest,
-    collection: Any = Depends(get_chroma_collection),
-):
-    """Add or upsert documents into the ChromaDB vector store."""
-    logger.info(f"/chroma/update called. num_documents={len(request.documents)}")
-    try:
-        ids = chroma_add_documents(collection, request.documents, request.metadatas, request.ids)
-        logger.info(f"/chroma/update completed. ids={ids}")
-        return ChromaAddResponse(status="success", ids=ids)
-    except Exception as e:
-        logger.error(f"Error updating ChromaDB: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error updating ChromaDB: {str(e)}")
-
-@app.post("/chroma/query", response_model=ChromaQueryResponse)
-async def chroma_query(
-    request: ChromaQueryRequest,
-    collection: Any = Depends(get_chroma_collection),
-):
-    """Query the ChromaDB vector store and retrieve most similar documents."""
-    logger.info(f"/chroma/query called. query='{request.query}', n_results={request.n_results}, where={request.where}")
-    try:
-        # Our helper returns (sorted_results, context)
-        sorted_results, _ = chroma_query_collection(
-            collection,
-            query=request.query,
-            n_results=request.n_results,
-            where=request.where,
-        )
-
-        # Build separate lists for the response schema
-        ids = [meta.get("id") for meta, _ in sorted_results if meta.get("id")]
-        documents = [doc for _, doc in sorted_results]
-        metadatas = [meta for meta, _ in sorted_results] if sorted_results else None
-
-        logger.info(
-            f"/chroma/query completed. documents_returned={len(documents)}"
-        )
-
-        return ChromaQueryResponse(
-            ids=ids,
-            documents=documents,
-            metadatas=metadatas,
-        )
-    except Exception as e:
-        logger.error(f"Error querying ChromaDB: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error querying ChromaDB: {str(e)}")
-
-@app.post("/chroma/meta/update", response_model=ChromaMetaUpdateResponse)
-async def chroma_meta_update(
-    request: ChromaMetaUpdateRequest,
-    meta_collection: Any = Depends(get_meta_collection),
-):
-    """Add or upsert document metadata into the metadata collection."""
-    logger.info(f"/chroma/meta/update called. num_documents={len(request.documents)}")
-    try:
-        # Build the documents list for embedding
-        documents = []
-        metadatas = []
-        ids = []
-        
-        for doc_info in request.documents:
-            # Create description text for embedding: "company - doc_type - period"
-            description = f"{doc_info.company} - {doc_info.type} - {doc_info.period}"
-            documents.append(description)
-            
-            # Create metadata with all fields
-            metadata = {
-                "filename": doc_info.filename,
-                "company": doc_info.company,
-                "period": doc_info.period,
-                "type": doc_info.type
-            }
-            metadatas.append(metadata)
-            
-            # Use filename as ID (could be made more unique if needed)
-            ids.append(doc_info.filename)
-        
-        # Add to collection
-        result_ids = chroma_add_documents(meta_collection, documents, metadatas, ids)
-        logger.info(f"/chroma/meta/update completed. ids={result_ids}")
-        return ChromaMetaUpdateResponse(status="success", ids=result_ids)
-    except Exception as e:
-        logger.error(f"Error updating metadata collection: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error updating metadata collection: {str(e)}")
-
-@app.post("/chroma/meta/query", response_model=ChromaMetaQueryResponse)
-async def chroma_meta_query(
-    request: ChromaMetaQueryRequest,
-    meta_collection: Any = Depends(get_meta_collection),
-):
-    """Query the metadata collection to find relevant documents."""
-    logger.info(f"/chroma/meta/query called. query='{request.query}', n_results={request.n_results}")
-    try:
-        # Query the metadata collection
-        sorted_results, _ = chroma_query_collection(
-            meta_collection,
-            query=request.query,
-            n_results=request.n_results,
-            where=request.where,
-        )
-
-        # Build separate lists for the response schema
-        ids = [meta.get("filename") for meta, _ in sorted_results if meta.get("filename")]
-        documents = [doc for _, doc in sorted_results]
-        metadatas = [meta for meta, _ in sorted_results] if sorted_results else None
-
-        logger.info(
-            f"/chroma/meta/query completed. documents_returned={len(documents)}"
-        )
-
-        return ChromaMetaQueryResponse(
-            ids=ids,
-            documents=documents,
-            metadatas=metadatas,
-        )
-    except Exception as e:
-        logger.error(f"Error querying metadata collection: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error querying metadata collection: {str(e)}")
-
-# ---------------------------------------------------------------------------
-# Fast Chat Endpoint (Vector DB → Gemini QA)
-# ---------------------------------------------------------------------------
-
-@app.post("/fast_chat", response_model=ChatResponse)
-async def fast_chat(
-    request: ChatRequest,
-    s3_client: Any = Depends(get_s3_client),
-    metadata: Dict = Depends(get_metadata),
-    collection: Any = Depends(get_chroma_collection),
-    meta_collection: Any = Depends(get_meta_collection),
-):
-    """A retrieval-augmented chat endpoint that reuses the ChromaDB query logic
-    from the /chroma/query endpoint and then lets Gemini answer based on that context.
-
-    This endpoint is DRY - it reuses the same ChromaDB query logic as /chroma/query.
-    """
-
-    logger.info(
-        f"/fast_chat called. query='{request.query[:200]}' | memory_enabled={request.memory_enabled} | auto_load_documents={request.auto_load_documents}"
-    )
-    
-    try:
-        # -----------------------------
-        # Step 1: Build enhanced query (if conversation history is available)
-        # -----------------------------
-        retrieval_query = request.query
-        if request.memory_enabled and request.conversation_history:
-            # Combine recent user messages with the current query for better retrieval
-            recent_history = [
-                msg["content"] for msg in request.conversation_history[-10:] if msg.get("role") == "user"
-            ]
-            retrieval_query = " ".join(recent_history + [request.query])
-
-        # -----------------------------
-        # Step 2: (Optional) Semantic pre-selection of documents by filename
-        # -----------------------------
-        auto_load_message: Optional[str] = None
-        semantic_filenames: list[str] = []
-
-        if request.auto_load_documents:
-            selected_docs = semantic_document_selection(
-                request.query,
-                metadata,
-                request.conversation_history,
-                meta_collection,
-            )
-            
-            if selected_docs:
-                auto_load_message = f"The user has mentioned the following companies: {', '.join(selected_docs['companies_mentioned'])}"
-                # Normalise filenames: some LLM responses include full S3 paths – we only
-                # store the *basename* (e.g. "my_report.pdf") in Chroma metadata.
-                # Strip any directory components before building the filter.
-                semantic_filenames = [
-                    os.path.basename(doc["filename"]) for doc in selected_docs["documents_to_load"]
-                ]
-
-                # ------------------------------------------------------------------
-                # Chroma stores the *summary* files (usually `.txt`) while the
-                # metadata coming from S3 often refers to the original PDF
-                # filename.  To keep the vector-DB filter effective, translate any
-                # “.pdf” extension to “.txt” and de-duplicate the list.
-                # ------------------------------------------------------------------
-                semantic_filenames = list({
-                    fn[:-4] + ".txt" if fn.lower().endswith(".pdf") else fn
-                    for fn in semantic_filenames
-                })
-
-        # -----------------------------
-        # Step 3: Query ChromaDB using the same logic as /chroma/query endpoint
-        # -----------------------------
-        where_filter = {"filename": {"$in": semantic_filenames}} if semantic_filenames else None
-
-        # Use the same query logic as the /chroma/query endpoint
-        sorted_results, context = chroma_query_collection(
-            collection,
-            query=retrieval_query,
-            n_results=3,
-            where=where_filter,
-        )
-
-        # Prepare helpful metadata for the caller
-        retrieved_doc_names = [
-            meta.get("filename")
-            or meta.get("source")
-            or meta.get("id")
-            for meta, _ in sorted_results
-        ] if sorted_results else []
-
-        retrieval_message = f"{len(sorted_results)} documents retrieved from vector database."
-
-        # Combine messages
-        doc_selection_message_parts = []
-        if auto_load_message:
-            doc_selection_message_parts.append(auto_load_message.strip())
-        doc_selection_message_parts.append(retrieval_message)
-        doc_selection_message = " ".join(doc_selection_message_parts)
-
-        logger.info(
-            f"/fast_chat retrieval complete. documents_retrieved={len(sorted_results)}, context_chars={len(context)}, semantic_filter_docs={semantic_filenames}"
-        )
-
-        # -----------------------------
-        # Step 4: Let LLM answer (include conversation history if provided)
-        # -----------------------------
-        response_text = qa_bot(
-            request.query,
-            context,
-            conversation_history=request.conversation_history if request.memory_enabled else None,
-        )
-
-        # Additional log after generating the response
-        logger.info(
-            f"/fast_chat LLM answer generated. response_chars={len(response_text)}"
-        )
-
-        # -----------------------------
-        # Step 5: Update conversation history (if memory is enabled)
-        # -----------------------------
-        updated_conversation_history = None
-        if request.memory_enabled and request.conversation_history:
-            updated_conversation_history = request.conversation_history.copy()
-            updated_conversation_history.append({"role": "user", "content": request.query})
-            updated_conversation_history.append({"role": "assistant", "content": response_text})
-        elif request.memory_enabled:
-            updated_conversation_history = [
-                {"role": "user", "content": request.query},
-                {"role": "assistant", "content": response_text},
-            ]
-
-        return ChatResponse(
-            response=response_text,
-            documents_loaded=retrieved_doc_names,
-            document_selection_message=doc_selection_message,
-            conversation_history=updated_conversation_history,
-        )
-    except Exception as e:
-        logger.error(f"Error in fast_chat endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
-
-@app.post("/fast_chat/stream")
-async def fast_chat_stream(
-    request: StreamingChatRequest,
-    s3_client: Any = Depends(get_s3_client),
-    metadata: Dict = Depends(get_metadata),
-    collection: Any = Depends(get_chroma_collection),
-    meta_collection: Any = Depends(get_meta_collection),
-    job_store: JobStore = Depends(get_job_store),
-):
-    """
-    Stream fast chat responses with real-time progress updates using Server-Sent Events
-    
-    This endpoint provides the same functionality as /fast_chat but streams progress updates
-    to the client. It uses vector database retrieval for faster responses and provides
-    real-time updates on:
-    - Document selection process
-    - Vector database search
-    - AI response generation
-    
-    The stream will emit 'progress' events with status updates and a final 'result' 
-    event with the complete response.
-    """
-    logger.info(
-        f"/fast_chat/stream called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
-    )
-    
-    try:
-        if not ASYNC_JOB_MODE:
-            # SSE streaming mode - return immediate streaming response
-            tracker = await process_streaming_chat(
-                request=request,
-                s3_client=s3_client,
-                metadata=metadata,
-                collection=collection,
-                meta_collection=meta_collection,
-                use_fast_mode=True,
-            )
-            return StreamingResponse(
-                tracker.stream_updates(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache, no-transform",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",  # Disable nginx buffering
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Headers": "Cache-Control",
-                }
-            )
-
-        # Async job mode - create job and return immediately
-        job_id = await job_store.create_job("fast_chat_stream", request.model_dump())
-        
-        # Fire-and-forget: start processing in background
-        asyncio.create_task(
-            _process_fast_chat_job_background(
-                job_id=job_id,
-                request=request,
-                s3_client=s3_client,
-                metadata=metadata,
-                collection=collection,
-                meta_collection=meta_collection,
-                job_store=job_store,
-            )
-        )
-        
-        # Return immediately with job ID
-        response_payload = JobCreateResponse(
-            job_id=job_id,
-            status=JobStatus.queued,
-            job_type="fast_chat_stream",
-            polling_url=f"/jobs/{job_id}",
-        )
-        logger.info(f"Created async job {job_id} for fast_chat_stream")
-        return JSONResponse(status_code=202, content=response_payload.model_dump())
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in fast_chat stream endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error creating fast_chat job: {str(e)}")
-
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status_endpoint(
@@ -1091,10 +700,10 @@ async def _process_chat_job_background(
     try:
         logger.info(f"Starting background processing for job {job_id}")
         await job_store.mark_running(job_id)
-        
+
         # Create tracker with job store sink for progress updates
         tracker = ProgressTracker(event_sink=JobProgressSink(job_store, job_id))
-        
+
         # Process the streaming chat
         await process_streaming_chat(
             request=request,
@@ -1103,49 +712,11 @@ async def _process_chat_job_background(
             use_fast_mode=False,
             tracker=tracker,
         )
-        
+
         logger.info(f"Successfully completed background job {job_id}")
-        
+
     except Exception as job_error:
         logger.error(f"Job {job_id} failed with error: {str(job_error)}", exc_info=True)
-        await job_store.fail_job(job_id, str(job_error))
-
-
-async def _process_fast_chat_job_background(
-    job_id: str,
-    request: StreamingChatRequest,
-    s3_client: Any,
-    metadata: Dict,
-    collection: Any,
-    meta_collection: Any,
-    job_store: JobStore,
-):
-    """
-    Background task to process fast_chat job with progress tracking.
-    Uses vector database for faster responses.
-    """
-    try:
-        logger.info(f"Starting background fast_chat processing for job {job_id}")
-        await job_store.mark_running(job_id)
-        
-        # Create tracker with job store sink for progress updates
-        tracker = ProgressTracker(event_sink=JobProgressSink(job_store, job_id))
-        
-        # Process the streaming fast chat
-        await process_streaming_chat(
-            request=request,
-            s3_client=s3_client,
-            metadata=metadata,
-            collection=collection,
-            meta_collection=meta_collection,
-            use_fast_mode=True,
-            tracker=tracker,
-        )
-        
-        logger.info(f"Successfully completed background fast_chat job {job_id}")
-        
-    except Exception as job_error:
-        logger.error(f"Fast_chat job {job_id} failed with error: {str(job_error)}", exc_info=True)
         await job_store.fail_job(job_id, str(job_error))
 
 

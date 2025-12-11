@@ -11,44 +11,36 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
       - DOCUMENT_METADATA_S3_BUCKET=${DOCUMENT_METADATA_S3_BUCKET}
-      
+
       # Google Cloud / Gemini AI Configuration (required for fast_chat_v2 endpoint)
       - GCP_SERVICE_ACCOUNT_INFO=${GCP_SERVICE_ACCOUNT_INFO}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+
+      # BigQuery Configuration
+      - BIGQUERY_DATASET=${BIGQUERY_DATASET}
+      - BIGQUERY_TABLE=${BIGQUERY_TABLE}
+      - BIGQUERY_LOCATION=${BIGQUERY_LOCATION:-US}
+
       # API Keys
       - SUMMARIZER_API_KEY=${SUMMARIZER_API_KEY}
       - CHATBOT_API_KEY=${CHATBOT_API_KEY}
-      
-      # ChromaDB Configuration
-      - CHROMA_HOST=http://chroma:8000
+
+      # Application Configuration
       - FORCE_LLM_FALLBACK=true
-      
-      # Logging Configuration
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # Async Job Configuration
+      - ASYNC_JOB_MODE=true
+      - ASYNC_JOB_TTL_SECONDS=900
+      - ASYNC_JOB_MAX_PROGRESS_HISTORY=50
     volumes:
       # Mount the .env file for application secrets
       - ./.env:/app/.env
-    depends_on:
-      - chroma
-    restart: unless-stopped
-
-  chroma:
-    image: ghcr.io/chroma-core/chroma:latest
-    environment:
-      - PERSIST_DIRECTORY=/app/chroma_db
-      - CHROMA_DB_IMPL=duckdb+parquet
-    volumes:
-      - chroma_data:/app/chroma_db
-    ports:
-      # Expose on host 8001 for debugging; internal port 8000
-      - "8001:8000"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-volumes:
-  chroma_data:
+      start_period: 30s
