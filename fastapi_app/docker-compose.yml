@@ -27,7 +27,6 @@ services:
       - CHATBOT_API_KEY=${CHATBOT_API_KEY}
 
       # Application Configuration
-      - FORCE_LLM_FALLBACK=true
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
 
       # Async Job Configuration
