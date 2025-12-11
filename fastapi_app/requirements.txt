@@ -1,17 +1,16 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pydantic
 python-dotenv
 boto3>=1.34,<1.35
 pypdf>=3.0.0
-google-cloud-aiplatform
+google-cloud-aiplatform>=1.60.0
 google-auth
 vertexai
-chromadb
 rapidfuzz
 google-genai
 google-generativeai
-aioboto3==12.3.0
+aioboto3>=13.0.0
 tenacity
 requests
 openpyxl==3.1.2
@@ -23,3 +22,6 @@ pytest-asyncio>=0.23.0
 pytest-xdist
 streamlit
 redis>=4.2.0
+# Pin compatible versions to avoid conflicts
+grpcio>=1.60.0,<2.0.0
+protobuf>=4.25.0,<6.0.0

@@ -4,15 +4,11 @@ from typing import Dict, List, Optional, Any
 from app.progress_tracker import ProgressTracker
 from app.models import StreamingChatRequest, ChatResponse
 from app.utils import (
-    auto_load_relevant_documents, 
+    auto_load_relevant_documents,
     generate_chat_response,
     semantic_document_selection,
     auto_load_relevant_documents_async,
     S3DownloadConfig,
-)
-from app.chroma_utils import (
-    query_collection as chroma_query_collection,
-    qa_bot,
 )
 import os
 
@@ -74,7 +70,9 @@ async def _process_chat_async(
             return
         
         if use_fast_mode:
-            await _process_fast_chat(request, metadata, tracker, collection, meta_collection)
+            # ChromaDB has been deprecated - fast mode is no longer supported
+            await tracker.emit_error("Fast mode (ChromaDB) has been deprecated. Please use the /chat/stream endpoint instead.")
+            return
         else:
             await _process_traditional_chat(request, s3_client, metadata, tracker)
             
