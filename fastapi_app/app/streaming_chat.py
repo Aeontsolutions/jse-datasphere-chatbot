@@ -76,7 +76,7 @@ async def _process_chat_async(
         
         if use_fast_mode:
             # ChromaDB has been deprecated - fast mode is no longer supported
-            await tracker.emit_error("Fast mode (ChromaDB) has been deprecated. Please use the traditional chat endpoint instead.")
+            await tracker.emit_error("Fast mode (ChromaDB) has been deprecated. Please use the /chat/stream endpoint instead.")
             return
         else:
             await _process_traditional_chat(request, s3_client, metadata, tracker)
