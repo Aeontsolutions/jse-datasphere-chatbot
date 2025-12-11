@@ -10,11 +10,6 @@ from app.utils import (
     auto_load_relevant_documents_async,
     S3DownloadConfig,
 )
-# ChromaDB has been deprecated - fast_mode is no longer supported
-# from app.chroma_utils import (
-#     query_collection as chroma_query_collection,
-#     qa_bot,
-# )
 import os
 
 logger = logging.getLogger(__name__)
