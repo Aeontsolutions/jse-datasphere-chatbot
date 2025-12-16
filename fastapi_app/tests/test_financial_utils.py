@@ -1,8 +1,8 @@
 import pytest
 import os
 import csv
-from fastapi_app.app.financial_utils import FinancialDataManager
-from fastapi_app.app.models import FinancialDataFilters
+from app.financial_utils import FinancialDataManager
+from app.models import FinancialDataFilters
 from collections import defaultdict
 import logging
 

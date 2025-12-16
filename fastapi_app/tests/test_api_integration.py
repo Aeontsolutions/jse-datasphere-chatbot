@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
-from fastapi_app.app.main import app
-from fastapi_app.app.financial_utils import FinancialDataManager
+from app.main import app
+from app.financial_utils import FinancialDataManager
 import os
 import csv
 from collections import defaultdict
@@ -186,20 +186,24 @@ class MockBQClient:
 
 @pytest.fixture(autouse=True)
 def patch_bq_client(monkeypatch):
-    monkeypatch.setattr(
-        "fastapi_app.app.financial_utils.bigquery.Client", lambda *a, **kw: MockBQClient()
-    )
+    def mock_client_factory(*args, **kwargs):
+        return MockBQClient()
+
+    monkeypatch.setattr("app.financial_utils.bigquery.Client", mock_client_factory)
     # Re-initialize the app's FinancialDataManager after patching
-    from fastapi_app.app.main import app as fastapi_app_instance
+    from app.main import app as fastapi_app_instance
 
     fastapi_app_instance.state.financial_manager = FinancialDataManager()
     yield
 
 
-client = TestClient(app)
+@pytest.fixture
+def client():
+    """Test client for FastAPI app."""
+    return TestClient(app)
 
 
-def test_fast_chat_v2_valid_query():
+def test_fast_chat_v2_valid_query(client):
     payload = {
         "query": "Show me Elite Diagnostic Limited net profit for 2024",
         "memory_enabled": False,
@@ -212,7 +216,7 @@ def test_fast_chat_v2_valid_query():
     assert data["record_count"] > 0
 
 
-def test_financial_metadata_endpoint():
+def test_financial_metadata_endpoint(client):
     response = client.get("/financial/metadata")
     assert response.status_code == 200
     data = response.json()

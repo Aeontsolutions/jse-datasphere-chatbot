@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-Pytest configuration and common fixtures for streaming tests.
+Comprehensive test fixtures for JSE DataSphere Chatbot.
+
+Provides mocked dependencies and test data for unit and integration tests.
 """
 
 import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import Mock, AsyncMock, MagicMock, patch
+from fastapi.testclient import TestClient
 from app.models import StreamingChatRequest, ProgressUpdate
+import boto3
+from io import BytesIO
 
 
 @pytest.fixture(scope="session")
@@ -32,11 +37,30 @@ def mock_streaming_request():
 
 
 @pytest.fixture
+def mock_config():
+    """Mock application configuration."""
+    config = Mock()
+    config.aws.region = "us-east-1"
+    config.aws.s3_bucket = "test-bucket"
+    config.aws.access_key_id = "test-key"
+    config.aws.secret_access_key = "test-secret"
+    config.gcp.project_id = "test-project"
+    config.gcp.api_key = "test-api-key"
+    config.bigquery.dataset = "test-dataset"
+    config.bigquery.table = "test-table"
+    config.redis.url = None
+    config.log_level = "INFO"
+    return config
+
+
+@pytest.fixture
 def mock_s3_client():
     """Create a mock S3 client for testing."""
     client = Mock()
     client.download_file = AsyncMock()
     client.head_object = AsyncMock()
+    client.download_fileobj = Mock()
+    client.get_object = Mock(return_value={"Body": Mock(read=Mock(return_value=b"test content"))})
     return client
 
 
@@ -60,6 +84,57 @@ def mock_metadata():
             },
         ],
     }
+
+
+@pytest.fixture
+def mock_bigquery_client():
+    """Mock BigQuery client for testing."""
+    client = Mock()
+    client.query = Mock(return_value=Mock(result=Mock(return_value=[])))
+    return client
+
+
+@pytest.fixture
+def mock_gemini_model():
+    """Mock Gemini AI model for testing."""
+    model = Mock()
+    model.generate_content = Mock(return_value=Mock(text='{"answer": "test response"}'))
+    return model
+
+
+@pytest.fixture
+def test_client():
+    """FastAPI test client."""
+    from app.main import app
+
+    return TestClient(app)
+
+
+@pytest.fixture
+async def async_test_client():
+    """Async FastAPI test client."""
+    from httpx import AsyncClient
+    from app.main import app
+
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        yield client
+
+
+@pytest.fixture
+def mock_pdf_bytes():
+    """Mock PDF file bytes for testing."""
+    # Simple PDF header (not a real PDF, but enough for testing)
+    return b"%PDF-1.4\n%Test PDF content\n%%EOF"
+
+
+@pytest.fixture
+def aws_credentials(monkeypatch):
+    """Mocked AWS Credentials for boto3."""
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SECURITY_TOKEN", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
 
 
 @pytest.fixture

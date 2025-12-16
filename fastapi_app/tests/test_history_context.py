@@ -1,5 +1,5 @@
 import pytest
-from fastapi_app.app.financial_utils import FinancialDataManager
+from app.financial_utils import FinancialDataManager
 
 
 @pytest.fixture
