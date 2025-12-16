@@ -58,9 +58,10 @@ async def test_async_download_with_progress():
     config = S3DownloadConfig(max_retries=2, timeout=30.0)
 
     # Mock the entire download chain
-    with patch("app.utils.init_async_s3_client") as mock_init_client, patch(
-        "app.utils._extract_text_from_pdf_bytes"
-    ) as mock_extract:
+    with (
+        patch("app.utils.init_async_s3_client") as mock_init_client,
+        patch("app.utils._extract_text_from_pdf_bytes") as mock_extract,
+    ):
 
         # Setup mock client
         mock_s3_client = AsyncMock()
@@ -108,9 +109,10 @@ async def test_concurrent_downloads():
     config = S3DownloadConfig(max_retries=1, concurrent_downloads=3)
 
     # Mock semantic document selection
-    with patch("app.utils.semantic_document_selection") as mock_selection, patch(
-        "app.utils.download_and_extract_from_s3_async"
-    ) as mock_download:
+    with (
+        patch("app.utils.semantic_document_selection") as mock_selection,
+        patch("app.utils.download_and_extract_from_s3_async") as mock_download,
+    ):
 
         # Mock document selection response
         mock_selection.return_value = {
@@ -175,9 +177,10 @@ async def test_retry_logic():
 
     config = S3DownloadConfig(max_retries=3, retry_delay=0.1, timeout=10.0)
 
-    with patch("app.utils.init_async_s3_client") as mock_init_client, patch(
-        "app.utils._extract_text_from_pdf_bytes"
-    ) as mock_extract:
+    with (
+        patch("app.utils.init_async_s3_client") as mock_init_client,
+        patch("app.utils._extract_text_from_pdf_bytes") as mock_extract,
+    ):
 
         # Setup mock client
         mock_s3_client = AsyncMock()
@@ -228,9 +231,10 @@ async def test_metadata_loading():
         progress_messages.append(f"{step}: {message}")
         logger.info(f"Progress: {step} - {message}")
 
-    with patch("app.utils.download_metadata_from_s3_async") as mock_download, patch(
-        "app.utils.parse_metadata_file"
-    ) as mock_parse:
+    with (
+        patch("app.utils.download_metadata_from_s3_async") as mock_download,
+        patch("app.utils.parse_metadata_file") as mock_parse,
+    ):
 
         # Mock successful metadata download
         from app.s3_client import DownloadResult
