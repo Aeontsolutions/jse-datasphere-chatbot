@@ -18,14 +18,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
+# Copy pyproject.toml and requirements.txt for dependencies
+COPY pyproject.toml ./pyproject.toml
 COPY requirements.txt ./requirements.txt
 
 # Copy companies.json file
 COPY companies.json ./companies.json
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies from pyproject.toml (production only)
+# We use requirements.txt for Docker layer caching, which is frozen from pyproject.toml
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy the entire project
 COPY . .

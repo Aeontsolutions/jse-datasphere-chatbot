@@ -1,29 +1,55 @@
-fastapi
-uvicorn[standard]
-pydantic
+# JSE DataSphere Chatbot Dependencies
+# This file is maintained for Docker layer caching and backward compatibility.
+# The canonical dependency specification is in pyproject.toml
+#
+# To update this file after modifying pyproject.toml:
+# 1. cd fastapi_app
+# 2. pip install -e .
+# 3. pip freeze > requirements.txt.new
+# 4. Review and merge changes into requirements.txt
+
+# Core API Framework
+fastapi>=0.124.0
+uvicorn[standard]>=0.38.0
+pydantic>=2.12.0
 pydantic-settings>=2.1.0
-python-dotenv
+python-dotenv>=1.0.0
+
+# AWS Services
 boto3>=1.34,<1.35
-pypdf>=3.0.0
-google-cloud-aiplatform>=1.60.0
-google-auth
-vertexai
-rapidfuzz
-google-genai
-google-generativeai
 aioboto3>=13.0.0
-tenacity
-requests
-openpyxl==3.1.2
-pandas>=2.0.0
-google-cloud-bigquery
+
+# Document Processing
+pypdf>=3.0.0
 aiofiles>=23.2.0
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
-pytest-xdist
-streamlit
+
+# Google Cloud Services
+google-cloud-aiplatform>=1.60.0
+google-auth>=2.40.0
+vertexai>=1.60.0
+google-genai>=1.0.0
+google-generativeai>=0.8.0
+google-cloud-bigquery>=3.30.0
+
+# Data Processing
+pandas>=2.0.0
+openpyxl==3.1.2
+rapidfuzz>=3.0.0
+
+# Utilities
+tenacity>=8.0.0
+requests>=2.31.0
 redis>=4.2.0
 structlog>=24.1.0
+
 # Pin compatible versions to avoid conflicts
 grpcio>=1.60.0,<2.0.0
 protobuf>=4.25.0,<6.0.0
+
+# Testing (included for development)
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-xdist>=3.0.0
+
+# Frontend (optional)
+streamlit>=1.30.0
