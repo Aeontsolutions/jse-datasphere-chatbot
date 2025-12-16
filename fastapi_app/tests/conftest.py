@@ -43,7 +43,7 @@ def mock_config():
     """Mock application configuration."""
     config = Mock()
     config.aws.region = "us-east-1"
-    config.aws.s3_bucket = "test-bucket"
+    config.aws.DOCUMENT_METADATA_S3_BUCKET = "test-bucket"
     config.aws.access_key_id = "test-key"
     config.aws.secret_access_key = "test-secret"
     config.gcp.project_id = "test-project"
@@ -53,6 +53,17 @@ def mock_config():
     config.redis.url = None
     config.log_level = "INFO"
     return config
+
+
+@pytest.fixture(autouse=True, scope="function")
+def auto_mock_config(monkeypatch, mock_config):
+    """Automatically mock get_config() for all tests to avoid requiring real credentials."""
+    with patch("app.config.get_config", return_value=mock_config):
+        with patch("app.metadata_loader.get_config", return_value=mock_config):
+            with patch("app.s3_client.get_config", return_value=mock_config):
+                with patch("app.gemini_client.get_config", return_value=mock_config):
+                    with patch("app.document_selector.get_config", return_value=mock_config):
+                        yield
 
 
 @pytest.fixture
