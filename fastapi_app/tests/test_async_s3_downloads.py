@@ -11,17 +11,21 @@ from unittest.mock import Mock, AsyncMock, patch
 import os
 
 # Import the modules to test
-from app.utils import (
-    S3DownloadConfig,
+from app.config import S3DownloadConfig
+from app.s3_client import (
     DownloadResult,
     init_async_s3_client,
     download_and_extract_from_s3_async,
+)
+from app.metadata_loader import (
     download_metadata_from_s3_async,
     load_metadata_from_s3_async,
+)
+from app.document_selector import (
     auto_load_relevant_documents_async,
     _download_with_semaphore,
-    _extract_text_from_pdf_bytes,
 )
+from app.pdf_utils import extract_text_from_pdf_bytes as _extract_text_from_pdf_bytes
 
 # Mock data for testing
 MOCK_PDF_CONTENT = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
@@ -35,9 +39,9 @@ class TestS3DownloadConfig:
     def test_default_config(self):
         """Test default configuration values."""
         config = S3DownloadConfig()
-        assert config.max_retries == 3
-        assert config.retry_delay == 1.0
-        assert config.max_retry_delay == 60.0
+        assert config.max_retries == 2
+        assert config.retry_delay == 0.5
+        assert config.max_retry_delay == 10.0
         assert config.timeout == 300.0
         assert config.chunk_size == 8192
         assert config.concurrent_downloads == 5

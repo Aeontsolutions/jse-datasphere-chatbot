@@ -5,7 +5,6 @@ This module provides type-safe, validated configuration for the entire applicati
 All configuration values are loaded from environment variables with proper validation.
 """
 
-import os
 import json
 from typing import Optional
 from pydantic import Field, field_validator
@@ -83,7 +82,9 @@ class RedisConfig(BaseSettings):
     """Redis configuration for job storage."""
 
     url: Optional[str] = Field(
-        default=None, description="Redis connection URL (supports REDIS_URL, RedisUrl, or REDISURL)"
+        default=None,
+        alias="REDIS_URL",
+        description="Redis connection URL (environment variable: REDIS_URL)",
     )
     ttl_seconds: int = Field(default=900, description="TTL for job data in seconds")
     max_progress_history: int = Field(default=50, description="Max progress updates to retain")
@@ -94,18 +95,6 @@ class RedisConfig(BaseSettings):
         case_sensitive=False,
         extra="ignore",  # Ignore extra environment variables
     )
-
-    @field_validator("url", mode="before")
-    @classmethod
-    def resolve_redis_url(cls, v: Optional[str]) -> Optional[str]:
-        """
-        Resolve Redis URL from multiple possible environment variables.
-        Supports: REDIS_URL, RedisUrl, REDISURL (for backward compatibility).
-        """
-        if v:
-            return v
-        # Check alternative environment variable names
-        return os.getenv("REDIS_URL") or os.getenv("RedisUrl") or os.getenv("REDISURL")
 
 
 class S3DownloadConfig(BaseSettings):

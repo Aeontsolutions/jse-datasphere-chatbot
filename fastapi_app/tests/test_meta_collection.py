@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
 from app.chroma_utils import query_meta_collection
-from app.utils import semantic_document_selection
+from app.document_selector import semantic_document_selection
 
 
 class TestQueryMetaCollection:

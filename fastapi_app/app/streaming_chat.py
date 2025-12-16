@@ -3,12 +3,9 @@ import logging
 from typing import Dict, Optional, Any
 from app.progress_tracker import ProgressTracker
 from app.models import StreamingChatRequest
-from app.utils import (
-    generate_chat_response,
-    semantic_document_selection,
-    auto_load_relevant_documents_async,
-    S3DownloadConfig,
-)
+from app.gemini_client import generate_chat_response
+from app.document_selector import semantic_document_selection, auto_load_relevant_documents_async
+from app.config import S3DownloadConfig
 import os
 
 logger = logging.getLogger(__name__)

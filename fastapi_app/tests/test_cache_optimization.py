@@ -2,15 +2,15 @@ import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime, timedelta
 
-from app.utils import (
+from app.gemini_client import (
     get_metadata_hash,
     create_metadata_cache,
     get_cached_model,
     refresh_metadata_cache,
     get_cache_status,
-    semantic_document_selection_llm_fallback,
     init_genai,
 )
+from app.document_selector import semantic_document_selection_llm_fallback
 
 # Sample metadata for testing
 SAMPLE_METADATA = {

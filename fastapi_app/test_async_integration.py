@@ -24,12 +24,10 @@ os.environ.update(
 )
 
 # Import our async functions
-from app.utils import (
-    S3DownloadConfig,
-    download_and_extract_from_s3_async,
-    load_metadata_from_s3_async,
-    auto_load_relevant_documents_async,
-)
+from app.config import S3DownloadConfig
+from app.s3_client import download_and_extract_from_s3_async
+from app.metadata_loader import load_metadata_from_s3_async
+from app.document_selector import auto_load_relevant_documents_async
 
 # Mock data
 MOCK_PDF_CONTENT = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
@@ -137,7 +135,7 @@ async def test_concurrent_downloads():
         }
 
         # Mock download results with different timing
-        from app.utils import DownloadResult
+        from app.s3_client import DownloadResult
 
         mock_download.side_effect = [
             DownloadResult(success=True, content="Content 1", download_time=1.0),
@@ -235,7 +233,7 @@ async def test_metadata_loading():
     ) as mock_parse:
 
         # Mock successful metadata download
-        from app.utils import DownloadResult
+        from app.s3_client import DownloadResult
 
         mock_download.return_value = DownloadResult(
             success=True, content='{"companies": ["TestCorp"]}'

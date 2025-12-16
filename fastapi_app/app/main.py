@@ -18,15 +18,15 @@ from app.models import (
     JobStatusResponse,
     JobStatus,
 )
-from app.utils import (
-    init_s3_client,
+from app.s3_client import init_s3_client
+from app.gemini_client import (
     init_vertex_ai,
-    load_metadata_from_s3,
-    auto_load_relevant_documents,
     generate_chat_response,
     refresh_metadata_cache,
     get_cache_status,
 )
+from app.metadata_loader import load_metadata_from_s3
+from app.document_selector import auto_load_relevant_documents
 from app.streaming_chat import process_streaming_chat
 from app.financial_utils import FinancialDataManager
 from app.job_store import JobStore, JobProgressSink

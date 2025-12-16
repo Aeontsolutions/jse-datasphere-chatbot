@@ -49,7 +49,6 @@ repos:
           (?x)^(
             fastapi_app/app/chroma_utils\.py|
             fastapi_app/app/streaming_chat\.py|
-            fastapi_app/app/utils\.py|
             fastapi_app/main\.py|
             fastapi_app/test_async_integration\.py|
             fastapi_app/tests/.*
