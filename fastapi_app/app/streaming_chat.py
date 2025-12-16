@@ -4,9 +4,8 @@ from typing import Dict, Optional, Any
 from app.progress_tracker import ProgressTracker
 from app.models import StreamingChatRequest
 from app.gemini_client import generate_chat_response
-from app.document_selector import semantic_document_selection, auto_load_relevant_documents_async
+from app.document_selector import auto_load_relevant_documents_async
 from app.config import S3DownloadConfig
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +26,9 @@ async def process_streaming_chat(
         request: The chat request
         s3_client: S3 client for document loading
         metadata: Document metadata
-        collection: ChromaDB collection (for fast mode)
-        meta_collection: Metadata collection (for fast mode)
-        use_fast_mode: Whether to use vector DB mode or traditional mode
+        collection: Deprecated (previously used for ChromaDB)
+        meta_collection: Deprecated (previously used for ChromaDB)
+        use_fast_mode: Deprecated (fast mode using ChromaDB has been removed)
 
     Returns:
         ProgressTracker instance that can be used to stream updates
@@ -91,141 +90,6 @@ async def _process_chat_async(
             },
         )
         await tracker.emit_error(f"Error generating response: {str(e)}")
-
-
-async def _process_fast_chat(
-    request: StreamingChatRequest,
-    metadata: Dict,
-    tracker: ProgressTracker,
-    collection: Any,
-    meta_collection: Any,
-):
-    """Process chat using vector database (fast mode)"""
-
-    await tracker.emit_progress("query_prep", "Preparing search query...", 10.0)
-    await asyncio.sleep(0.1)  # Give time for the event to be processed
-
-    # Step 1: Build enhanced query
-    retrieval_query = request.query
-    if request.memory_enabled and request.conversation_history:
-        recent_history = [
-            msg["content"]
-            for msg in request.conversation_history[-10:]
-            if msg.get("role") == "user"
-        ]
-        retrieval_query = " ".join(recent_history + [request.query])
-
-    await tracker.emit_progress("doc_selection", "Selecting relevant documents...", 25.0)
-    await asyncio.sleep(0.1)  # Give time for the event to be processed
-
-    # Step 2: Semantic pre-selection of documents
-    auto_load_message: Optional[str] = None
-    semantic_filenames: list[str] = []
-
-    if request.auto_load_documents:
-        selected_docs = semantic_document_selection(
-            request.query,
-            metadata,
-            request.conversation_history,
-            meta_collection,
-        )
-
-        if selected_docs:
-            companies = selected_docs["companies_mentioned"]
-            auto_load_message = f"Found mentions of: {', '.join(companies)}"
-
-            semantic_filenames = [
-                os.path.basename(doc["filename"]) for doc in selected_docs["documents_to_load"]
-            ]
-
-            # Convert PDF extensions to TXT for vector DB
-            semantic_filenames = list(
-                {
-                    fn[:-4] + ".txt" if fn.lower().endswith(".pdf") else fn
-                    for fn in semantic_filenames
-                }
-            )
-
-            await tracker.emit_progress(
-                "doc_selection",
-                f"Selected {len(semantic_filenames)} relevant documents",
-                35.0,
-                {"companies": companies, "documents": len(semantic_filenames)},
-            )
-            await asyncio.sleep(0.1)  # Give time for the event to be processed
-
-    await tracker.emit_progress("vector_search", "Searching vector database...", 50.0)
-    await asyncio.sleep(0.1)  # Give time for the event to be processed
-
-    # Step 3: Query ChromaDB
-    where_filter = {"filename": {"$in": semantic_filenames}} if semantic_filenames else None
-
-    sorted_results, context = chroma_query_collection(
-        collection,
-        query=retrieval_query,
-        n_results=3,
-        where=where_filter,
-    )
-
-    retrieved_doc_names = (
-        [meta.get("filename") or meta.get("source") or meta.get("id") for meta, _ in sorted_results]
-        if sorted_results
-        else []
-    )
-
-    await tracker.emit_progress(
-        "vector_search",
-        f"Retrieved {len(sorted_results)} documents from vector database",
-        65.0,
-        {"documents_found": len(sorted_results)},
-    )
-    await asyncio.sleep(0.1)  # Give time for the event to be processed
-
-    await tracker.emit_progress("ai_generation", "Generating AI response...", 80.0)
-    await asyncio.sleep(0.1)  # Give time for the event to be processed
-
-    # Step 4: Generate response
-    response_text = qa_bot(
-        request.query,
-        context,
-        conversation_history=request.conversation_history if request.memory_enabled else None,
-    )
-
-    await tracker.emit_progress("finalizing", "Finalizing response...", 95.0)
-    await asyncio.sleep(0.1)  # Give time for the event to be processed
-
-    # Step 5: Update conversation history
-    updated_conversation_history = None
-    if request.memory_enabled and request.conversation_history:
-        updated_conversation_history = request.conversation_history.copy()
-        updated_conversation_history.append({"role": "user", "content": request.query})
-        updated_conversation_history.append({"role": "assistant", "content": response_text})
-    elif request.memory_enabled:
-        updated_conversation_history = [
-            {"role": "user", "content": request.query},
-            {"role": "assistant", "content": response_text},
-        ]
-
-    # Combine messages
-    doc_selection_message_parts = []
-    if auto_load_message:
-        doc_selection_message_parts.append(auto_load_message.strip())
-    doc_selection_message_parts.append(
-        f"{len(sorted_results)} documents retrieved from vector database."
-    )
-    doc_selection_message = " ".join(doc_selection_message_parts)
-
-    # Final result
-    result = {
-        "response": response_text,
-        "documents_loaded": retrieved_doc_names,
-        "document_selection_message": doc_selection_message,
-        "conversation_history": updated_conversation_history,
-    }
-
-    await tracker.emit_progress("complete", "Response generation complete!", 100.0)
-    await asyncio.sleep(0.1)  # Give time for the event to be processed
-    await tracker.emit_final_result(result)
 
 
 async def _process_traditional_chat(

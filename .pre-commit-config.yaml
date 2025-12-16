@@ -47,7 +47,6 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
         exclude: |
           (?x)^(
-            fastapi_app/app/chroma_utils\.py|
             fastapi_app/app/streaming_chat\.py|
             fastapi_app/main\.py|
             fastapi_app/test_async_integration\.py|
