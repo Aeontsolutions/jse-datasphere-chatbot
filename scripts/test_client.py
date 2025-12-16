@@ -6,9 +6,15 @@ import time  # For execution-time measurement
 # -------------------
 # Configuration
 # -------------------
-REMOTE_PROD_BASE_URL = "http://jse-da-Publi-YNJSNI96davV-367279008.us-east-1.elb.amazonaws.com"
-REMOTE_STAGE_BASE_URL = "http://jse-da-Publi-wupYrzJkbRrm-92790362.us-east-1.elb.amazonaws.com"
-REMOTE_DEV_BASE_URL = "http://jse-da-Publi-1wgQS45FnwpV-1192199831.us-east-1.elb.amazonaws.com"
+REMOTE_PROD_BASE_URL = (
+    "http://jse-da-Publi-YNJSNI96davV-367279008.us-east-1.elb.amazonaws.com"
+)
+REMOTE_STAGE_BASE_URL = (
+    "http://jse-da-Publi-wupYrzJkbRrm-92790362.us-east-1.elb.amazonaws.com"
+)
+REMOTE_DEV_BASE_URL = (
+    "http://jse-da-Publi-1wgQS45FnwpV-1192199831.us-east-1.elb.amazonaws.com"
+)
 LOCAL_BASE_URL = "http://localhost:8000"
 
 st.set_page_config(page_title="JSE Datasphere Chat", page_icon="💬")
@@ -21,7 +27,9 @@ if "last_exec_time" not in st.session_state:
 # -------------------
 # Sidebar controls
 # -------------------
-env = st.sidebar.selectbox("Environment", ["Local", "Remote Prod", "Remote Stage", "Remote Dev"])
+env = st.sidebar.selectbox(
+    "Environment", ["Local", "Remote Prod", "Remote Stage", "Remote Dev"]
+)
 BASE_URL = (
     LOCAL_BASE_URL
     if env == "Local"
@@ -174,21 +182,29 @@ if mode == "Chat":
                 if filters_used:
                     with st.expander("🔍 Query Filters Applied"):
                         if filters_used.get("companies"):
-                            st.write(f"**Companies:** {', '.join(filters_used['companies'])}")
+                            st.write(
+                                f"**Companies:** {', '.join(filters_used['companies'])}"
+                            )
                         if filters_used.get("symbols"):
-                            st.write(f"**Symbols:** {', '.join(filters_used['symbols'])}")
+                            st.write(
+                                f"**Symbols:** {', '.join(filters_used['symbols'])}"
+                            )
                         if filters_used.get("years"):
                             st.write(f"**Years:** {', '.join(filters_used['years'])}")
                         if filters_used.get("items"):
                             st.write(f"**Metrics:** {', '.join(filters_used['items'])}")
                         if filters_used.get("interpretation"):
-                            st.write(f"**AI Interpretation:** {filters_used['interpretation']}")
+                            st.write(
+                                f"**AI Interpretation:** {filters_used['interpretation']}"
+                            )
 
                 # Show data preview
                 data_preview = result.get("data_preview")
                 if data_preview and len(data_preview) > 0:
                     with st.expander(f"📈 Data Preview ({len(data_preview)} records)"):
-                        for i, record in enumerate(data_preview[:5]):  # Show first 5 records
+                        for i, record in enumerate(
+                            data_preview[:5]
+                        ):  # Show first 5 records
                             st.write(
                                 f"**{i+1}.** {record.get('company', 'N/A')} ({record.get('symbol', 'N/A')}) - {record.get('year', 'N/A')}"
                             )
@@ -351,7 +367,9 @@ elif mode == "Streaming Chat":
                 current_event = ""
                 buffer = ""
 
-                for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
+                for chunk in response.iter_content(
+                    chunk_size=1024, decode_unicode=True
+                ):
                     if chunk:
                         buffer += chunk
                         lines = buffer.split("\n")
@@ -359,26 +377,36 @@ elif mode == "Streaming Chat":
                         # Process complete lines, keep incomplete line in buffer
                         buffer = lines[-1] if not lines[-1].endswith("\n") else ""
 
-                        for line in lines[:-1] if not lines[-1].endswith("\n") else lines:
+                        for line in (
+                            lines[:-1] if not lines[-1].endswith("\n") else lines
+                        ):
                             line = line.strip()
 
                             if line.startswith("event: "):
                                 current_event = line[7:]
                             elif line.startswith("data: "):
                                 data_str = line[6:]
-                                if data_str and data_str != "{}":  # Ignore empty heartbeats
+                                if (
+                                    data_str and data_str != "{}"
+                                ):  # Ignore empty heartbeats
                                     try:
                                         data = json.loads(data_str)
                                         if current_event == "progress":
-                                            progress_bar.progress(data.get("progress", 0) / 100)
+                                            progress_bar.progress(
+                                                data.get("progress", 0) / 100
+                                            )
                                             status_text.text(data.get("message", ""))
                                             if data.get("details"):
-                                                details_text.text(f"Details: {data.get('details')}")
+                                                details_text.text(
+                                                    f"Details: {data.get('details')}"
+                                                )
                                         elif current_event == "result":
                                             result = data
                                             break
                                         elif current_event == "error":
-                                            st.error(f"Error: {data.get('error', 'Unknown error')}")
+                                            st.error(
+                                                f"Error: {data.get('error', 'Unknown error')}"
+                                            )
                                             break
                                     except json.JSONDecodeError:
                                         pass
@@ -427,7 +455,9 @@ elif mode == "Streaming Chat":
             else:
                 # Show standard chat info for other endpoints
                 if result.get("documents_loaded"):
-                    details_text.success(f"📚 Loaded {len(result['documents_loaded'])} documents")
+                    details_text.success(
+                        f"📚 Loaded {len(result['documents_loaded'])} documents"
+                    )
                 if result.get("document_selection_message"):
                     st.info(f"🎯 {result['document_selection_message']}")
 
@@ -442,7 +472,9 @@ elif mode == "Streaming Chat":
         with st.chat_message("assistant"):
             st.markdown(answer)
 
-        st.session_state.stream_chat_history.append({"role": "assistant", "content": answer})
+        st.session_state.stream_chat_history.append(
+            {"role": "assistant", "content": answer}
+        )
 
     # Reset button for streaming chat
     if st.button("🗑️ Clear Streaming Chat History"):
@@ -598,7 +630,9 @@ elif mode == "Query Meta DB":
         # Call the Chroma query endpoint
         start_time = time.perf_counter()
         try:
-            res = requests.post(f"{BASE_URL}/chroma/meta/query", json=payload, timeout=60)
+            res = requests.post(
+                f"{BASE_URL}/chroma/meta/query", json=payload, timeout=60
+            )
             res.raise_for_status()
             result = res.json()
 
@@ -634,7 +668,13 @@ elif mode == "Financial Metadata":
 
                 # Create tabs for different metadata sections
                 tab1, tab2, tab3, tab4, tab5 = st.tabs(
-                    ["📊 Overview", "🏢 Companies", "📈 Symbols", "📅 Years", "📋 Metrics"]
+                    [
+                        "📊 Overview",
+                        "🏢 Companies",
+                        "📈 Symbols",
+                        "📅 Years",
+                        "📋 Metrics",
+                    ]
                 )
 
                 with tab1:
@@ -663,12 +703,17 @@ elif mode == "Financial Metadata":
 
                     with col3:
                         years = metadata.get("years", [])
-                        st.metric("Years Available", len(years) if isinstance(years, list) else 0)
+                        st.metric(
+                            "Years Available",
+                            len(years) if isinstance(years, list) else 0,
+                        )
 
                     with col4:
                         items = metadata.get("standard_items", [])
                         if isinstance(items, dict):
-                            total_items = items.get("total_count", len(items.get("sample", [])))
+                            total_items = items.get(
+                                "total_count", len(items.get("sample", []))
+                            )
                         else:
                             total_items = len(items)
                         st.metric("Financial Metrics", total_items)

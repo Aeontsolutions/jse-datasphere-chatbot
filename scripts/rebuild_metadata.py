@@ -19,7 +19,9 @@ from botocore.exceptions import ClientError, NoCredentialsError
 import logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +55,9 @@ class MetadataBuilder:
             self.s3_client.head_bucket(Bucket=self.bucket_name)
             logger.info(f"Successfully connected to S3 bucket: {self.bucket_name}")
         except NoCredentialsError:
-            logger.error("AWS credentials not found. Please configure your credentials.")
+            logger.error(
+                "AWS credentials not found. Please configure your credentials."
+            )
             raise
         except ClientError as e:
             error_code = e.response["Error"]["Code"]
@@ -67,7 +71,9 @@ class MetadataBuilder:
         """Load the symbol-to-company mapping from CSV file."""
         try:
             if not os.path.exists(self.company_mapping_file):
-                logger.error(f"Company mapping file not found: {self.company_mapping_file}")
+                logger.error(
+                    f"Company mapping file not found: {self.company_mapping_file}"
+                )
                 raise FileNotFoundError(
                     f"Company mapping file not found: {self.company_mapping_file}"
                 )
@@ -76,7 +82,9 @@ class MetadataBuilder:
                 reader = csv.DictReader(csvfile)
                 for row in reader:
                     symbol = row["Symbol"].strip()
-                    company = row["Company"].strip().lower()  # Convert to lowercase for consistency
+                    company = (
+                        row["Company"].strip().lower()
+                    )  # Convert to lowercase for consistency
                     self.symbol_to_company[symbol] = company
 
             logger.info(
@@ -111,7 +119,9 @@ class MetadataBuilder:
                 return None
 
             company_code = path_parts[0]
-            document_type = path_parts[1].replace("_", " ")  # Convert underscores to spaces
+            document_type = path_parts[1].replace(
+                "_", " "
+            )  # Convert underscores to spaces
             year = path_parts[2]
             filename = path_parts[3]
 
@@ -152,7 +162,9 @@ class MetadataBuilder:
         paginator = self.s3_client.get_paginator("list_objects_v2")
 
         try:
-            page_iterator = paginator.paginate(Bucket=self.bucket_name, Prefix=self.base_prefix)
+            page_iterator = paginator.paginate(
+                Bucket=self.bucket_name, Prefix=self.base_prefix
+            )
 
             for page in page_iterator:
                 if "Contents" in page:
@@ -274,7 +286,9 @@ class MetadataBuilder:
             logger.error(f"Error uploading to S3: {e}")
             return False
 
-    def run(self, upload_to_s3: bool = True, local_filename: str = "metadata.json") -> Dict:
+    def run(
+        self, upload_to_s3: bool = True, local_filename: str = "metadata.json"
+    ) -> Dict:
         """
         Run the complete metadata building process.
 
@@ -300,7 +314,9 @@ class MetadataBuilder:
 
             # Upload to S3 if requested
             if upload_to_s3:
-                success = self.upload_metadata_to_s3(local_filepath, "metadata_2025-09-14.json")
+                success = self.upload_metadata_to_s3(
+                    local_filepath, "metadata_2025-09-14.json"
+                )
                 if success:
                     logger.info("Metadata building process completed successfully!")
                 else:
@@ -320,7 +336,9 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Rebuild metadata.json from S3 bucket")
-    parser.add_argument("--bucket", default="jse-renamed-docs-copy", help="S3 bucket name")
+    parser.add_argument(
+        "--bucket", default="jse-renamed-docs-copy", help="S3 bucket name"
+    )
     parser.add_argument("--prefix", default="organized/", help="S3 prefix path")
     parser.add_argument(
         "--mapping",
@@ -334,14 +352,18 @@ def main():
         "--output", default="metadata_2025-09-14.json", help="Local output filename"
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="Show what would be done without making changes"
+        "--dry-run",
+        action="store_true",
+        help="Show what would be done without making changes",
     )
 
     args = parser.parse_args()
 
     # Create metadata builder
     builder = MetadataBuilder(
-        bucket_name=args.bucket, base_prefix=args.prefix, company_mapping_file=args.mapping
+        bucket_name=args.bucket,
+        base_prefix=args.prefix,
+        company_mapping_file=args.mapping,
     )
 
     try:
@@ -360,11 +382,15 @@ def main():
                 logger.info(f"  Result: {parsed}")
         else:
             # Run the full process
-            metadata = builder.run(upload_to_s3=not args.no_upload, local_filename=args.output)
+            metadata = builder.run(
+                upload_to_s3=not args.no_upload, local_filename=args.output
+            )
 
             # Print summary
             total_docs = sum(len(docs) for docs in metadata.values())
-            logger.info(f"Summary: {len(metadata)} companies, {total_docs} total documents")
+            logger.info(
+                f"Summary: {len(metadata)} companies, {total_docs} total documents"
+            )
 
     except KeyboardInterrupt:
         logger.info("Process interrupted by user")

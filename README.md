@@ -242,18 +242,34 @@ curl http://localhost:8000/cache/status
 
 ### Project Structure
 ```
-fastapi_app/
-├── app/                    # Core application code
-│   ├── main.py            # FastAPI application and endpoints
-│   ├── models.py          # Pydantic data models
-│   ├── utils.py           # Core utilities and AI integration
-│   ├── financial_utils.py # BigQuery financial data manager
-│   ├── streaming_chat.py  # Streaming response handling
-│   └── progress_tracker.py # Progress tracking utilities
-├── tests/                 # Test suite
-├── copilot/              # AWS Copilot deployment configs
+jse-datasphere-chatbot/
+├── fastapi_app/           # Main FastAPI application
+│   ├── app/              # Application code
+│   │   ├── main.py       # FastAPI app and endpoints
+│   │   ├── config.py     # Centralized configuration
+│   │   ├── models.py     # Pydantic data models
+│   │   ├── s3_client.py  # S3 operations
+│   │   ├── gemini_client.py # AI client
+│   │   ├── document_selector.py # Document selection
+│   │   ├── metadata_loader.py # Metadata management
+│   │   ├── financial_utils.py # BigQuery integration
+│   │   └── streaming_chat.py # Streaming responses
+│   ├── tests/            # Test suite
+│   │   ├── unit/        # Unit tests
+│   │   └── integration/ # Integration tests
+│   ├── copilot/         # AWS Copilot configs
+│   └── pyproject.toml   # Python packaging
 ├── docs/                 # Documentation
-└── requirements.txt      # Python dependencies
+│   ├── DEVELOPMENT.md   # Developer guide
+│   ├── SECRETS_MANAGEMENT.md # Security guide
+│   ├── REFACTOR_PLAN.md # Architecture plan
+│   └── archive/         # Historical docs
+├── scripts/             # Utility scripts
+│   ├── rebuild_metadata.py
+│   └── test_client.py
+├── data/                # Local data files (gitignored)
+├── mock_client/         # Test client
+└── .github/workflows/   # CI/CD pipelines
 ```
 
 ### Development Workflow
@@ -300,6 +316,16 @@ aws sts get-caller-identity
 
 ## 📖 Documentation
 
+### Getting Started
+- **[QUICK_START.md](docs/QUICK_START.md)** - Quick start guide for new developers
+- **[DEVELOPMENT.md](docs/DEVELOPMENT.md)** - Comprehensive development guide
+- **[SECRETS_MANAGEMENT.md](docs/SECRETS_MANAGEMENT.md)** - Security and secrets management
+
+### Architecture & Planning
+- **[REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md)** - System architecture and refactoring plan
+- **[MIGRATION_SUMMARY.md](docs/MIGRATION_SUMMARY.md)** - Migration guide to new architecture
+
+### API & Deployment
 - **[API Documentation](fastapi_app/docs/API_DOCUMENTATION.md)** - Complete API reference
 - **[Deployment Guide](fastapi_app/docs/DEPLOYMENT_GUIDE_FAST_CHAT_V2.md)** - Deployment instructions
 - **[Streaming Guide](fastapi_app/docs/STREAMING_API_GUIDE.md)** - Streaming API usage

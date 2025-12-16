@@ -46,7 +46,9 @@ def main():
         # Show top 5 companies by document count
         print()
         print("Top 5 companies by document count:")
-        sorted_companies = sorted(metadata.items(), key=lambda x: len(x[1]), reverse=True)
+        sorted_companies = sorted(
+            metadata.items(), key=lambda x: len(x[1]), reverse=True
+        )
         for i, (company, docs) in enumerate(sorted_companies[:5]):
             print(f"  {i+1}. {company}: {len(docs)} documents")
 
