@@ -108,4 +108,4 @@ POST /fast_chat_v2
 ---
 
 ## Contact
-For questions or contributions, please contact the project maintainers or open an issue in the repository. 
+For questions or contributions, please contact the project maintainers or open an issue in the repository.

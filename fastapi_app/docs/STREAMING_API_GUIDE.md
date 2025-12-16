@@ -15,7 +15,7 @@ The streaming API uses **Server-Sent Events (SSE)** to send real-time progress u
 
 Provides the same functionality as `/chat` but with real-time progress updates.
 
-### 2. `/fast_chat/stream` - Vector DB Chat with Streaming  
+### 2. `/fast_chat/stream` - Vector DB Chat with Streaming
 - **Method**: POST
 - **Content-Type**: application/json
 - **Response**: text/event-stream
@@ -112,7 +112,7 @@ function startStreamingChat(query) {
         memory_enabled: true,
         conversation_history: conversationHistory
     };
-    
+
     fetch('http://localhost:8000/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -121,14 +121,14 @@ function startStreamingChat(query) {
     .then(response => {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
-        
+
         function processStream() {
             return reader.read().then(({ done, value }) => {
                 if (done) return;
-                
+
                 const chunk = decoder.decode(value);
                 const lines = chunk.split('\n');
-                
+
                 let currentEvent = '';
                 for (const line of lines) {
                     if (line.startsWith('event: ')) {
@@ -138,11 +138,11 @@ function startStreamingChat(query) {
                         handleStreamEvent(currentEvent, data);
                     }
                 }
-                
+
                 return processStream();
             });
         }
-        
+
         return processStream();
     });
 }
@@ -172,37 +172,37 @@ function useStreamingChat() {
     const [message, setMessage] = useState('');
     const [result, setResult] = useState(null);
     const [error, setError] = useState(null);
-    
+
     const startChat = async (query) => {
         setProgress(0);
         setMessage('');
         setResult(null);
         setError(null);
-        
+
         try {
             const response = await fetch('/chat/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query })
             });
-            
+
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
-            
+
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
-                
+
                 const chunk = decoder.decode(value);
                 const lines = chunk.split('\n');
-                
+
                 let currentEvent = '';
                 for (const line of lines) {
                     if (line.startsWith('event: ')) {
                         currentEvent = line.substring(7);
                     } else if (line.startsWith('data: ')) {
                         const data = JSON.parse(line.substring(6));
-                        
+
                         switch (currentEvent) {
                             case 'progress':
                                 setProgress(data.progress);
@@ -222,7 +222,7 @@ function useStreamingChat() {
             setError(err.message);
         }
     };
-    
+
     return { progress, message, result, error, startChat };
 }
 ```
@@ -315,4 +315,4 @@ Monitor streaming endpoints for:
 - Progress step timing
 - Memory usage during long-running operations
 
-The streaming implementation provides detailed logging for debugging and monitoring purposes. 
+The streaming implementation provides detailed logging for debugging and monitoring purposes.

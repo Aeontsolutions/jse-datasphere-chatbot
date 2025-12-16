@@ -72,6 +72,7 @@ from google import genai
 from google.genai import types  # type: ignore
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # ----------------------------------------------------------------------------
@@ -86,107 +87,107 @@ system_prompt = """
 
   ---
   ### 📄 1. Document Overview
-  - **Document Type**:  
-  - **Company Name & Ticker (if public)**:  
-  - **Reporting Period**:  
-  - **Date of Submission / Release**:  
-  - **Auditor (if applicable)**:  
-  - **Currency**:  
+  - **Document Type**:
+  - **Company Name & Ticker (if public)**:
+  - **Reporting Period**:
+  - **Date of Submission / Release**:
+  - **Auditor (if applicable)**:
+  - **Currency**:
   ---
   ### 📊 2. Key Financial Metrics
-  - **Revenue**:  
-  - **Operating Profit / EBIT**:  
-  - **Net Income**:  
-  - **EPS (Basic & Diluted)**:  
-  - **Free Cash Flow**:  
+  - **Revenue**:
+  - **Operating Profit / EBIT**:
+  - **Net Income**:
+  - **EPS (Basic & Diluted)**:
+  - **Free Cash Flow**:
   - **Key Ratios**:
-    - Gross Margin  
-    - Operating Margin  
-    - Net Margin  
-    - ROE / ROA  
-    - Debt-to-Equity  
-    - Current Ratio  
+    - Gross Margin
+    - Operating Margin
+    - Net Margin
+    - ROE / ROA
+    - Debt-to-Equity
+    - Current Ratio
   ---
   ### 🔍 3. Performance Highlights
-  - Revenue and margin drivers  
-  - Cost trends (COGS, SG&A, R&D)  
-  - Operational efficiency comments  
+  - Revenue and margin drivers
+  - Cost trends (COGS, SG&A, R&D)
+  - Operational efficiency comments
   ---
   ### 🧾 4. Balance Sheet Snapshot
-  - **Cash & Equivalents**  
-  - **Total Assets**  
-  - **Total Liabilities**  
-  - **Shareholder Equity**  
+  - **Cash & Equivalents**
+  - **Total Assets**
+  - **Total Liabilities**
+  - **Shareholder Equity**
   - Notable changes in structure or working capital
   ---
   ### 💵 5. Cash Flow Overview
-  - **Operating Activities**:  
-  - **Investing Activities**:  
-  - **Financing Activities**:  
-  - Major capital movements  
+  - **Operating Activities**:
+  - **Investing Activities**:
+  - **Financing Activities**:
+  - Major capital movements
   ---
   ### 📈 6. Forward Guidance / Outlook
-  - Management guidance (if available)  
-  - Risks or opportunities  
+  - Management guidance (if available)
+  - Risks or opportunities
   ---
   ### ⚠️ 7. Analyst Notes & Red Flags
-  - Auditor or regulatory concerns  
-  - Related party or insider issues  
-  - Liquidity warnings or covenant risks  
+  - Auditor or regulatory concerns
+  - Related party or insider issues
+  - Liquidity warnings or covenant risks
   ---
   ### 🧩 8. Additional Context
-  - Strategic initiatives (e.g., M&A, restructuring)  
-  - ESG or sustainability disclosures  
+  - Strategic initiatives (e.g., M&A, restructuring)
+  - ESG or sustainability disclosures
   - Industry comparison if relevant
 """
 
 non_findoc_sys_prompt = """
-    You are a corporate analyst reviewing a non-financial document submitted by a company.  
-    Your job is to extract and summarize the most relevant qualitative insights that provide context for investors, executives, or decision-makers.  
+    You are a corporate analyst reviewing a non-financial document submitted by a company.
+    Your job is to extract and summarize the most relevant qualitative insights that provide context for investors, executives, or decision-makers.
     These documents may include investor presentations, management letters, ESG disclosures, strategic plans, or earnings call transcripts.
 
-    Analyze the document and generate a structured summary using the format below.  
+    Analyze the document and generate a structured summary using the format below.
     If any information is not provided, state "Not disclosed." Use clean markdown formatting.
 
     ---
     ### 📄 0. Document Overview
-    - **Document Type**:  
-    - **Company Name & Ticker (if public)**:  
-    - **Date of Submission / Release**:  
-    - **Author / Division**:  
-    - **Purpose of Document**:  
+    - **Document Type**:
+    - **Company Name & Ticker (if public)**:
+    - **Date of Submission / Release**:
+    - **Author / Division**:
+    - **Purpose of Document**:
     ---
     ### 🏢 1. Company Overview
-    - **Company Name**:  
-    - **Headquarters / Region**:  
-    - **CEO / Key Executives**:  
-    - **Board of Directors (if disclosed)**:  
-    - **Business Segments / Focus Areas**:  
+    - **Company Name**:
+    - **Headquarters / Region**:
+    - **CEO / Key Executives**:
+    - **Board of Directors (if disclosed)**:
+    - **Business Segments / Focus Areas**:
     ---
     ### 🧭 2. Strategic Themes & Objectives
-    - **Primary goals or initiatives discussed**:  
-    - **Target markets, segments, or geographies**:  
-    - **Key operational or structural changes (e.g., M&A, partnerships)**:  
+    - **Primary goals or initiatives discussed**:
+    - **Target markets, segments, or geographies**:
+    - **Key operational or structural changes (e.g., M&A, partnerships)**:
     ---
     ### 📊 3. Business Drivers & Risks
-    - **Growth strategies or opportunity areas**:  
-    - **Competitive positioning / market commentary**:  
-    - **Risks, headwinds, or concerns raised**:  
+    - **Growth strategies or opportunity areas**:
+    - **Competitive positioning / market commentary**:
+    - **Risks, headwinds, or concerns raised**:
     ---
     ### 🌿 4. ESG & Governance (if applicable)
-    - **Environmental goals or initiatives**:  
-    - **Social impact or workforce developments**:  
-    - **Governance or compliance updates**:  
+    - **Environmental goals or initiatives**:
+    - **Social impact or workforce developments**:
+    - **Governance or compliance updates**:
     ---
     ### 🔮 5. Forward Outlook & Implications
-    - **Management tone or sentiment**:  
-    - **Implications for upcoming financial performance**:  
-    - **Signals for strategic or operational shifts**:  
+    - **Management tone or sentiment**:
+    - **Implications for upcoming financial performance**:
+    - **Signals for strategic or operational shifts**:
     ---
     ### 📌 6. Analyst Notes & Takeaways
-    - Alignment with prior financial results or guidance  
-    - Notable changes in strategy, tone, or risk profile  
-    - Items to monitor in future disclosures  
+    - Alignment with prior financial results or guidance
+    - Notable changes in strategy, tone, or risk profile
+    - Items to monitor in future disclosures
     ---
 """
 
@@ -213,7 +214,6 @@ def summarize_document(document_path: str, system_prompt: str) -> str:
     return response.text
 
 
-
 def write_summary_to_file(summary: str, original_file_path: str) -> str:
     """Write summary next to the PDF (under ./summaries) and return the txt path."""
     base_dir = pathlib.Path(original_file_path).parent
@@ -225,16 +225,15 @@ def write_summary_to_file(summary: str, original_file_path: str) -> str:
     return str(out_path)
 
 
-
 def summarize_and_save(document_path: str, system_prompt: str) -> str:
     summary = summarize_document(document_path, system_prompt)
     return write_summary_to_file(summary, document_path)
+
 
 # ----------------------------------------------------------------------------
 # 2.  Tiny helper to fetch *some* S3 keys – synchronous boto3 is fine here
 # ----------------------------------------------------------------------------
 import boto3
-from botocore.exceptions import ClientError, NoCredentialsError
 
 
 def get_first_n_pdfs(bucket: str, n: int = 0) -> List[str]:
@@ -252,6 +251,7 @@ def get_first_n_pdfs(bucket: str, n: int = 0) -> List[str]:
                 if n and n > 0 and len(found) >= n:
                     return found
     return found
+
 
 # ----------------------------------------------------------------------------
 # 3.  Async pipeline
@@ -290,7 +290,6 @@ def choose_prompt(filename: str) -> str:
 PROCESSED_PATH = pathlib.Path("processed.json")
 
 
-
 def _load_processed() -> set[str]:
     if PROCESSED_PATH.exists():
         try:
@@ -300,7 +299,6 @@ def _load_processed() -> set[str]:
         except Exception:
             logging.warning("Could not parse %s – starting with empty set", PROCESSED_PATH)
     return set()
-
 
 
 def _save_processed(processed: set[str]):
@@ -353,7 +351,6 @@ async def process_uri(
             logging.exception("❌  Failed on %s: %s", uri, exc)
 
 
-
 def _list_pdfs_for_symbols(bucket: str, symbols: list[str]) -> List[str]:
     """Return all PDF object URIs for the given ticker symbols."""
     s3 = boto3.client("s3")
@@ -397,7 +394,11 @@ async def async_main(
         logging.info("All of the first %d PDFs have already been processed.", len(uris))
         return
 
-    logging.info("Running smoke test on %d PDFs (skipping %d already processed)", len(unprocessed_uris), len(uris) - len(unprocessed_uris))
+    logging.info(
+        "Running smoke test on %d PDFs (skipping %d already processed)",
+        len(unprocessed_uris),
+        len(uris) - len(unprocessed_uris),
+    )
     sem = asyncio.Semaphore(max_conc)
     session = aioboto3.Session()
 
@@ -447,7 +448,9 @@ async def async_main(
 # 5.  Vector-store upload helper (Chroma REST API)
 # -------------------------------------------------------------
 
-import json, requests, re
+import json
+import requests
+import re
 from rapidfuzz import fuzz
 
 
@@ -478,14 +481,20 @@ def _upload_summaries_to_vectordb(paths: list[pathlib.Path]):
         fname = path.name
         company_name = _norm_company(fname.split("-")[0])
         year_match = re.search(r"\d{4}", fname)
-        year = year_match.group() if year_match and 1900 <= int(year_match.group()) <= 2100 else "Unknown"
+        year = (
+            year_match.group()
+            if year_match and 1900 <= int(year_match.group()) <= 2100
+            else "Unknown"
+        )
 
-        metas.append({
-            "company_name": company_name,
-            "year": year,
-            "file_type": "financial" if "financial" in fname.lower() else "non-financial",
-            "filename": fname,
-        })
+        metas.append(
+            {
+                "company_name": company_name,
+                "year": year,
+                "file_type": "financial" if "financial" in fname.lower() else "non-financial",
+                "filename": fname,
+            }
+        )
 
     if not docs:
         logging.info("No summaries to upload – skipping vector upload.")
@@ -499,18 +508,28 @@ def _upload_summaries_to_vectordb(paths: list[pathlib.Path]):
     resp.raise_for_status()
     logging.info("Vector-store response: %s", resp.json())
 
+
 # ----------------------------------------------------------------------------
 # 4.  CLI entry-point
 # ----------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Asynchronous smoke-test for Gemini summariser.")
     parser.add_argument("--bucket", default="jse-renamed-docs", help="S3 bucket name")
-    parser.add_argument("--num-files", type=int, default=0, help="Max PDFs to process (0 = no limit)")
+    parser.add_argument(
+        "--num-files", type=int, default=0, help="Max PDFs to process (0 = no limit)"
+    )
     parser.add_argument("--concurrency", type=int, default=3, help="Max concurrent Gemini calls")
-    parser.add_argument("--symbols", type=str, help="Comma-separated list of ticker symbols to process")
+    parser.add_argument(
+        "--symbols", type=str, help="Comma-separated list of ticker symbols to process"
+    )
     parser.add_argument("--update-url", help="Override CHROMA_UPDATE_URL for vector DB upload")
-    parser.add_argument("--checkpoint-path", help="Path to checkpoint file (defaults to processed.json or $CHECKPOINT_PATH)")
-    parser.add_argument("--reset", action="store_true", help="Ignore existing checkpoint file and start fresh")
+    parser.add_argument(
+        "--checkpoint-path",
+        help="Path to checkpoint file (defaults to processed.json or $CHECKPOINT_PATH)",
+    )
+    parser.add_argument(
+        "--reset", action="store_true", help="Ignore existing checkpoint file and start fresh"
+    )
 
     # Boolean flag: --upload-summaries / --no-upload-summaries (Python ≥3.9)
     try:
@@ -524,8 +543,18 @@ if __name__ == "__main__":
         )
     except ImportError:
         # Fallback for older Python: use two explicit flags
-        parser.add_argument("--upload-summaries", dest="upload_summaries", action="store_true", help="Upload .txt summaries to S3 (default)")
-        parser.add_argument("--no-upload-summaries", dest="upload_summaries", action="store_false", help="Do not upload .txt summaries to S3")
+        parser.add_argument(
+            "--upload-summaries",
+            dest="upload_summaries",
+            action="store_true",
+            help="Upload .txt summaries to S3 (default)",
+        )
+        parser.add_argument(
+            "--no-upload-summaries",
+            dest="upload_summaries",
+            action="store_false",
+            help="Do not upload .txt summaries to S3",
+        )
         parser.set_defaults(upload_summaries=True)
 
     parser.add_argument("--summary-bucket", help="Bucket to store summaries (defaults to --bucket)")
@@ -536,11 +565,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------------
     # Configure checkpoint path (CLI > ENV > default)
     # -------------------------------------------------------------
-    checkpoint_path = (
-        args.checkpoint_path
-        or os.getenv("CHECKPOINT_PATH")
-        or "processed.json"
-    )
+    checkpoint_path = args.checkpoint_path or os.getenv("CHECKPOINT_PATH") or "processed.json"
     globals()["PROCESSED_PATH"] = pathlib.Path(checkpoint_path)
 
     symbol_list = [s.strip().upper() for s in args.symbols.split(",")] if args.symbols else None

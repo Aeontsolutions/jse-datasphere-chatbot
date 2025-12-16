@@ -52,7 +52,7 @@ Thumbs.db
 *.txt
 !requirements.txt
 
-# Chroma DB 
+# Chroma DB
 ./chroma_db/*
 ./chroma/*
 **/chroma_db/

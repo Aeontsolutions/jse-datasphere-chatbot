@@ -324,7 +324,7 @@ import json
 class RedisJobStore:
     def __init__(self, redis_url: str):
         self.redis = redis.from_url(redis_url)
-    
+
     async def create_job(self, job_type: str, request_data: dict) -> str:
         job_id = str(uuid.uuid4())
         job_data = {
@@ -344,10 +344,10 @@ class RedisJobStore:
 
 ## Summary
 
-✅ **Fix applied**: Sticky sessions properly configured in production  
-🚀 **Next step**: Deploy to production  
-⏱️ **Deployment time**: 5-10 minutes  
-🎯 **Expected result**: Polling works with 2 instances  
+✅ **Fix applied**: Sticky sessions properly configured in production
+🚀 **Next step**: Deploy to production
+⏱️ **Deployment time**: 5-10 minutes
+🎯 **Expected result**: Polling works with 2 instances
 📊 **Monitoring**: Use debug mode in test client to verify
 
 ## Deploy Command
@@ -358,4 +358,3 @@ copilot svc deploy --name api --env prod
 ```
 
 Then test with your HTML client in production mode!
-

@@ -53,7 +53,7 @@ The streaming tests cover:
 The integration tests test the actual API endpoints:
 
 - ✅ `/chat/stream` - Traditional chat streaming
-- ✅ `/fast_chat/stream` - Vector DB chat streaming  
+- ✅ `/fast_chat/stream` - Vector DB chat streaming
 - ✅ `/fast_chat_v2/stream` - Financial data streaming
 
 ## Running the Tests
@@ -235,10 +235,10 @@ async def test_new_functionality(self, mock_request, mock_s3_client):
     """Test description."""
     # Arrange
     tracker = ProgressTracker()
-    
+
     # Act
     await tracker.emit_progress("test", "message", 50.0)
-    
+
     # Assert
     update = await tracker.updates_queue.get()
     assert update.step == "test"
@@ -282,4 +282,4 @@ pip install pytest pytest-asyncio pytest-cov pytest-xdist
 - Unit tests should run quickly (< 1 second each)
 - Integration tests may take longer due to real API calls
 - Use `--parallel` for faster execution on multi-core systems
-- Monitor test execution time to catch performance regressions 
+- Monitor test execution time to catch performance regressions

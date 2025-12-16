@@ -108,12 +108,12 @@ from app.utils import download_and_extract_from_s3_async, S3DownloadConfig
 
 async def download_document():
     config = S3DownloadConfig(max_retries=3, timeout=120.0)
-    
+
     result = await download_and_extract_from_s3_async(
         "s3://my-bucket/document.pdf",
         config=config
     )
-    
+
     if result.success:
         print(f"Downloaded {len(result.content)} characters")
         print(f"Download took {result.download_time:.2f} seconds")
@@ -126,16 +126,16 @@ async def download_document():
 async def download_with_progress():
     async def progress_callback(step: str, message: str):
         print(f"Progress: {step} - {message}")
-    
+
     config = S3DownloadConfig(concurrent_downloads=3)
-    
+
     document_texts, message, loaded_docs = await auto_load_relevant_documents_async(
         query="Tell me about company financials",
         metadata=metadata,
         config=config,
         progress_callback=progress_callback
     )
-    
+
     print(f"Loaded {len(loaded_docs)} documents: {loaded_docs}")
 ```
 

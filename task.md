@@ -110,6 +110,6 @@
 - Consider using parameterized queries for security and performance when querying BigQuery.
 - Ensure that the BigQuery client is initialized in a way that works with FastAPI's async/concurrent model (thread safety, connection pooling).
 - If the app is deployed in an environment without direct GCP access, ensure VPC or service account permissions are correctly configured.
-- **Consistent and informative logging is critical for tracing, debugging, and monitoring in production.** 
+- **Consistent and informative logging is critical for tracing, debugging, and monitoring in production.**
 - **The LLM-based parsing logic is essential for converting user queries into structured filters and must be preserved and adapted for the new data source.**
-- **Refer to `models.py` for the definitive structure of all API requests and responses.** 
+- **Refer to `models.py` for the definitive structure of all API requests and responses.**

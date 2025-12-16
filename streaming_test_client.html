@@ -39,9 +39,9 @@
             margin-bottom: 10px;
         }
         .btn:hover { background: #0056b3; }
-        .btn:disabled { 
-            background: #ccc; 
-            cursor: not-allowed; 
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
         }
         .progress-container {
             margin: 20px 0;
@@ -134,13 +134,13 @@
 <body>
     <div class="container">
         <h1>🤖 Jacie Streaming Chat Test</h1>
-        
+
         <div class="endpoint-selection">
             <button class="btn endpoint-btn active" onclick="selectEndpoint('chat', true)">Deep Research</button>
             <!--button class="btn endpoint-btn" onclick="selectEndpoint('fast_chat', true)">Fast Chat (Vector DB)</button-->
             <button class="btn endpoint-btn" onclick="selectEndpoint('fast_chat_v2', false)">Chat</button>
         </div>
-        
+
         <div class="options">
             <div class="option">
                 <input type="checkbox" id="autoLoad" checked>
@@ -167,21 +167,21 @@
                 <span style="margin-left: 10px; font-size: 12px; color: #666;">Quick test queries for different scenarios</span>
             </div>
         </div>
-        
-        <textarea 
-            class="chat-input" 
-            id="queryInput" 
+
+        <textarea
+            class="chat-input"
+            id="queryInput"
             placeholder="Ask a question about JSE documents..."
             rows="3"
         ></textarea>
-        
+
         <button class="btn" onclick="startStreamingChat().catch(console.error)" id="sendBtn">
             Send Message
         </button>
         <button class="btn" onclick="clearChat()" style="background: #6c757d;">
             Clear
         </button>
-        
+
         <div class="progress-container hidden" id="progressContainer">
             <div class="status-message" id="statusMessage">Initializing...</div>
             <div class="progress-bar">
@@ -190,13 +190,13 @@
             <div class="step-info" id="stepInfo">Step: starting</div>
             <div id="connectionStatus" style="font-size: 12px; color: #666; margin-top: 5px;">Connecting...</div>
         </div>
-        
+
         <div class="response-container hidden" id="responseContainer">
             <h3>Response:</h3>
             <div id="responseText"></div>
             <div id="responseDetails" style="margin-top: 15px; font-size: 14px; color: #666;"></div>
         </div>
-        
+
         <!-- Debug Panel for Testing -->
         <div class="debug-panel" id="debugPanel" style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 6px; border: 1px solid #dee2e6;">
             <h4 style="margin-top: 0; color: #495057;">🔧 Debug Panel</h4>
@@ -220,14 +220,14 @@
         let activeJobId = null;
         let jobPollingTimer = null;
         const JOB_POLL_INTERVAL_MS = 1000;
-        
+
         // Environment base URLs
         const environmentUrls = {
             local: 'http://localhost:8000',
             dev: 'http://jse-da-Publi-1wgQS45FnwpV-1192199831.us-east-1.elb.amazonaws.com',
             prod: 'http://jse-da-Publi-ehai7dwBXRyV-969154490.us-east-1.elb.amazonaws.com'
         };
-        
+
         function updateEnvironment() {
             const selected = document.querySelector('input[name="environment"]:checked');
             if (selected) {
@@ -239,13 +239,13 @@
         function selectEndpoint(endpoint, streaming) {
             currentEndpoint = endpoint;
             useStreaming = streaming;
-            
+
             // Update button states
             document.querySelectorAll('.endpoint-btn').forEach(btn => {
                 btn.classList.remove('active');
             });
             event.target.classList.add('active');
-            
+
             logDebug(`🔗 Selected endpoint: ${endpoint} (${streaming ? 'Streaming' : 'Non-Streaming'})`);
         }
 
@@ -255,31 +255,31 @@
                 alert('Please enter a question');
                 return;
             }
-            
+
             const autoLoad = document.getElementById('autoLoad').checked;
             const memoryEnabled = document.getElementById('memoryEnabled').checked;
-            
+
             // Show progress, hide response
             document.getElementById('progressContainer').classList.remove('hidden');
             document.getElementById('responseContainer').classList.add('hidden');
             document.getElementById('sendBtn').disabled = true;
             stopJobPolling();
             activeJobId = null;
-            
+
             // Reset progress
             if (useStreaming) {
                 updateProgress('start', 'Starting streaming request...', 0);
             } else {
                 updateProgress('start', 'Making non-streaming request...', 0);
             }
-            
+
             // Start timing
             connectionStartTime = Date.now();
-            
+
             // Determine URL based on selected environment and streaming preference
             const baseUrl = environmentUrls[currentEnvironment];
             const url = `${baseUrl}/${currentEndpoint}${useStreaming ? '/stream' : ''}`;
-            
+
             // Log request details
             const requestType = useStreaming ? 'streaming' : 'non-streaming';
             logDebug(`🚀 Starting ${requestType} chat request`);
@@ -287,7 +287,7 @@
             logDebug(`🌐 Environment: ${currentEnvironment}`);
             logDebug(`🔗 URL: ${url}`);
             logDebug(`⚙️ Auto-load: ${autoLoad}, Memory: ${memoryEnabled}`);
-            
+
             // Prepare request data
             const requestData = {
                 query: query,
@@ -295,7 +295,7 @@
                 memory_enabled: memoryEnabled,
                 conversation_history: memoryEnabled ? conversationHistory : null
             };
-            
+
                         if (useStreaming) {
                             const response = await fetch(url, {
                                 method: 'POST',
@@ -305,7 +305,7 @@
                                 credentials: 'include',  // Required for sticky session cookies
                                 body: JSON.stringify(requestData)
                             });
-                
+
                             if (!response.ok) {
                                 const errorMsg = `HTTP error! status: ${response.status}`;
                                 logDebug(`❌ ${errorMsg}`);
@@ -317,44 +317,44 @@
                                 logDebug(`✅ Connection established successfully (SSE)`);
                                 document.getElementById('connectionStatus').textContent = 'Connected - Receiving stream...';
                                 document.getElementById('connectionStatus').style.color = '#28a745';
-                    
+
                                 const reader = response.body.getReader();
                                 const decoder = new TextDecoder();
                                 let buffer = '';
-                    
+
                                 try {
                                     while (true) {
                                         const { done, value } = await reader.read();
-                            
+
                                         if (done) {
                                             const duration = Date.now() - connectionStartTime;
                                             logDebug(`🏁 Stream completed in ${duration}ms`);
                                             console.log('Stream completed');
                                             break;
                                         }
-                            
+
                                         const chunk = decoder.decode(value, { stream: true });
                                         buffer += chunk;
-                            
+
                                         const lines = buffer.split('\n');
                                         buffer = lines.pop() || '';
-                            
+
                                         let currentEvent = '';
-                            
+
                                         for (const line of lines) {
                                             if (line.trim() === '') continue;
-                                
+
                                             if (debugMode) {
                                                 console.log('Processing line:', line);
                                             }
-                                
+
                                             if (line.startsWith('event: ')) {
                                                 currentEvent = line.substring(7);
                                                 logDebug(`📡 Event: ${currentEvent}`);
                                             } else if (line.startsWith('data: ')) {
                                                 const data = line.substring(6);
                                                 logDebug(`📦 Data: ${data.substring(0, 100)}${data.length > 100 ? '...' : ''}`);
-                                    
+
                                                 try {
                                                     const parsed = JSON.parse(data);
                                                     handleStreamEvent(currentEvent || 'unknown', parsed);
@@ -379,7 +379,7 @@
                         } else {
                 // Use non-streaming approach
                 logDebug(`📡 Making non-streaming request to ${url}`);
-                
+
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: {
@@ -388,23 +388,23 @@
                     credentials: 'include',  // Required for sticky session cookies
                     body: JSON.stringify(requestData)
                 });
-                
+
                 if (!response.ok) {
                     const errorMsg = `HTTP error! status: ${response.status}`;
                     logDebug(`❌ ${errorMsg}`);
                     throw new Error(errorMsg);
                 }
-                
+
                 logDebug(`✅ Non-streaming request completed successfully`);
-                
+
                 try {
                     const result = await response.json();
                     const duration = Date.now() - connectionStartTime;
                     logDebug(`🏁 Non-streaming response received in ${duration}ms`);
-                    
+
                     // Update progress to show completion
                     updateProgress('complete', 'Request completed successfully', 100);
-                    
+
                     // Show result directly (no streaming events)
                     showResult(result);
                 } catch (error) {
@@ -417,15 +417,15 @@
                 }
             }
         }
-        
+
         function handleStreamEvent(event, data) {
             const duration = Date.now() - connectionStartTime;
             logDebug(`⏱️ [${duration}ms] Processing ${event} event`);
-            
+
             if (debugMode) {
                 console.log('Received SSE event:', event, data);
             }
-            
+
             switch (event) {
                 case 'progress':
                     logDebug(`📊 Progress: ${data.step} - ${data.progress}% - ${data.message}`);
@@ -545,12 +545,12 @@
                 updateProgress('queued', 'Job queued...', 0);
             }
         }
-        
+
         function updateProgress(step, message, progress, details) {
             document.getElementById('statusMessage').textContent = message;
             document.getElementById('progressFill').style.width = progress + '%';
             document.getElementById('stepInfo').textContent = `Step: ${step}`;
-            
+
             if (details) {
                 const detailsText = Object.entries(details)
                     .map(([key, value]) => `${key}: ${value}`)
@@ -558,16 +558,16 @@
                 document.getElementById('stepInfo').textContent += ` (${detailsText})`;
             }
         }
-        
+
         function showResult(result) {
             stopJobPolling();
             activeJobId = null;
             document.getElementById('progressContainer').classList.add('hidden');
             document.getElementById('responseContainer').classList.remove('hidden');
             document.getElementById('responseContainer').classList.remove('error');
-            
+
             document.getElementById('responseText').textContent = result.response;
-            
+
             let details = [];
             if (result.documents_loaded && result.documents_loaded.length > 0) {
                 details.push(`Documents loaded: ${result.documents_loaded.length}`);
@@ -575,30 +575,30 @@
             if (result.document_selection_message) {
                 details.push(`Selection: ${result.document_selection_message}`);
             }
-            
+
             document.getElementById('responseDetails').textContent = details.join(' | ');
-            
+
             // Update conversation history if memory is enabled
             if (document.getElementById('memoryEnabled').checked && result.conversation_history) {
                 conversationHistory = result.conversation_history;
             }
-            
+
             document.getElementById('sendBtn').disabled = false;
         }
-        
+
         function showError(error) {
             stopJobPolling();
             activeJobId = null;
             document.getElementById('progressContainer').classList.add('hidden');
             document.getElementById('responseContainer').classList.remove('hidden');
             document.getElementById('responseContainer').classList.add('error');
-            
+
             document.getElementById('responseText').textContent = `Error: ${error}`;
             document.getElementById('responseDetails').textContent = '';
-            
+
             document.getElementById('sendBtn').disabled = false;
         }
-        
+
         function clearChat() {
             document.getElementById('queryInput').value = '';
             document.getElementById('progressContainer').classList.add('hidden');
@@ -607,18 +607,18 @@
             stopJobPolling();
             activeJobId = null;
         }
-        
+
         // Debug utility functions
         function toggleDebugMode() {
             debugMode = document.getElementById('debugMode').checked;
             const debugLog = document.getElementById('debugLog');
             debugLog.style.display = debugMode ? 'block' : 'none';
-            
+
             if (debugMode) {
                 logDebug('🔧 Debug mode enabled');
             }
         }
-        
+
         function logDebug(message) {
             const debugLog = document.getElementById('debugLog');
             const timestamp = new Date().toLocaleTimeString();
@@ -628,12 +628,12 @@
             debugLog.appendChild(logEntry);
             debugLog.scrollTop = debugLog.scrollHeight;
         }
-        
+
         function clearDebugLog() {
             const debugLog = document.getElementById('debugLog');
             debugLog.innerHTML = '';
         }
-        
+
         function loadTestQueries() {
             const testQueries = [
                 "What are the main financial highlights for MTN Group?",
@@ -644,7 +644,7 @@
                 "Test query with special characters: @#$%^&*()",
                 "Very long query to test how the system handles extended input and whether it properly processes streaming responses with multiple progress updates and detailed information about the financial data processing pipeline"
             ];
-            
+
             // Add financial-specific queries for non-streaming endpoint
             if (currentEndpoint === 'fast_chat_v2' && !useStreaming) {
                 testQueries.push(
@@ -655,14 +655,14 @@
                     "What is the P/E ratio for major JSE companies?"
                 );
             }
-            
+
             const queryInput = document.getElementById('queryInput');
             const randomQuery = testQueries[Math.floor(Math.random() * testQueries.length)];
             queryInput.value = randomQuery;
-            
+
             logDebug(`📝 Loaded test query: "${randomQuery}"`);
         }
-        
+
         // Enable Enter key to send message
         document.getElementById('queryInput').addEventListener('keydown', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -672,4 +672,4 @@
         });
     </script>
 </body>
-</html> 
+</html>

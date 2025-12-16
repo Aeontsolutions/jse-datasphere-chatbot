@@ -8,7 +8,6 @@ from google import genai
 from google.genai import types
 
 import chromadb
-from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 
 from dotenv import load_dotenv
@@ -43,9 +42,7 @@ def init_chroma_client(persist_directory: Optional[str] = None):
         port = parsed.port or int(os.getenv("CHROMA_PORT", 8000))
 
         client = chromadb.HttpClient(host=host, port=port)
-        logger.info(
-            "Chroma HTTP client initialised (host=%s, port=%s)", host, port
-        )
+        logger.info("Chroma HTTP client initialised (host=%s, port=%s)", host, port)
         return client
 
     # ------------------------------------------------------------------
@@ -59,9 +56,7 @@ def init_chroma_client(persist_directory: Optional[str] = None):
     return client
 
 
-def get_or_create_collection(
-    client: "chromadb.Client", collection_name: str = "documents"
-):
+def get_or_create_collection(client: "chromadb.Client", collection_name: str = "documents"):
     """Return an existing collection or create a new one using a Google Generative AI embedding function."""
     embed_fn = embedding_functions.GoogleGenerativeAiEmbeddingFunction(
         api_key=os.getenv("SUMMARIZER_API_KEY")
@@ -193,22 +188,22 @@ def get_doctype_from_query(query):
 
                 Where:
                 - Your **justification** explains your reasoning clearly and concisely.
-                - Your **response** must be one of the following (exact match):  
-                - 'financial' → for queries that rely on metrics, earnings, ratios, cash flows, or balance sheet information.  
-                - 'non-financial' → for queries that depend on business strategy, ESG initiatives, leadership tone, risks, or narrative insights.  
+                - Your **response** must be one of the following (exact match):
+                - 'financial' → for queries that rely on metrics, earnings, ratios, cash flows, or balance sheet information.
+                - 'non-financial' → for queries that depend on business strategy, ESG initiatives, leadership tone, risks, or narrative insights.
                 - 'both' → for queries that require a combination of numeric financial data *and* strategic or qualitative context.
 
                 Think carefully and respond accurately to ensure the correct documents are used to answer the query.
-                
+
                 For example:
                 Query: "What is the revenue growth of Company X in 2023?"
                 Justification: "The query is about financial metrics and data."
                 Label: "financial"
-                
+
                 Query: "What is the strategic direction of Company Y?"
                 Justification: "The query is about business strategy and non-financial information."
                 Label: "non-financial"
-                
+
                 Query: "Summarize Company Z's performance in 2023."
                 Justification: "Summarizing performance typically includes both financial results (e.g., revenue, profit) and qualitative drivers (e.g., market conditions, management commentary)."
                 Label: "both"
@@ -221,7 +216,7 @@ def get_doctype_from_query(query):
     doctype_map = {
         "label: both": ["financial", "non-financial"],
         "label: non-financial": ["non-financial"],
-        "label: financial": ["financial"]
+        "label: financial": ["financial"],
     }
     return doctype_map.get(last_line, ["unknown"])
 
@@ -233,13 +228,13 @@ def query_collection(
     where: Optional[Dict[str, Any]] = None,
 ):
     """Query a Chroma collection using filename-based filtering only.
-    
+
     Args:
         collection: The ChromaDB collection to query
         query: The search query text
         n_results: Number of results to return
         where: Optional metadata filter (e.g., for filename filtering)
-    
+
     Returns:
         Tuple of (sorted_results, context_string)
     """
@@ -268,9 +263,7 @@ def query_collection(
 
     # Fallback: no metadata filter at all (for robustness)
     if _no_hits(results) and where_filter is not None:
-        logger.info(
-            "Metadata filter returned no results – retrying without any metadata filter"
-        )
+        logger.info("Metadata filter returned no results – retrying without any metadata filter")
         results = collection.query(query_texts=[query], n_results=n_results)
 
     logger.info("Chroma returned ids=%s", results.get("ids"))
@@ -348,41 +341,42 @@ def query_meta_collection(
             msg["content"] for msg in conversation_history[-5:] if msg.get("role") == "user"
         ]
         retrieval_query = " ".join(recent_history + [query])
-    
+
     logger.info(f"Querying meta collection with query: '{retrieval_query}'")
-    
+
     # Query the meta collection
     results = meta_collection.query(
         query_texts=[retrieval_query],
         n_results=n_results,
         where=where,
     )
-    
+
     # Check if we got any results
     if not results or not results.get("metadatas") or not results["metadatas"][0]:
         logger.info("No results from meta collection query")
         return None
-    
+
     # Extract the results
     metadatas = results["metadatas"][0]  # Flatten the nested list
-    
+
     # Convert to the expected format
-    companies_mentioned = list(set(meta.get("company", "") for meta in metadatas if meta.get("company")))
+    companies_mentioned = list(
+        set(meta.get("company", "") for meta in metadatas if meta.get("company"))
+    )
     documents_to_load = []
-    
+
     for meta in metadatas:
         if meta.get("filename") and meta.get("company"):
-            documents_to_load.append({
-                "company": meta["company"],
-                "document_link": f"s3://document-path/{meta['filename']}",  # Placeholder - would need real S3 path
-                "filename": meta["filename"],
-                "reason": f"Relevant {meta.get('type', 'document')} for {meta.get('period', 'period')}"
-            })
-    
-    return {
-        "companies_mentioned": companies_mentioned,
-        "documents_to_load": documents_to_load
-    }
+            documents_to_load.append(
+                {
+                    "company": meta["company"],
+                    "document_link": f"s3://document-path/{meta['filename']}",  # Placeholder - would need real S3 path
+                    "filename": meta["filename"],
+                    "reason": f"Relevant {meta.get('type', 'document')} for {meta.get('period', 'period')}",
+                }
+            )
+
+    return {"companies_mentioned": companies_mentioned, "documents_to_load": documents_to_load}
 
 
 # ---------------------------------------------------------------------------
@@ -433,9 +427,7 @@ def qa_bot(
     if conversation_history:
         # Keep only the last 20 messages to keep the context short
         recent_history = conversation_history[-20:]
-        convo_context = "\n".join(
-            [f"{msg['role']}: {msg['content']}" for msg in recent_history]
-        )
+        convo_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in recent_history])
         convo_context = f"Conversation history:\n{convo_context}\n\n"
 
     prompt = f"{convo_context}Question: {query}\nContext: {contexts}"

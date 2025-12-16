@@ -1,6 +1,6 @@
 ---
 description: this layout is helpful whenever the assistant is asked questions about "deploy", "environment", or "pipeline"
-globs: 
+globs:
 alwaysApply: false
 ---
 # CICD with AWS Copilot

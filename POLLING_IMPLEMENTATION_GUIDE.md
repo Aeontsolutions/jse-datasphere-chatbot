@@ -49,7 +49,7 @@ const response = await fetch(`${baseUrl}/chat/stream`, {
     'Content-Type': 'application/json',
   },
   // credentials: 'include' is optional with Redis, but good for auth cookies
-  credentials: 'include', 
+  credentials: 'include',
   body: JSON.stringify({
     query: "What are the main financial highlights for MTN Group?",
     auto_load_documents: true,
@@ -91,8 +91,8 @@ if (contentType.includes('text/event-stream')) {
 
 ```typescript
 const jobPayload = await response.json();
-const pollingUrl = jobPayload.polling_url.startsWith('http') 
-  ? jobPayload.polling_url 
+const pollingUrl = jobPayload.polling_url.startsWith('http')
+  ? jobPayload.polling_url
   : `${baseUrl}${jobPayload.polling_url}`;
 ```
 
@@ -106,13 +106,13 @@ const JOB_POLL_INTERVAL_MS = 1000; // Poll every 1 second
 const pollInterval = setInterval(async () => {
   try {
     const statusResponse = await fetch(pollingUrl);
-    
+
     if (statusResponse.status === 404) {
         console.error('Job not found (expired or invalid ID)');
         stopPolling();
         return;
     }
-    
+
     const jobStatus = await statusResponse.json();
     handleJobStatus(jobStatus);
   } catch (error) {

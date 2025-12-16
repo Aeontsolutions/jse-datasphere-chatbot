@@ -32,7 +32,7 @@ copilot svc ls
 
 # Should show:
 # Name    Type
-# api     Load Balanced Web Service  
+# api     Load Balanced Web Service
 # chroma  Backend Service
 ```
 
@@ -67,7 +67,7 @@ curl https://your-app-url.region.elb.amazonaws.com/health
 # Expected response:
 # {
 #   "status": "healthy",
-#   "s3_client": "available", 
+#   "s3_client": "available",
 #   "metadata": "available",
 #   "financial_data": {
 #     "status": "available",
@@ -118,7 +118,7 @@ curl -X POST "https://your-app-url/fast_chat_v2" \
 - Instances: 1
 
 **ChromaDB Service:**
-- CPU: 256 units (0.25 vCPU) 
+- CPU: 256 units (0.25 vCPU)
 - Memory: 512 MB
 - Storage: EFS persistent volume
 - Instances: 1
@@ -132,7 +132,7 @@ memory: 1024
 count: 1
 
 # Production: High availability
-cpu: 1024  
+cpu: 1024
 memory: 2048
 count: 2
 
@@ -162,7 +162,7 @@ count: 1
 # API service logs
 copilot svc logs --name api --env staging --follow
 
-# ChromaDB logs  
+# ChromaDB logs
 copilot svc logs --name chroma --env staging --follow
 
 # Filter for fast_chat_v2
@@ -249,4 +249,4 @@ If you encounter issues:
 3. Ensure all environment variables are properly set
 4. Verify financial data files are present in the container
 
-Your `fast_chat_v2` endpoint is now ready for AWS deployment! 🎉 
+Your `fast_chat_v2` endpoint is now ready for AWS deployment! 🎉

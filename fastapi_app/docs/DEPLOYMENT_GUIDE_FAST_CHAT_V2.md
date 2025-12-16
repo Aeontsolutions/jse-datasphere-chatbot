@@ -156,4 +156,4 @@ docker-compose logs -f chroma
 
 # Check financial data manager initialization
 docker-compose logs api | grep "Financial"
-``` 
+```

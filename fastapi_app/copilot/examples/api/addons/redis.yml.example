@@ -66,5 +66,3 @@ Outputs:
   RedisUrl:
     Description: "The connection URL for Redis"
     Value: !Sub "redis://${RedisCluster.RedisEndpoint.Address}:${RedisCluster.RedisEndpoint.Port}/0"
-
-

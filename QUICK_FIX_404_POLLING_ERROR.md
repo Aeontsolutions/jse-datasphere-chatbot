@@ -85,7 +85,7 @@ You should now see in the debug log:
 ```
 Client → Load Balancer → Instance A (creates job)
          ↓ Sets cookie: AWSALB=[instance_id]
-         
+
 Client → Load Balancer → Instance A (polls job) ✅
          ↑ Reads cookie, routes to same instance
 ```
@@ -214,11 +214,10 @@ Look for any configuration errors or health check failures.
 
 ## Summary
 
-✅ **Root cause**: Sticky sessions not declared in production environment override  
-✅ **Changes made**: Added `stickiness: true` to production http config  
-🚀 **Action required**: Deploy to production  
-⏱️ **Estimated time**: 5-10 minutes  
-🎯 **Expected result**: Job polling works with 2 instances using sticky sessions  
+✅ **Root cause**: Sticky sessions not declared in production environment override
+✅ **Changes made**: Added `stickiness: true` to production http config
+🚀 **Action required**: Deploy to production
+⏱️ **Estimated time**: 5-10 minutes
+🎯 **Expected result**: Job polling works with 2 instances using sticky sessions
 
 **The fix enables your production environment to use job polling with multiple instances while maintaining high availability!**
-
