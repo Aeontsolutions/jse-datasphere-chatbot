@@ -6,18 +6,20 @@ managing metadata caching for improved performance, and generating chat response
 using Gemini models.
 """
 
-import json
 import hashlib
+import json
+import time
 from datetime import datetime, timedelta
 
-from google.oauth2 import service_account
-from google.cloud import aiplatform
-from vertexai.preview.generative_models import GenerativeModel
 import google.generativeai as genai
 from fastapi import HTTPException
+from google.cloud import aiplatform
+from google.oauth2 import service_account
+from vertexai.preview.generative_models import GenerativeModel
 
 from app.config import get_config
 from app.logging_config import get_logger
+from app.utils.monitoring import record_ai_request
 
 logger = get_logger(__name__)
 
@@ -70,7 +72,7 @@ def init_vertex_ai():
                 "project_id": config.gcp.project_id if hasattr(config.gcp, "project_id") else None,
             },
         )
-        raise HTTPException(status_code=503, detail="Failed to initialize AI service")
+        raise HTTPException(status_code=503, detail="Failed to initialize AI service") from e
 
 
 def init_genai():
@@ -92,7 +94,7 @@ def init_genai():
         raise
     except Exception as e:
         logger.error("genai_init_failed", error=str(e), error_type=type(e).__name__)
-        raise HTTPException(status_code=503, detail="Failed to initialize AI service")
+        raise HTTPException(status_code=503, detail="Failed to initialize AI service") from e
 
 
 # =============================================================================
@@ -256,8 +258,11 @@ def generate_chat_response(
     query, document_texts, conversation_history=None, auto_load_message=None
 ):
     """Generate chat response using Gemini model"""
+    model_name = "gemini-2.5-pro"
+    start_time = time.time()
+
     try:
-        model = GenerativeModel("gemini-2.5-pro")
+        model = GenerativeModel(model_name)
 
         # Format conversation history if available
         conversation_context = ""
@@ -316,18 +321,34 @@ def generate_chat_response(
             """
             response = model.generate_content(prompt)
 
+        duration = time.time() - start_time
+
         logger.info(
             "chat_response_generated",
             extra={
                 "response_length": len(response.text),
                 "has_documents": bool(document_texts),
                 "has_history": bool(conversation_history),
+                "duration": duration,
             },
+        )
+
+        # Record AI request metrics
+        # Note: Token counts are not directly available from the response
+        # They would need to be extracted from usage_metadata if available
+        record_ai_request(
+            model=model_name,
+            duration=duration,
+            success=True,
+            input_tokens=None,  # Would need to access response.usage_metadata if available
+            output_tokens=None,
         )
 
         return response.text
 
     except Exception as e:
+        duration = time.time() - start_time
+
         logger.error(
             "chat_response_generation_failed",
             extra={
@@ -335,6 +356,15 @@ def generate_chat_response(
                 "error_type": type(e).__name__,
                 "has_documents": bool(document_texts),
                 "has_history": bool(conversation_history),
+                "duration": duration,
             },
         )
-        raise HTTPException(status_code=503, detail="Failed to generate AI response")
+
+        # Record failed AI request
+        record_ai_request(
+            model=model_name,
+            duration=duration,
+            success=False,
+        )
+
+        raise HTTPException(status_code=503, detail="Failed to generate AI response") from e

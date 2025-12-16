@@ -1,12 +1,16 @@
-import os
 import json
+import os
 import re
-from typing import Dict, List, Any, Optional
+import time
+from typing import Any, Dict, List, Optional
+
+import google.generativeai as genai
 from google.cloud import bigquery
 from google.oauth2 import service_account
-from app.models import FinancialDataFilters, FinancialDataRecord
-import google.generativeai as genai
+
 from app.logging_config import get_logger
+from app.models import FinancialDataFilters, FinancialDataRecord
+from app.utils.monitoring import record_ai_request, record_bigquery_query
 
 logger = get_logger(__name__)
 
@@ -303,6 +307,9 @@ class FinancialDataManager:
             # Fallback to basic parsing if AI model is not available
             return self._fallback_parse_query(query, last_query_data)
 
+        start_time = time.time()
+        model_name = "gemini-2.0-flash-exp"
+
         # Get conversation context
         conversation_context = self.get_conversation_context(conversation_history)
 
@@ -364,6 +371,7 @@ class FinancialDataManager:
         try:
             response = self.model.generate_content(prompt)
             response_text = response.text.strip()
+            duration = time.time() - start_time
 
             # Clean up the response - remove markdown code blocks if present
             if response_text.startswith("```json"):
@@ -444,17 +452,44 @@ class FinancialDataManager:
             if self.metadata and "associations" in self.metadata:
                 result = self._post_process_filters(result)
 
+            # Record successful AI query parsing
+            record_ai_request(
+                model=model_name,
+                duration=duration,
+                success=True,
+                input_tokens=None,
+                output_tokens=None,
+            )
+
             return FinancialDataFilters(**result)
 
         except json.JSONDecodeError as e:
+            duration = time.time() - start_time
             logger.error(f"JSON parsing error: {str(e)}")
             logger.error(
                 f"Raw response: {response_text if 'response_text' in locals() else 'No response'}"
             )
+
+            # Record failed AI query parsing
+            record_ai_request(
+                model=model_name,
+                duration=duration,
+                success=False,
+            )
+
             return self._fallback_parse_query(query, last_query_data)
 
         except Exception as e:
+            duration = time.time() - start_time
             logger.error(f"Error parsing query with AI: {str(e)}")
+
+            # Record failed AI query parsing
+            record_ai_request(
+                model=model_name,
+                duration=duration,
+                success=False,
+            )
+
             return self._fallback_parse_query(query, last_query_data)
 
     def _post_process_filters(self, result: Dict) -> Dict:
@@ -632,6 +667,8 @@ class FinancialDataManager:
         """Query BigQuery for financial data based on filters."""
         if not self.bq_client:
             raise RuntimeError("BigQuery client not initialized")
+
+        start_time = time.time()
         query = f"SELECT Company, Symbol, CAST(Year AS STRING) as Year, standard_item, item, unit_multiplier, item_type, item_name FROM `{self.project_id}.{self.dataset}.{self.table}` WHERE 1=1"
         params = []
         if filters.companies:
@@ -713,10 +750,21 @@ class FinancialDataManager:
                     formatted_value=formatted_value,
                 )
                 records.append(record)
+
+            duration = time.time() - start_time
             logger.info(f"BigQuery returned {len(records)} records.")
+
+            # Record successful BigQuery query metrics
+            record_bigquery_query(duration=duration, rows_returned=len(records), success=True)
+
             return records
         except Exception as e:
+            duration = time.time() - start_time
             logger.error(f"Error querying BigQuery: {e}")
+
+            # Record failed BigQuery query metrics
+            record_bigquery_query(duration=duration, rows_returned=0, success=False)
+
             return []
 
     def validate_data_availability(self, filters: FinancialDataFilters) -> Dict[str, Any]:

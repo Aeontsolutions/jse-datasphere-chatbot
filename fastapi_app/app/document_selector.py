@@ -5,19 +5,21 @@ This module provides intelligent document selection using LLM-based semantic ana
 and supports both synchronous and asynchronous document loading operations.
 """
 
-import json
 import asyncio
-from typing import Dict, List, Tuple, Optional
+import json
+import time
+from typing import Dict, List, Optional, Tuple
 
 import google.generativeai as genai
 
-from app.config import get_config, S3DownloadConfig
+from app.config import S3DownloadConfig, get_config
+from app.logging_config import get_logger
 from app.s3_client import (
+    DownloadResult,
     download_and_extract_from_s3,
     download_and_extract_from_s3_async,
-    DownloadResult,
 )
-from app.logging_config import get_logger
+from app.utils.monitoring import record_document_load, record_document_selection
 
 logger = get_logger(__name__)
 
@@ -59,6 +61,7 @@ def semantic_document_selection_llm_fallback(query, metadata, conversation_histo
     Use LLM to determine which documents to load based on query and conversation history (fallback method).
     Now optimized with Google Gemini context caching to reduce latency from ~20s to ~2-3s.
     """
+    start_time = time.time()
     try:
         # Fallback to traditional approach if caching fails
         logger.info("Cache unavailable, using traditional LLM fallback (~20s expected)")
@@ -128,6 +131,11 @@ def semantic_document_selection_llm_fallback(query, metadata, conversation_histo
 
             logger.info("Successfully completed LLM fallback with traditional approach")
 
+            # Record metrics for successful document selection
+            duration = time.time() - start_time
+            num_docs = len(recommendation.get("documents_to_load", []))
+            record_document_selection(duration=duration, num_documents=num_docs)
+
             return recommendation
         except json.JSONDecodeError as e:
             logger.error(
@@ -178,12 +186,22 @@ def auto_load_relevant_documents(
 
             # Only load if not already loaded
             if doc_name not in document_texts:
+                load_start = time.time()
                 try:
                     text = download_and_extract_from_s3(s3_client, doc_link)
+                    load_duration = time.time() - load_start
                     if text:
                         document_texts[doc_name] = text
                         loaded_docs.append(doc_name)
+                        # Record successful document load from S3
+                        record_document_load(source="s3", duration=load_duration, success=True)
+                    else:
+                        # Record failed document load
+                        record_document_load(source="error", duration=load_duration, success=False)
                 except Exception as e:
+                    load_duration = time.time() - load_start
+                    # Record failed document load
+                    record_document_load(source="error", duration=load_duration, success=False)
                     logger.error(
                         "document_load_failed",
                         extra={
@@ -262,6 +280,8 @@ async def auto_load_relevant_documents_async(
         docs_to_load = recommendation["documents_to_load"]
         companies_mentioned = recommendation.get("companies_mentioned", [])
 
+        # Note: Document selection metrics already recorded in semantic_document_selection_llm_fallback
+
         if progress_callback:
             await progress_callback(
                 "document_selection_complete",
@@ -311,20 +331,30 @@ async def auto_load_relevant_documents_async(
             if isinstance(result, Exception):
                 logger.error(f"Download task failed for {doc_name}: {str(result)}")
                 failed_downloads += 1
+                # Record failed document load
+                record_document_load(source="error", duration=0, success=False)
             elif isinstance(result, DownloadResult):
                 if result.success and result.content:
                     document_texts[doc_name] = result.content
                     loaded_docs.append(doc_name)
                     successful_downloads += 1
+                    # Record successful async document load from S3
+                    record_document_load(source="s3", duration=result.download_time, success=True)
                     logger.info(
                         f"Successfully loaded {doc_name} ({result.download_time:.2f}s, {result.retry_count} retries)"
                     )
                 else:
                     logger.error(f"Failed to load document {doc_name}: {result.error}")
                     failed_downloads += 1
+                    # Record failed document load
+                    record_document_load(
+                        source="error", duration=result.download_time, success=False
+                    )
             else:
                 logger.error(f"Unexpected result type for {doc_name}: {type(result)}")
                 failed_downloads += 1
+                # Record failed document load
+                record_document_load(source="error", duration=0, success=False)
 
         # Generate summary message
         if successful_downloads > 0:
