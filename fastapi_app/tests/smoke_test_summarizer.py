@@ -61,17 +61,15 @@ import re
 from typing import List, Optional
 
 import aioboto3
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types  # type: ignore
 from tenacity import (
     AsyncRetrying,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
-
-from google import genai
-from google.genai import types  # type: ignore
-
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -449,8 +447,9 @@ async def async_main(
 # -------------------------------------------------------------
 
 import json
-import requests
 import re
+
+import requests
 from rapidfuzz import fuzz
 
 

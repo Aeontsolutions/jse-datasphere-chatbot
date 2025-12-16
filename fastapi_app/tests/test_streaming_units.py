@@ -4,15 +4,17 @@ Unit tests for the SSE streaming functionality.
 Tests the ProgressTracker, streaming chat processing, and SSE event handling.
 """
 
-import pytest
 import asyncio
 import json
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+
+from app.models import ProgressUpdate, StreamingChatRequest
 
 # Import the modules to test
 from app.progress_tracker import ProgressTracker, format_sse_message
-from app.models import ProgressUpdate, StreamingChatRequest
-from app.streaming_chat import process_streaming_chat, _process_chat_async
+from app.streaming_chat import _process_chat_async, process_streaming_chat
 from app.streaming_financial_chat import process_streaming_financial_chat
 
 
@@ -238,7 +240,7 @@ class TestStreamingChat:
     ):
         """Test that process_streaming_chat starts a background task."""
         with patch("asyncio.create_task") as mock_create_task:
-            tracker = await process_streaming_chat(
+            await process_streaming_chat(
                 request=mock_streaming_request,
                 s3_client=mock_s3_client,
                 metadata=mock_metadata,
@@ -350,7 +352,7 @@ class TestStreamingFinancialChat:
     ):
         """Test that process_streaming_financial_chat starts a background task."""
         with patch("asyncio.create_task") as mock_create_task:
-            tracker = await process_streaming_financial_chat(
+            await process_streaming_financial_chat(
                 request=mock_streaming_request, financial_manager=mock_financial_manager
             )
 

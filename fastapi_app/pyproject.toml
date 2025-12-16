@@ -94,7 +94,10 @@ select = [
 ignore = [
     "E501",  # line too long (handled by black)
     "B008",  # do not perform function calls in argument defaults
+    "B904",  # raise from err/None (too noisy for existing code)
+    "B017",  # pytest.raises(Exception) is fine for test code
     "C901",  # too complex
+    "E402",  # module level import not at top (acceptable in some test files)
 ]
 
 [tool.ruff.lint.per-file-ignores]

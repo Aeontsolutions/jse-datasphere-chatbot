@@ -1,8 +1,9 @@
 import asyncio
-from typing import Optional, Any
-from app.progress_tracker import ProgressTracker
-from app.models import StreamingChatRequest
+from typing import Any, Optional
+
 from app.logging_config import get_logger
+from app.models import StreamingChatRequest
+from app.progress_tracker import ProgressTracker
 
 logger = get_logger(__name__)
 

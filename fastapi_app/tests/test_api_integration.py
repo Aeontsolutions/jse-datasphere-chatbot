@@ -1,10 +1,12 @@
+import csv
+import os
+from collections import defaultdict
+
 import pytest
 from fastapi.testclient import TestClient
-from app.main import app
+
 from app.financial_utils import FinancialDataManager
-import os
-import csv
-from collections import defaultdict
+from app.main import app
 
 # --- Mock BigQuery client and data (reuse logic from test_financial_utils.py) ---
 TEST_CSV_PATH = os.path.join(os.path.dirname(__file__), "bq_test_data.csv")
@@ -27,7 +29,7 @@ class MockRow:
 
 def get_agg_field(rows, field):
     # Helper for aggregation fields
-    return list(sorted(set(row[field] for row in rows if row[field])))
+    return sorted({row[field] for row in rows if row[field]})
 
 
 class MockQueryResult:
@@ -113,24 +115,24 @@ class MockBQClient:
                 return MockQueryResult(rows)
         # Simple distinct queries
         elif "select distinct company" in q:
-            companies = set(row["company"] for row in test_data)
+            companies = {row["company"] for row in test_data}
             rows = [MockRow(Company=c) for c in companies]
             return MockQueryResult(rows)
         elif "select distinct symbol" in q:
-            symbols = set(row["symbol"] for row in test_data)
+            symbols = {row["symbol"] for row in test_data}
             rows = [MockRow(Symbol=s) for s in symbols]
             return MockQueryResult(rows)
         elif "select distinct cast(year as string) as year" in q:
-            years = set(str(row["year"]) for row in test_data)
+            years = {str(row["year"]) for row in test_data}
             rows = [MockRow(Year=y) for y in years]
             return MockQueryResult(rows)
         elif "select distinct standard_item" in q:
-            items = set(row["standard_item"] for row in test_data)
+            items = {row["standard_item"] for row in test_data}
             rows = [MockRow(standard_item=i) for i in items]
             return MockQueryResult(rows)
         # Otherwise, return filtered rows for data queries
         else:
-            rows = [MockRow(**{k: v for k, v in row.items()}) for row in test_data]
+            rows = [MockRow(**dict(row.items())) for row in test_data]
             # Simulate parameterized filtering
             if (
                 job_config
@@ -141,13 +143,13 @@ class MockBQClient:
                 for param in job_config.query_parameters:
                     # Handle both ArrayQueryParameter and scalar
                     if hasattr(param, "value") and isinstance(param.value, (list, set, tuple)):
-                        filters[param.name] = set(str(v) for v in param.value)
+                        filters[param.name] = {str(v) for v in param.value}
                     elif (
                         hasattr(param, "parameter_value")
                         and hasattr(param.parameter_value, "value")
                         and isinstance(param.parameter_value.value, (list, set, tuple))
                     ):
-                        filters[param.name] = set(str(v) for v in param.parameter_value.value)
+                        filters[param.name] = {str(v) for v in param.parameter_value.value}
                     elif hasattr(param, "value"):
                         filters[param.name] = {str(param.value)}
                     elif hasattr(param, "parameter_value") and hasattr(

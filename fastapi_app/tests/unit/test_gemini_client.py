@@ -1,15 +1,16 @@
 """Unit tests for Gemini AI client module."""
 
+from unittest.mock import MagicMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 
 from app.gemini_client import (
-    init_genai,
-    get_metadata_hash,
     create_metadata_cache,
-    get_cached_model,
-    refresh_metadata_cache,
     get_cache_status,
+    get_cached_model,
+    get_metadata_hash,
+    init_genai,
+    refresh_metadata_cache,
 )
 
 

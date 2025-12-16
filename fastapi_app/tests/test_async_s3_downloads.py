@@ -5,27 +5,28 @@ Tests the robust asynchronous document download capabilities including
 concurrent downloads, retry logic, timeout handling, and progress tracking.
 """
 
-import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock, patch
 import os
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 # Import the modules to test
 from app.config import S3DownloadConfig
-from app.s3_client import (
-    DownloadResult,
-    init_async_s3_client,
-    download_and_extract_from_s3_async,
+from app.document_selector import (
+    _download_with_semaphore,
+    auto_load_relevant_documents_async,
 )
 from app.metadata_loader import (
     download_metadata_from_s3_async,
     load_metadata_from_s3_async,
 )
-from app.document_selector import (
-    auto_load_relevant_documents_async,
-    _download_with_semaphore,
-)
 from app.pdf_utils import extract_text_from_pdf_bytes as _extract_text_from_pdf_bytes
+from app.s3_client import (
+    DownloadResult,
+    download_and_extract_from_s3_async,
+    init_async_s3_client,
+)
 
 # Mock data for testing
 MOCK_PDF_CONTENT = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"

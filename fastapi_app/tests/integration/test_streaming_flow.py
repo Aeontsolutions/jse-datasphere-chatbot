@@ -1,12 +1,13 @@
 """Integration tests for streaming chat flow."""
 
-import pytest
-from unittest.mock import Mock, patch, AsyncMock
 import asyncio
+from unittest.mock import AsyncMock, Mock, patch
 
-from app.streaming_chat import process_streaming_chat, _process_chat_async
+import pytest
+
 from app.models import StreamingChatRequest
 from app.progress_tracker import ProgressTracker
+from app.streaming_chat import _process_chat_async, process_streaming_chat
 
 
 @pytest.mark.integration

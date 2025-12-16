@@ -4,10 +4,11 @@ Simple test script for the streaming chat endpoints.
 This script tests both the traditional chat streaming and fast chat streaming endpoints.
 """
 
-import requests
 import json
-import time
 import sys
+import time
+
+import requests
 
 BASE_URL = "http://localhost:8000"
 

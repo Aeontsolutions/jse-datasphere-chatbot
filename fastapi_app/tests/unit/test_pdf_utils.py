@@ -1,8 +1,9 @@
 """Unit tests for PDF utilities module."""
 
-import pytest
-from unittest.mock import Mock, patch
 from io import BytesIO
+from unittest.mock import Mock, patch
+
+import pytest
 
 from app.pdf_utils import extract_text_from_pdf
 

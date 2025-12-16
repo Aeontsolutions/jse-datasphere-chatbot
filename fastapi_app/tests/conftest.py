@@ -5,13 +5,15 @@ Comprehensive test fixtures for JSE DataSphere Chatbot.
 Provides mocked dependencies and test data for unit and integration tests.
 """
 
-import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock, MagicMock, patch
-from fastapi.testclient import TestClient
-from app.models import StreamingChatRequest, ProgressUpdate
-import boto3
 from io import BytesIO
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import boto3
+import pytest
+from fastapi.testclient import TestClient
+
+from app.models import ProgressUpdate, StreamingChatRequest
 
 
 @pytest.fixture(scope="session")
@@ -114,6 +116,7 @@ def test_client():
 async def async_test_client():
     """Async FastAPI test client."""
     from httpx import AsyncClient
+
     from app.main import app
 
     async with AsyncClient(app=app, base_url="http://test") as client:

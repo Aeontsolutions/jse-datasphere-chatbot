@@ -1,4 +1,5 @@
 import pytest
+
 from app.financial_utils import FinancialDataManager
 
 

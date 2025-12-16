@@ -1,14 +1,15 @@
 """Unit tests for metadata loader module."""
 
-import pytest
-from unittest.mock import Mock, patch, AsyncMock
-from botocore.exceptions import ClientError
 import json
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+from botocore.exceptions import ClientError
 
 from app.metadata_loader import (
+    download_metadata_from_s3,
     load_metadata_from_s3,
     load_metadata_from_s3_async,
-    download_metadata_from_s3,
     parse_metadata_file,
 )
 

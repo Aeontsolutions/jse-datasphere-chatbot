@@ -6,6 +6,7 @@ with request ID tracking and consistent log formatting.
 """
 
 import logging
+
 import structlog
 
 

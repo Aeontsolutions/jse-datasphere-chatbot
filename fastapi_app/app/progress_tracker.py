@@ -1,9 +1,10 @@
-import json
 import asyncio
+import json
 from datetime import datetime
-from typing import AsyncGenerator, Optional, Dict, Any, Protocol
-from app.models import ProgressUpdate
+from typing import Any, AsyncGenerator, Dict, Optional, Protocol
+
 from app.logging_config import get_logger
+from app.models import ProgressUpdate
 
 logger = get_logger(__name__)
 

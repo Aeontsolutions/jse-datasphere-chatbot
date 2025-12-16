@@ -4,10 +4,10 @@ Test runner for streaming functionality tests.
 This script provides an easy way to run streaming tests with different options.
 """
 
-import sys
-import subprocess
 import argparse
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -49,7 +49,7 @@ def run_tests(test_type="all", verbose=False, coverage=False, parallel=False):
     print("=" * 60)
 
     try:
-        result = subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True)
         print("=" * 60)
         print("✅ All tests passed!")
         return True
@@ -76,7 +76,7 @@ def run_specific_test(test_name, verbose=False):
     print("=" * 60)
 
     try:
-        result = subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True)
         print("=" * 60)
         print("✅ Test passed!")
         return True

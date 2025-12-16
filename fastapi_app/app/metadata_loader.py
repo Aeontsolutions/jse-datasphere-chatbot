@@ -5,17 +5,17 @@ This module provides functions for downloading and parsing metadata files
 from S3, supporting both synchronous and asynchronous operations.
 """
 
+import asyncio
 import json
 import time
-import asyncio
 from typing import Dict, Optional
 
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
-from app.config import get_config, S3DownloadConfig
-from app.s3_client import init_async_s3_client, _download_s3_object_async, DownloadResult
+from app.config import S3DownloadConfig, get_config
 from app.logging_config import get_logger
+from app.s3_client import DownloadResult, _download_s3_object_async, init_async_s3_client
 
 logger = get_logger(__name__)
 

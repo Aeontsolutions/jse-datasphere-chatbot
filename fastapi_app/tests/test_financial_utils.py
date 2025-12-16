@@ -1,10 +1,12 @@
-import pytest
-import os
 import csv
+import logging
+import os
+from collections import defaultdict
+
+import pytest
+
 from app.financial_utils import FinancialDataManager
 from app.models import FinancialDataFilters
-from collections import defaultdict
-import logging
 
 # Helper to load CSV as list of dicts
 TEST_CSV_PATH = os.path.join(os.path.dirname(__file__), "bq_test_data.csv")
@@ -120,24 +122,24 @@ def mock_bq_client(monkeypatch):
                     return MockQueryResult(rows)
             # Simple distinct queries
             elif "select distinct company" in q:
-                companies = set(row["company"] for row in test_data)
+                companies = {row["company"] for row in test_data}
                 rows = [MockRow(Company=c) for c in companies]
                 return MockQueryResult(rows)
             elif "select distinct symbol" in q:
-                symbols = set(row["symbol"] for row in test_data)
+                symbols = {row["symbol"] for row in test_data}
                 rows = [MockRow(Symbol=s) for s in symbols]
                 return MockQueryResult(rows)
             elif "select distinct cast(year as string) as year" in q:
-                years = set(str(row["year"]) for row in test_data)
+                years = {str(row["year"]) for row in test_data}
                 rows = [MockRow(Year=y) for y in years]
                 return MockQueryResult(rows)
             elif "select distinct standard_item" in q:
-                items = set(row["standard_item"] for row in test_data)
+                items = {row["standard_item"] for row in test_data}
                 rows = [MockRow(standard_item=i) for i in items]
                 return MockQueryResult(rows)
             # Otherwise, return filtered rows for data queries
             else:
-                rows = [MockRow(**{k: v for k, v in row.items()}) for row in test_data]
+                rows = [MockRow(**dict(row.items())) for row in test_data]
                 # Simulate parameterized filtering
                 if (
                     job_config
@@ -149,7 +151,7 @@ def mock_bq_client(monkeypatch):
                         # param.name: companies, symbols, years, items
                         # param.array_type: STRING
                         # param.value: list of values
-                        filters[param.name] = set(str(v) for v in param.value)
+                        filters[param.name] = {str(v) for v in param.value}
 
                     def row_matches(row):
                         # company
@@ -305,8 +307,8 @@ def test_only_select_and_parameterized_queries(monkeypatch):
     )
     monkeypatch.setattr("fastapi_app.app.financial_utils.bigquery.QueryJobConfig", MockJobConfig)
 
-    from fastapi_app.app.models import FinancialDataFilters
     from fastapi_app.app.financial_utils import FinancialDataManager
+    from fastapi_app.app.models import FinancialDataFilters
 
     manager = FinancialDataManager()
     # Test with filters (should use parameterized query)

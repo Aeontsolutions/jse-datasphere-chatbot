@@ -1,9 +1,10 @@
 """Request ID middleware for request correlation."""
 
 import uuid
+
+import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-import structlog
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):

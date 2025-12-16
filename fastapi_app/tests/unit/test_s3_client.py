@@ -1,15 +1,16 @@
 """Unit tests for S3 client module."""
 
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import aioboto3
 import pytest
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
-import aioboto3
 
 from app.s3_client import (
-    init_s3_client,
-    init_async_s3_client,
     download_and_extract_from_s3,
+    init_async_s3_client,
+    init_s3_client,
 )
 
 

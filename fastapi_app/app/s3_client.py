@@ -5,21 +5,21 @@ This module provides both synchronous and asynchronous S3 client operations
 for downloading and extracting text from PDF documents stored in S3.
 """
 
-import tempfile
 import asyncio
-import time
 import os
-from typing import Optional
+import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
-import boto3
 import aioboto3
+import boto3
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
-from app.config import get_config, S3DownloadConfig
-from app.pdf_utils import extract_text_from_pdf, extract_text_from_pdf_bytes
+from app.config import S3DownloadConfig, get_config
 from app.logging_config import get_logger
+from app.pdf_utils import extract_text_from_pdf, extract_text_from_pdf_bytes
 
 logger = get_logger(__name__)
 

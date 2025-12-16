@@ -1,13 +1,14 @@
 """Unit tests for document selector module."""
 
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, AsyncMock
 
 from app.document_selector import (
-    semantic_document_selection,
-    semantic_document_selection_llm_fallback,
     auto_load_relevant_documents,
     auto_load_relevant_documents_async,
+    semantic_document_selection,
+    semantic_document_selection_llm_fallback,
 )
 
 
