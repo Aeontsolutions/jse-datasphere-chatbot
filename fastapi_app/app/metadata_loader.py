@@ -6,7 +6,6 @@ from S3, supporting both synchronous and asynchronous operations.
 """
 
 import json
-import logging
 import time
 import asyncio
 from typing import Dict, Optional
@@ -16,8 +15,9 @@ from fastapi import HTTPException
 
 from app.config import get_config, S3DownloadConfig
 from app.s3_client import init_async_s3_client, _download_s3_object_async, DownloadResult
+from app.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # =============================================================================
@@ -34,7 +34,9 @@ def download_metadata_from_s3(s3_client, bucket_name, key="metadata.json"):
 
         logger.info(
             "metadata_download_success",
-            extra={"bucket": bucket_name, "key": key, "size": len(metadata_content)},
+            bucket=bucket_name,
+            key=key,
+            size=len(metadata_content),
         )
 
         return metadata_content
@@ -42,7 +44,10 @@ def download_metadata_from_s3(s3_client, bucket_name, key="metadata.json"):
         error_code = e.response.get("Error", {}).get("Code", "Unknown")
         logger.error(
             "metadata_download_failed",
-            extra={"bucket": bucket_name, "key": key, "error": str(e), "error_code": error_code},
+            bucket=bucket_name,
+            key=key,
+            error=str(e),
+            error_code=error_code,
         )
 
         if error_code == "NoSuchKey":
@@ -52,12 +57,10 @@ def download_metadata_from_s3(s3_client, bucket_name, key="metadata.json"):
     except Exception as e:
         logger.error(
             "metadata_unexpected_error",
-            extra={
-                "bucket": bucket_name,
-                "key": key,
-                "error": str(e),
-                "error_type": type(e).__name__,
-            },
+            bucket=bucket_name,
+            key=key,
+            error=str(e),
+            error_type=type(e).__name__,
         )
         raise HTTPException(
             status_code=500, detail="An unexpected error occurred while loading metadata"
@@ -286,7 +289,7 @@ async def load_metadata_from_s3_async(
 
         if not bucket_name:
             error_msg = "DOCUMENT_METADATA_S3_BUCKET not found in environment variables"
-            logger.error("metadata_async_bucket_not_configured", extra={"error": error_msg})
+            logger.error("metadata_async_bucket_not_configured", error=error_msg)
             if progress_callback:
                 await progress_callback("metadata_error", error_msg)
             return None

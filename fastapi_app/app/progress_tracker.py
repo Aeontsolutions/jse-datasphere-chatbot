@@ -1,11 +1,11 @@
 import json
 import asyncio
-import logging
 from datetime import datetime
 from typing import AsyncGenerator, Optional, Dict, Any, Protocol
 from app.models import ProgressUpdate
+from app.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ProgressEventSink(Protocol):

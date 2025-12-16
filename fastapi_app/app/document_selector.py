@@ -6,7 +6,6 @@ and supports both synchronous and asynchronous document loading operations.
 """
 
 import json
-import logging
 import asyncio
 from typing import Dict, List, Tuple, Optional
 
@@ -18,8 +17,9 @@ from app.s3_client import (
     download_and_extract_from_s3_async,
     DownloadResult,
 )
+from app.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # =============================================================================

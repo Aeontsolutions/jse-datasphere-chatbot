@@ -23,6 +23,7 @@ pytest-asyncio>=0.23.0
 pytest-xdist
 streamlit
 redis>=4.2.0
+structlog>=24.1.0
 # Pin compatible versions to avoid conflicts
 grpcio>=1.60.0,<2.0.0
 protobuf>=4.25.0,<6.0.0

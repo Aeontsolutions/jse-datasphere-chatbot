@@ -7,7 +7,6 @@ using Gemini models.
 """
 
 import json
-import logging
 import hashlib
 from datetime import datetime, timedelta
 
@@ -18,8 +17,9 @@ import google.generativeai as genai
 from fastapi import HTTPException
 
 from app.config import get_config
+from app.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Global variables to store the cached context
@@ -87,11 +87,11 @@ def init_genai():
             raise HTTPException(status_code=503, detail="AI service not configured")
 
         genai.configure(api_key=api_key)
-        logger.info("genai_initialized", extra={"status": "success"})
+        logger.info("genai_initialized", status="success")
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("genai_init_failed", extra={"error": str(e), "error_type": type(e).__name__})
+        logger.error("genai_init_failed", error=str(e), error_type=type(e).__name__)
         raise HTTPException(status_code=503, detail="Failed to initialize AI service")
 
 

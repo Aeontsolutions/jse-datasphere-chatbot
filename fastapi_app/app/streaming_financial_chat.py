@@ -1,10 +1,10 @@
 import asyncio
-import logging
 from typing import Optional, Any
 from app.progress_tracker import ProgressTracker
 from app.models import StreamingChatRequest
+from app.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def process_streaming_financial_chat(

@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-import logging
 import time
 import uuid
 import asyncio
@@ -33,6 +32,8 @@ from app.job_store import JobStore, JobProgressSink
 from app.redis_job_store import RedisJobStore
 from app.progress_tracker import ProgressTracker
 from app.config import get_config
+from app.logging_config import configure_logging, get_logger
+from app.middleware.request_id import RequestIDMiddleware
 
 from dotenv import load_dotenv
 
@@ -41,12 +42,9 @@ load_dotenv()
 # Initialize configuration (validates all env vars and provides type-safe access)
 config = get_config()
 
-# Configure logging using centralized config
-logging.basicConfig(
-    level=getattr(logging, config.log_level, logging.INFO),
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
+# Configure structured logging
+configure_logging(log_level=config.log_level)
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -69,7 +67,8 @@ async def lifespan(app: FastAPI):
         except HTTPException as e:
             logger.error(
                 "metadata_load_startup_failed",
-                extra={"status_code": e.status_code, "detail": e.detail},
+                status_code=e.status_code,
+                detail=e.detail,
             )
             app.state.metadata = None
         # -----------------------
@@ -140,6 +139,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Add Request ID middleware (must be added before other middleware)
+app.add_middleware(RequestIDMiddleware)
+
 # Add CORS middleware
 # Note: When allow_credentials=True, cannot use allow_origins=["*"]
 # Using regex to allow all origins while being compatible with credentials
@@ -170,13 +172,11 @@ async def global_exception_handler(request: Request, exc: Exception):
     # Log unhandled exception with structured context
     logger.error(
         "unhandled_exception",
-        extra={
-            "path": request.url.path,
-            "method": request.method,
-            "error": str(exc),
-            "error_type": type(exc).__name__,
-            "client_host": request.client.host if request.client else None,
-        },
+        path=request.url.path,
+        method=request.method,
+        error=str(exc),
+        error_type=type(exc).__name__,
+        client_host=request.client.host if request.client else None,
     )
 
     # Return safe error message

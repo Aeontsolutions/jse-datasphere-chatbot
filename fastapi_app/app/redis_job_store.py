@@ -1,14 +1,14 @@
 import json
 import asyncio
-import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 import redis.asyncio as redis
 from app.job_store import JobStore, JobRecord
 from app.models import JobStatus, JobStatusResponse, ProgressUpdate
+from app.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RedisJobStore(JobStore):

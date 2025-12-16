@@ -1,13 +1,13 @@
 import asyncio
-import logging
 from typing import Dict, Optional, Any
 from app.progress_tracker import ProgressTracker
 from app.models import StreamingChatRequest
 from app.gemini_client import generate_chat_response
 from app.document_selector import auto_load_relevant_documents_async
 from app.config import S3DownloadConfig
+from app.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def process_streaming_chat(
@@ -82,12 +82,10 @@ async def _process_chat_async(
     except Exception as e:
         logger.error(
             "streaming_chat_processing_failed",
-            extra={
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "auto_load": request.auto_load_documents,
-                "memory_enabled": request.memory_enabled,
-            },
+            error=str(e),
+            error_type=type(e).__name__,
+            auto_load=request.auto_load_documents,
+            memory_enabled=request.memory_enabled,
         )
         await tracker.emit_error(f"Error generating response: {str(e)}")
 
@@ -170,11 +168,9 @@ async def _process_traditional_chat(
             except Exception as e:
                 logger.error(
                     "streaming_async_document_load_failed",
-                    extra={
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                        "query": request.query[:100] if request.query else None,
-                    },
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    query=request.query[:100] if request.query else None,
                 )
                 await tracker.emit_progress("doc_loading", f"Async download error: {str(e)}", 30.0)
                 document_selection_message = f"Error in async document loading: {str(e)}"

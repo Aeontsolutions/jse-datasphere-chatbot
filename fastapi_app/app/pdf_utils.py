@@ -5,14 +5,15 @@ This module provides functions for extracting text from PDF files,
 supporting both file-based and byte-based inputs.
 """
 
-import logging
 from io import BytesIO
 from typing import Optional
 
 import pypdf
 from fastapi import HTTPException
 
-logger = logging.getLogger(__name__)
+from app.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def extract_text_from_pdf(pdf_file):
@@ -28,20 +29,23 @@ def extract_text_from_pdf(pdf_file):
             text += page_text + "\n\n"
 
         logger.info(
-            "pdf_extraction_success", extra={"page_count": page_count, "text_length": len(text)}
+            "pdf_extraction_success",
+            page_count=page_count,
+            text_length=len(text),
         )
 
         return text
 
     except pypdf.errors.PdfReadError as e:
-        logger.error("pdf_read_error", extra={"error": str(e), "error_type": "PdfReadError"})
+        logger.error("pdf_read_error", error=str(e), error_type="PdfReadError")
         raise HTTPException(
             status_code=400, detail="Failed to read PDF file - file may be corrupted or invalid"
         )
     except Exception as e:
         logger.error(
             "pdf_extraction_unexpected_error",
-            extra={"error": str(e), "error_type": type(e).__name__},
+            error=str(e),
+            error_type=type(e).__name__,
         )
         raise HTTPException(status_code=500, detail="Failed to extract text from PDF")
 

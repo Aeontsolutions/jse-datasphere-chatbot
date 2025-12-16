@@ -1,14 +1,14 @@
 import os
 import json
-import logging
 import re
 from typing import Dict, List, Any, Optional
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from app.models import FinancialDataFilters, FinancialDataRecord
 import google.generativeai as genai
+from app.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def get_row_attr(row, attr):
