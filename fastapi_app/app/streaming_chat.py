@@ -81,7 +81,15 @@ async def _process_chat_async(
             await _process_traditional_chat(request, s3_client, metadata, tracker)
 
     except Exception as e:
-        logger.error(f"Error in streaming chat processing: {str(e)}")
+        logger.error(
+            "streaming_chat_processing_failed",
+            extra={
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "auto_load": request.auto_load_documents,
+                "memory_enabled": request.memory_enabled,
+            },
+        )
         await tracker.emit_error(f"Error generating response: {str(e)}")
 
 
@@ -296,7 +304,14 @@ async def _process_traditional_chat(
                 await asyncio.sleep(0.1)  # Give time for the event to be processed
 
             except Exception as e:
-                logger.error(f"Error in async document loading: {str(e)}")
+                logger.error(
+                    "streaming_async_document_load_failed",
+                    extra={
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "query": request.query[:100] if request.query else None,
+                    },
+                )
                 await tracker.emit_progress("doc_loading", f"Async download error: {str(e)}", 30.0)
                 document_selection_message = f"Error in async document loading: {str(e)}"
         else:

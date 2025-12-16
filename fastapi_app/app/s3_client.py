@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import boto3
 import aioboto3
+from botocore.exceptions import ClientError
+from fastapi import HTTPException
 
 from app.config import get_config, S3DownloadConfig
 from app.pdf_utils import extract_text_from_pdf, extract_text_from_pdf_bytes
@@ -55,12 +57,18 @@ def init_s3_client():
 
 def download_and_extract_from_s3(s3_client, s3_path):
     """Download a PDF from S3 and extract its text"""
+    bucket_name = None
+    key = None
+
     try:
         # Parse S3 path to get bucket and key
         # s3://jse-renamed-docs/organized/... format
         if not s3_path.startswith("s3://"):
-            logger.error(f"Invalid S3 path format: {s3_path}")
-            return None
+            logger.error(
+                "s3_invalid_path_format",
+                extra={"s3_path": s3_path, "error": "Path does not start with s3://"},
+            )
+            raise HTTPException(status_code=400, detail="Invalid S3 path format")
 
         path_without_prefix = s3_path[5:]  # Remove "s3://"
         bucket_name = path_without_prefix.split("/")[0]
@@ -68,7 +76,7 @@ def download_and_extract_from_s3(s3_client, s3_path):
 
         # Log the attempt
         logger.info(
-            f"Attempting to download S3 object: Bucket='{bucket_name}', Key='{key}' from Path='{s3_path}'"
+            "s3_download_start", extra={"bucket": bucket_name, "key": key, "s3_path": s3_path}
         )
 
         # Create a temporary file to store the PDF
@@ -84,13 +92,53 @@ def download_and_extract_from_s3(s3_client, s3_path):
         # Clean up the temporary file
         os.unlink(tmp_file_path)
 
-        return text
-    except Exception as e:
-        # Log the error with details
-        logger.error(
-            f"Error downloading/processing PDF from S3 Path='{s3_path}'. Bucket='{bucket_name}', Key='{key}'. Error: {str(e)}"
+        logger.info(
+            "s3_download_success",
+            extra={"bucket": bucket_name, "key": key, "text_length": len(text) if text else 0},
         )
-        return None
+
+        return text
+
+    except HTTPException:
+        raise
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "Unknown")
+        logger.error(
+            "s3_download_failed",
+            extra={
+                "s3_path": s3_path,
+                "bucket": bucket_name,
+                "key": key,
+                "error": str(e),
+                "error_code": error_code,
+            },
+        )
+
+        # Check for NoSuchKey error
+        if error_code == "NoSuchKey":
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document not found: {os.path.basename(key) if key else 'unknown'}",
+            )
+
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to download document: {os.path.basename(key) if key else 'unknown'}",
+        )
+    except Exception as e:
+        logger.error(
+            "s3_unexpected_error",
+            extra={
+                "s3_path": s3_path,
+                "bucket": bucket_name,
+                "key": key,
+                "error": str(e),
+                "error_type": type(e).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=500, detail="An unexpected error occurred while processing your request"
+        )
 
 
 # =============================================================================
@@ -170,7 +218,10 @@ async def download_and_extract_from_s3_async(
         # Parse S3 path
         if not s3_path.startswith("s3://"):
             error_msg = f"Invalid S3 path format: {s3_path}"
-            logger.error(error_msg)
+            logger.error(
+                "s3_async_invalid_path",
+                extra={"s3_path": s3_path, "error": "Path does not start with s3://"},
+            )
             return DownloadResult(success=False, error=error_msg)
 
         path_without_prefix = s3_path[5:]  # Remove "s3://"
@@ -247,13 +298,32 @@ async def download_and_extract_from_s3_async(
 
             except Exception as e:
                 error_msg = f"Download attempt {attempt + 1} failed: {str(e)}"
-                logger.warning(error_msg)
+                logger.warning(
+                    "s3_async_download_attempt_failed",
+                    extra={
+                        "s3_path": s3_path,
+                        "bucket": bucket_name,
+                        "key": key,
+                        "attempt": attempt + 1,
+                        "max_retries": config.max_retries,
+                        "error": str(e),
+                    },
+                )
 
                 # Fail fast for NoSuchKey errors - retrying won't help
                 if "NoSuchKey" in str(e) or "The specified key does not exist" in str(e):
                     download_time = time.time() - start_time
                     final_error = f"File does not exist in S3: {s3_path} - {str(e)}"
-                    logger.error(final_error)
+                    logger.error(
+                        "s3_async_file_not_found",
+                        extra={
+                            "s3_path": s3_path,
+                            "bucket": bucket_name,
+                            "key": key,
+                            "error": str(e),
+                            "download_time": download_time,
+                        },
+                    )
 
                     if progress_callback:
                         await progress_callback("download_failed", final_error)
@@ -269,7 +339,17 @@ async def download_and_extract_from_s3_async(
                     # Final attempt failed
                     download_time = time.time() - start_time
                     final_error = f"Failed to download {s3_path} after {config.max_retries} attempts: {str(e)}"
-                    logger.error(final_error)
+                    logger.error(
+                        "s3_async_download_failed_all_retries",
+                        extra={
+                            "s3_path": s3_path,
+                            "bucket": bucket_name,
+                            "key": key,
+                            "error": str(e),
+                            "max_retries": config.max_retries,
+                            "download_time": download_time,
+                        },
+                    )
 
                     if progress_callback:
                         await progress_callback("download_failed", final_error)
@@ -285,7 +365,15 @@ async def download_and_extract_from_s3_async(
     except Exception as e:
         download_time = time.time() - start_time
         error_msg = f"Unexpected error downloading {s3_path}: {str(e)}"
-        logger.error(error_msg)
+        logger.error(
+            "s3_async_unexpected_error",
+            extra={
+                "s3_path": s3_path,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "download_time": download_time,
+            },
+        )
 
         if progress_callback:
             await progress_callback("download_error", error_msg)
@@ -318,5 +406,13 @@ async def _download_s3_object_async(
         return content
 
     except Exception as e:
-        logger.error(f"Error downloading S3 object {bucket_name}/{key}: {str(e)}")
+        logger.error(
+            "s3_async_object_download_failed",
+            extra={
+                "bucket": bucket_name,
+                "key": key,
+                "error": str(e),
+                "error_type": type(e).__name__,
+            },
+        )
         raise

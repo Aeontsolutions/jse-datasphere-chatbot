@@ -60,11 +60,18 @@ async def lifespan(app: FastAPI):
         # Initialize Vertex AI
         init_vertex_ai()
         # Load metadata from S3
-        app.state.metadata = load_metadata_from_s3(app.state.s3_client)
-        if app.state.metadata:
-            logger.info(f"Metadata loaded: {len(app.state.metadata)} companies found")
-        else:
-            logger.warning("Failed to load metadata from S3")
+        try:
+            app.state.metadata = load_metadata_from_s3(app.state.s3_client)
+            if app.state.metadata:
+                logger.info(f"Metadata loaded: {len(app.state.metadata)} companies found")
+            else:
+                logger.warning("Failed to load metadata from S3")
+        except HTTPException as e:
+            logger.error(
+                "metadata_load_startup_failed",
+                extra={"status_code": e.status_code, "detail": e.detail},
+            )
+            app.state.metadata = None
         # -----------------------
         # Initialize Financial Data Manager (BigQuery)
         # -----------------------
@@ -143,6 +150,38 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
+
+
+# ----------------------------------------------------------
+# Global Exception Handler
+# ----------------------------------------------------------
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Global exception handler to catch unhandled exceptions and log them with structured context.
+    This is a safety net for any errors that slip through endpoint-specific error handling.
+    """
+    # Skip HTTPException - FastAPI handles these properly
+    if isinstance(exc, HTTPException):
+        raise exc
+
+    # Log unhandled exception with structured context
+    logger.error(
+        "unhandled_exception",
+        extra={
+            "path": request.url.path,
+            "method": request.method,
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+            "client_host": request.client.host if request.client else None,
+        },
+    )
+
+    # Return safe error message
+    return JSONResponse(status_code=500, content={"detail": "An unexpected error occurred"})
+
 
 # ----------------------------------------------------------
 # Middleware: Log every request & response with latency

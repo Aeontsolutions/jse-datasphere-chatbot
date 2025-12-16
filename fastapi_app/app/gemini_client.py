@@ -15,6 +15,7 @@ from google.oauth2 import service_account
 from google.cloud import aiplatform
 from vertexai.preview.generative_models import GenerativeModel
 import google.generativeai as genai
+from fastapi import HTTPException
 
 from app.config import get_config
 
@@ -55,11 +56,21 @@ def init_vertex_ai():
             credentials=credentials,
         )
 
-        logger.info(f"Successfully initialized Vertex AI with project: {project_id}")
+        logger.info(
+            "vertex_ai_initialized",
+            extra={"project_id": project_id, "location": config.gcp.location},
+        )
         return True
     except Exception as e:
-        logger.error(f"Error setting up Vertex AI: {str(e)}")
-        raise
+        logger.error(
+            "vertex_ai_init_failed",
+            extra={
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "project_id": config.gcp.project_id if hasattr(config.gcp, "project_id") else None,
+            },
+        )
+        raise HTTPException(status_code=503, detail="Failed to initialize AI service")
 
 
 def init_genai():
@@ -69,14 +80,19 @@ def init_genai():
         api_key = config.gcp.api_key
 
         if not api_key:
-            logger.error("GOOGLE_API_KEY not found in environment variables")
-            raise ValueError("GOOGLE_API_KEY not found for Google GenerativeAI")
+            logger.error(
+                "genai_api_key_missing",
+                extra={"error": "GOOGLE_API_KEY not found in environment variables"},
+            )
+            raise HTTPException(status_code=503, detail="AI service not configured")
 
         genai.configure(api_key=api_key)
-        logger.info("Google GenerativeAI client initialized")
-    except Exception as e:
-        logger.error(f"Error initializing Google GenerativeAI: {str(e)}")
+        logger.info("genai_initialized", extra={"status": "success"})
+    except HTTPException:
         raise
+    except Exception as e:
+        logger.error("genai_init_failed", extra={"error": str(e), "error_type": type(e).__name__})
+        raise HTTPException(status_code=503, detail="Failed to initialize AI service")
 
 
 # =============================================================================
@@ -163,7 +179,10 @@ def create_metadata_cache(metadata):
         return cache
 
     except Exception as e:
-        logger.warning(f"Failed to create metadata cache: {str(e)}")
+        logger.warning(
+            "metadata_cache_creation_failed",
+            extra={"error": str(e), "error_type": type(e).__name__},
+        )
         return None
 
 
@@ -180,7 +199,9 @@ def get_cached_model(metadata):
             logger.info("Cache creation failed, falling back to regular model")
             return None, False
     except Exception as e:
-        logger.warning(f"Failed to get cached model: {str(e)}")
+        logger.warning(
+            "cached_model_get_failed", extra={"error": str(e), "error_type": type(e).__name__}
+        )
         return None, False
 
 
@@ -203,7 +224,9 @@ def refresh_metadata_cache(metadata):
             logger.warning("Failed to refresh metadata cache")
             return False
     except Exception as e:
-        logger.error(f"Error refreshing metadata cache: {str(e)}")
+        logger.error(
+            "metadata_cache_refresh_failed", extra={"error": str(e), "error_type": type(e).__name__}
+        )
         return False
 
 
@@ -293,8 +316,25 @@ def generate_chat_response(
             """
             response = model.generate_content(prompt)
 
+        logger.info(
+            "chat_response_generated",
+            extra={
+                "response_length": len(response.text),
+                "has_documents": bool(document_texts),
+                "has_history": bool(conversation_history),
+            },
+        )
+
         return response.text
 
     except Exception as e:
-        logger.error(f"Error generating response: {str(e)}")
-        raise
+        logger.error(
+            "chat_response_generation_failed",
+            extra={
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "has_documents": bool(document_texts),
+                "has_history": bool(conversation_history),
+            },
+        )
+        raise HTTPException(status_code=503, detail="Failed to generate AI response")

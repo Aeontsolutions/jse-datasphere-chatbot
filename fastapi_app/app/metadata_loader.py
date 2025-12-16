@@ -11,6 +11,9 @@ import time
 import asyncio
 from typing import Dict, Optional
 
+from botocore.exceptions import ClientError
+from fastapi import HTTPException
+
 from app.config import get_config, S3DownloadConfig
 from app.s3_client import init_async_s3_client, _download_s3_object_async, DownloadResult
 
@@ -28,10 +31,37 @@ def download_metadata_from_s3(s3_client, bucket_name, key="metadata.json"):
         # Download the metadata file from S3
         response = s3_client.get_object(Bucket=bucket_name, Key=key)
         metadata_content = response["Body"].read().decode("utf-8")
+
+        logger.info(
+            "metadata_download_success",
+            extra={"bucket": bucket_name, "key": key, "size": len(metadata_content)},
+        )
+
         return metadata_content
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "Unknown")
+        logger.error(
+            "metadata_download_failed",
+            extra={"bucket": bucket_name, "key": key, "error": str(e), "error_code": error_code},
+        )
+
+        if error_code == "NoSuchKey":
+            raise HTTPException(status_code=404, detail="Metadata file not found")
+
+        raise HTTPException(status_code=503, detail="Failed to download metadata from storage")
     except Exception as e:
-        logger.error(f"Error downloading metadata from S3: {str(e)}")
-        return None
+        logger.error(
+            "metadata_unexpected_error",
+            extra={
+                "bucket": bucket_name,
+                "key": key,
+                "error": str(e),
+                "error_type": type(e).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=500, detail="An unexpected error occurred while loading metadata"
+        )
 
 
 def parse_metadata_file(metadata_content):
@@ -39,10 +69,22 @@ def parse_metadata_file(metadata_content):
     try:
         # Parse the metadata JSON
         metadata = json.loads(metadata_content)
+
+        logger.info(
+            "metadata_parse_success",
+            extra={"record_count": len(metadata) if isinstance(metadata, (list, dict)) else 0},
+        )
+
         return metadata
     except json.JSONDecodeError as e:
-        logger.error(f"Error parsing metadata file: {str(e)}")
-        return None
+        logger.error(
+            "metadata_parse_failed",
+            extra={
+                "error": str(e),
+                "content_length": len(metadata_content) if metadata_content else 0,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Failed to parse metadata file")
 
 
 def load_metadata_from_s3(s3_client):
@@ -52,22 +94,29 @@ def load_metadata_from_s3(s3_client):
         bucket_name = config.aws.s3_bucket
 
         if not bucket_name:
-            logger.error("DOCUMENT_METADATA_S3_BUCKET not found in environment variables")
-            return None
+            logger.error(
+                "metadata_bucket_not_configured",
+                extra={"error": "DOCUMENT_METADATA_S3_BUCKET not found in environment variables"},
+            )
+            raise HTTPException(status_code=503, detail="Metadata storage not configured")
 
         # Get metadata key from config
         metadata_key = config.metadata_key
 
         # Download metadata from S3
         metadata_content = download_metadata_from_s3(s3_client, bucket_name, metadata_key)
-        if not metadata_content:
-            return None
 
         # Parse the downloaded metadata
         return parse_metadata_file(metadata_content)
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error loading metadata from S3: {str(e)}")
-        return None
+        logger.error(
+            "metadata_load_unexpected_error",
+            extra={"error": str(e), "error_type": type(e).__name__},
+        )
+        raise HTTPException(status_code=500, detail="Failed to load metadata")
 
 
 # =============================================================================
@@ -160,13 +209,31 @@ async def download_metadata_from_s3_async(
 
             except Exception as e:
                 error_msg = f"Metadata download attempt {attempt + 1} failed: {str(e)}"
-                logger.warning(error_msg)
+                logger.warning(
+                    "metadata_async_download_attempt_failed",
+                    extra={
+                        "bucket": bucket_name,
+                        "key": key,
+                        "attempt": attempt + 1,
+                        "max_retries": config.max_retries,
+                        "error": str(e),
+                    },
+                )
 
                 if attempt == config.max_retries - 1:
                     # Final attempt failed
                     download_time = time.time() - start_time
                     final_error = f"Failed to download metadata {bucket_name}/{key} after {config.max_retries} attempts: {str(e)}"
-                    logger.error(final_error)
+                    logger.error(
+                        "metadata_async_download_failed_all_retries",
+                        extra={
+                            "bucket": bucket_name,
+                            "key": key,
+                            "error": str(e),
+                            "max_retries": config.max_retries,
+                            "download_time": download_time,
+                        },
+                    )
 
                     if progress_callback:
                         await progress_callback("metadata_download_failed", final_error)
@@ -181,7 +248,16 @@ async def download_metadata_from_s3_async(
     except Exception as e:
         download_time = time.time() - start_time
         error_msg = f"Unexpected error downloading metadata {bucket_name}/{key}: {str(e)}"
-        logger.error(error_msg)
+        logger.error(
+            "metadata_async_unexpected_error",
+            extra={
+                "bucket": bucket_name,
+                "key": key,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "download_time": download_time,
+            },
+        )
 
         if progress_callback:
             await progress_callback("metadata_download_error", error_msg)
@@ -210,7 +286,7 @@ async def load_metadata_from_s3_async(
 
         if not bucket_name:
             error_msg = "DOCUMENT_METADATA_S3_BUCKET not found in environment variables"
-            logger.error(error_msg)
+            logger.error("metadata_async_bucket_not_configured", extra={"error": error_msg})
             if progress_callback:
                 await progress_callback("metadata_error", error_msg)
             return None
@@ -238,14 +314,20 @@ async def load_metadata_from_s3_async(
             return metadata
         except Exception as e:
             error_msg = f"Failed to parse metadata: {str(e)}"
-            logger.error(error_msg)
+            logger.error(
+                "metadata_async_parse_failed",
+                extra={"error": str(e), "error_type": type(e).__name__},
+            )
             if progress_callback:
                 await progress_callback("metadata_parse_error", error_msg)
             return None
 
     except Exception as e:
         error_msg = f"Error loading metadata from S3: {str(e)}"
-        logger.error(error_msg)
+        logger.error(
+            "metadata_async_load_unexpected_error",
+            extra={"error": str(e), "error_type": type(e).__name__},
+        )
         if progress_callback:
             await progress_callback("metadata_load_error", error_msg)
         return None

@@ -130,12 +130,26 @@ def semantic_document_selection_llm_fallback(query, metadata, conversation_histo
 
             return recommendation
         except json.JSONDecodeError as e:
-            logger.error(f"Error parsing LLM response as JSON: {e}")
-            logger.debug(response_text)  # Log the response for debugging
+            logger.error(
+                "llm_response_parse_failed",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "response_preview": response_text[:200] if response_text else None,
+                },
+            )
             return None
 
     except Exception as e:
-        logger.error(f"Error in semantic document selection: {str(e)}")
+        logger.error(
+            "semantic_selection_failed",
+            extra={
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "has_metadata": bool(metadata),
+                "has_history": bool(conversation_history),
+            },
+        )
         return None
 
 
@@ -164,12 +178,20 @@ def auto_load_relevant_documents(
 
             # Only load if not already loaded
             if doc_name not in document_texts:
-                text = download_and_extract_from_s3(s3_client, doc_link)
-                if text:
-                    document_texts[doc_name] = text
-                    loaded_docs.append(doc_name)
-                else:
-                    logger.error(f"Failed to load document: {doc_name}")
+                try:
+                    text = download_and_extract_from_s3(s3_client, doc_link)
+                    if text:
+                        document_texts[doc_name] = text
+                        loaded_docs.append(doc_name)
+                except Exception as e:
+                    logger.error(
+                        "document_load_failed",
+                        extra={
+                            "document": doc_name,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        },
+                    )
 
         # Generate message about what was loaded
         if loaded_docs:
@@ -330,7 +352,14 @@ async def auto_load_relevant_documents_async(
 
     except Exception as e:
         error_msg = f"Error in async document loading: {str(e)}"
-        logger.error(error_msg)
+        logger.error(
+            "async_document_load_failed",
+            extra={
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "documents_loaded": len(loaded_docs),
+            },
+        )
         if progress_callback:
             await progress_callback("document_load_error", error_msg)
         return document_texts, error_msg, []
@@ -357,7 +386,10 @@ async def _download_single_document_async(
 
     except Exception as e:
         error_msg = f"Error downloading {doc_name}: {str(e)}"
-        logger.error(error_msg)
+        logger.error(
+            "single_document_download_failed",
+            extra={"document": doc_name, "error": str(e), "error_type": type(e).__name__},
+        )
         return DownloadResult(success=False, error=error_msg)
 
 
