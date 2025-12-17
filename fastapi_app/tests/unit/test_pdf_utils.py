@@ -4,6 +4,7 @@ from io import BytesIO
 from unittest.mock import Mock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.pdf_utils import extract_text_from_pdf
 
@@ -24,10 +25,12 @@ class TestPDFUtils:
             assert len(result) > 0
 
     def test_extract_text_from_invalid_pdf_bytes(self):
-        """Test text extraction from invalid PDF bytes."""
+        """Test text extraction from invalid PDF bytes raises HTTPException."""
         invalid_bytes = b"not a pdf"
-        result = extract_text_from_pdf(BytesIO(invalid_bytes))
-        assert result == ""
+        with pytest.raises(HTTPException) as exc_info:
+            extract_text_from_pdf(BytesIO(invalid_bytes))
+        assert exc_info.value.status_code == 400
+        assert "corrupted" in str(exc_info.value.detail).lower()
 
     def test_extract_text_empty_pdf(self):
         """Test text extraction from empty PDF."""
@@ -51,7 +54,8 @@ class TestPDFUtils:
             assert "Page 2 content" in result
 
     def test_extract_text_exception_handling(self):
-        """Test that exceptions are handled gracefully."""
+        """Test that exceptions are raised as HTTPException."""
         with patch("pypdf.PdfReader", side_effect=Exception("Read error")):
-            result = extract_text_from_pdf(BytesIO(b"%PDF-1.4\n%%EOF"))
-            assert result == ""
+            with pytest.raises(HTTPException) as exc_info:
+                extract_text_from_pdf(BytesIO(b"%PDF-1.4\n%%EOF"))
+            assert exc_info.value.status_code == 500

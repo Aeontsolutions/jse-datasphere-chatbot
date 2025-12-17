@@ -119,11 +119,6 @@ addopts = [
     "--cov=app",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "--ignore=tests/unit/test_document_selector.py",
-    "--ignore=tests/unit/test_pdf_utils.py",
-    "--ignore=tests/unit/test_s3_client.py",
-    "--ignore=tests/unit/test_metadata_loader.py",
-    "--ignore=tests/unit/test_gemini_client.py",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -157,4 +152,4 @@ omit = [
 precision = 2
 show_missing = true
 skip_covered = false
-fail_under = 0
+fail_under = 70

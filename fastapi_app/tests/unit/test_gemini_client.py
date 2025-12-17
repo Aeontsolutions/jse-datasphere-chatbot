@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.gemini_client import (
     create_metadata_cache,
@@ -18,16 +19,20 @@ from app.gemini_client import (
 class TestGeminiClient:
     """Test cases for Gemini AI client operations."""
 
-    def test_init_genai_success(self):
+    def test_init_genai_success(self, mock_config):
         """Test Gemini initialization succeeds."""
+        # mock_config is already auto-injected by conftest.py's auto_mock_config
         with patch("google.generativeai.configure") as mock_configure:
-            init_genai("test-api-key")
-            mock_configure.assert_called_once()
+            init_genai()  # No arguments - reads from config
+            mock_configure.assert_called_once_with(api_key=mock_config.gcp.api_key)
 
-    def test_init_genai_missing_key(self):
+    def test_init_genai_missing_key(self, mock_config):
         """Test Gemini initialization with missing API key."""
-        with pytest.raises(Exception):
-            init_genai(None)
+        mock_config.gcp.api_key = None
+        with patch("app.gemini_client.get_config", return_value=mock_config):
+            with pytest.raises(HTTPException) as exc_info:
+                init_genai()
+            assert exc_info.value.status_code == 503
 
     def test_get_metadata_hash(self, mock_metadata):
         """Test metadata hash generation."""

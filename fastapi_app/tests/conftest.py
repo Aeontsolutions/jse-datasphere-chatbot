@@ -66,6 +66,14 @@ def auto_mock_config(monkeypatch, mock_config):
                         yield
 
 
+@pytest.fixture(autouse=True)
+def mock_genai_configure():
+    """Auto-mock Google GenerativeAI configuration for all tests to prevent real API calls."""
+    with patch("google.generativeai.configure"):
+        with patch("google.generativeai.GenerativeModel"):
+            yield
+
+
 @pytest.fixture
 def mock_s3_client():
     """Create a mock S3 client for testing."""
