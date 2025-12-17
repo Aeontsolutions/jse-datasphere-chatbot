@@ -15,10 +15,15 @@ os.environ.update(
         "AWS_SECRET_ACCESS_KEY": "test-secret-access-key",
         "AWS_REGION": "us-east-1",
         "DOCUMENT_METADATA_S3_BUCKET": "test-bucket",
-        # GCP Config
+        # GCP Config - Gemini
         "GEMINI_API_KEY": "test-gemini-api-key",
+        # GCP Config - Vertex AI
         "VERTEX_AI_PROJECT_ID": "test-project-id",
         "VERTEX_AI_LOCATION": "us-central1",
+        # GCP Config - Google Cloud (for service account)
+        "GOOGLE_CLOUD_PROJECT_ID": "test-project-id",
+        "GOOGLE_CLOUD_SERVICE_ACCOUNT_INFO": '{"type": "service_account", "project_id": "test"}',
+        "GOOGLE_API_KEY": "test-google-api-key",
         # Redis Config - Set empty to use in-memory job store
         "REDIS_URL": "",
         # App Config
