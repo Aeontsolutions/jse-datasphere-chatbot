@@ -6,6 +6,7 @@ Provides mocked dependencies and test data for unit and integration tests.
 """
 
 import asyncio
+import os
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -14,6 +15,34 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.models import ProgressUpdate, StreamingChatRequest
+
+# Set mock environment variables at module import time (before app.main imports config)
+# This must happen BEFORE any app imports to prevent validation errors
+os.environ.update(
+    {
+        # AWS Config
+        "AWS_ACCESS_KEY_ID": "test-access-key-id",
+        "AWS_SECRET_ACCESS_KEY": "test-secret-access-key",
+        "AWS_REGION": "us-east-1",
+        "DOCUMENT_METADATA_S3_BUCKET": "test-bucket",
+        # GCP Config - Gemini
+        "GEMINI_API_KEY": "test-gemini-api-key",
+        # GCP Config - Vertex AI
+        "VERTEX_AI_PROJECT_ID": "test-project-id",
+        "VERTEX_AI_LOCATION": "us-central1",
+        # GCP Config - Google Cloud (env_prefix="GCP_")
+        "GCP_PROJECT_ID": "test-project-id",
+        "GCP_SERVICE_ACCOUNT_INFO": '{"type": "service_account", "project_id": "test"}',
+        "GOOGLE_API_KEY": "test-google-api-key",
+        # BigQuery Config (env_prefix="BIGQUERY_")
+        "BIGQUERY_DATASET": "test_dataset",
+        "BIGQUERY_TABLE": "test_table",
+        # Redis Config - Set empty to use in-memory job store
+        "REDIS_URL": "",
+        # App Config
+        "LOG_LEVEL": "INFO",
+    }
+)
 
 
 @pytest.fixture(scope="session")
