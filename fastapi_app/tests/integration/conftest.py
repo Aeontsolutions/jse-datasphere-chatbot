@@ -6,12 +6,10 @@ from unittest.mock import Mock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-
-# Set mock environment variables before any imports
-@pytest.fixture(scope="session", autouse=True)
-def mock_environment():
-    """Mock environment variables for all integration tests."""
-    env_vars = {
+# Set mock environment variables at module import time (before app.main imports config)
+# This must happen BEFORE any app imports
+os.environ.update(
+    {
         # AWS Config
         "AWS_ACCESS_KEY_ID": "test-access-key-id",
         "AWS_SECRET_ACCESS_KEY": "test-secret-access-key",
@@ -26,21 +24,7 @@ def mock_environment():
         # App Config
         "LOG_LEVEL": "INFO",
     }
-
-    # Set all environment variables
-    original_env = {}
-    for key, value in env_vars.items():
-        original_env[key] = os.environ.get(key)
-        os.environ[key] = value
-
-    yield
-
-    # Restore original environment
-    for key, original_value in original_env.items():
-        if original_value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = original_value
+)
 
 
 @pytest.fixture(autouse=True)
