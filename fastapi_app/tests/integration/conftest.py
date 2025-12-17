@@ -24,6 +24,9 @@ os.environ.update(
         "GCP_PROJECT_ID": "test-project-id",
         "GCP_SERVICE_ACCOUNT_INFO": '{"type": "service_account", "project_id": "test"}',
         "GOOGLE_API_KEY": "test-google-api-key",
+        # BigQuery Config (env_prefix="BIGQUERY_")
+        "BIGQUERY_DATASET": "test_dataset",
+        "BIGQUERY_TABLE": "test_table",
         # Redis Config - Set empty to use in-memory job store
         "REDIS_URL": "",
         # App Config
