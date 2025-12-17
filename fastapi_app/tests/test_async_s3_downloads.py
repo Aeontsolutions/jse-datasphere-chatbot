@@ -41,9 +41,9 @@ class TestS3DownloadConfig:
         """Test default configuration values."""
         config = S3DownloadConfig()
         assert config.max_retries == 2
-        assert config.retry_delay == 0.5
-        assert config.max_retry_delay == 10.0
-        assert config.timeout == 300.0
+        assert config.retry_delay == pytest.approx(0.5)
+        assert config.max_retry_delay == pytest.approx(10.0)
+        assert config.timeout == pytest.approx(300.0)
         assert config.chunk_size == 8192
         assert config.concurrent_downloads == 5
 
@@ -53,8 +53,8 @@ class TestS3DownloadConfig:
             max_retries=5, retry_delay=2.0, timeout=600.0, concurrent_downloads=10
         )
         assert config.max_retries == 5
-        assert config.retry_delay == 2.0
-        assert config.timeout == 600.0
+        assert config.retry_delay == pytest.approx(2.0)
+        assert config.timeout == pytest.approx(600.0)
         assert config.concurrent_downloads == 10
 
 
@@ -69,7 +69,7 @@ class TestDownloadResult:
         assert result.success is True
         assert result.content == "test content"
         assert result.error is None
-        assert result.download_time == 1.5
+        assert result.download_time == pytest.approx(1.5)
         assert result.retry_count == 0
 
     def test_failure_result(self):
@@ -80,7 +80,7 @@ class TestDownloadResult:
         assert result.success is False
         assert result.content is None
         assert result.error == "Download failed"
-        assert result.download_time == 2.0
+        assert result.download_time == pytest.approx(2.0)
         assert result.retry_count == 2
 
 
