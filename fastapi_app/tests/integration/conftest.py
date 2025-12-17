@@ -20,9 +20,9 @@ os.environ.update(
         # GCP Config - Vertex AI
         "VERTEX_AI_PROJECT_ID": "test-project-id",
         "VERTEX_AI_LOCATION": "us-central1",
-        # GCP Config - Google Cloud (for service account)
-        "GOOGLE_CLOUD_PROJECT_ID": "test-project-id",
-        "GOOGLE_CLOUD_SERVICE_ACCOUNT_INFO": '{"type": "service_account", "project_id": "test"}',
+        # GCP Config - Google Cloud (env_prefix="GCP_")
+        "GCP_PROJECT_ID": "test-project-id",
+        "GCP_SERVICE_ACCOUNT_INFO": '{"type": "service_account", "project_id": "test"}',
         "GOOGLE_API_KEY": "test-google-api-key",
         # Redis Config - Set empty to use in-memory job store
         "REDIS_URL": "",
