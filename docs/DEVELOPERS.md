@@ -473,19 +473,15 @@ def test_bigquery_connection(mock_client):
 
 ## Performance Optimization
 
-### Document Selection Optimization
+### Document Selection
 
-**Before**: LLM-based selection (~20s)
-**After**: Embedding-based selection (~300ms)
+Document selection uses LLM-based semantic analysis to identify relevant documents based on user queries and conversation context.
 
 ```python
-def semantic_document_selection(query, metadata, conversation_history=None, meta_collection=None):
-    if meta_collection:
-        # Fast embedding-based selection
-        return query_meta_collection(meta_collection, query)
-    else:
-        # Fallback to LLM-based selection
-        return semantic_document_selection_llm_fallback(query, metadata, conversation_history)
+def semantic_document_selection(query, metadata, conversation_history=None):
+    # LLM-based document selection
+    # Returns dict with companies_mentioned and documents_to_load
+    ...
 ```
 
 ### Caching Optimization

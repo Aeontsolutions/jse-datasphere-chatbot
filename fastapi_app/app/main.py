@@ -463,6 +463,7 @@ async def chat(
     request: ChatRequest,
     s3_client: Any = Depends(get_s3_client),
     metadata: Dict = Depends(get_metadata),
+    financial_manager: Any = Depends(get_financial_manager),
 ):
     """
     Chat with documents using Gemini AI
@@ -505,12 +506,18 @@ async def chat(
 
         # Auto-load relevant documents if enabled
         if request.auto_load_documents:
+            # Get symbol-to-company associations for better company resolution
+            associations = None
+            if financial_manager and financial_manager.metadata:
+                associations = financial_manager.metadata.get("associations")
+
             document_texts, document_selection_message, loaded_docs = auto_load_relevant_documents(
                 s3_client,
                 request.query,
                 metadata,
                 {},  # Start with empty document_texts since this is stateless
                 request.conversation_history,
+                associations,
             )
 
         # Generate response
@@ -560,6 +567,7 @@ async def chat_stream(
     s3_client: Any = Depends(get_s3_client),
     metadata: Dict = Depends(get_metadata),
     job_store: JobStore = Depends(get_job_store),
+    financial_manager: Any = Depends(get_financial_manager),
 ):
     """
     Stream chat responses with real-time progress updates using Server-Sent Events
@@ -589,6 +597,11 @@ async def chat_stream(
         logger.info("📜 No conversation history received")
 
     try:
+        # Get symbol-to-company associations for better company resolution
+        associations = None
+        if financial_manager and financial_manager.metadata:
+            associations = financial_manager.metadata.get("associations")
+
         if not config.async_job.enabled:
             # SSE streaming mode - return immediate streaming response
             tracker = await process_streaming_chat(
@@ -596,6 +609,7 @@ async def chat_stream(
                 s3_client=s3_client,
                 metadata=metadata,
                 use_fast_mode=False,
+                associations=associations,
             )
             return StreamingResponse(
                 tracker.stream_updates(),
@@ -620,6 +634,7 @@ async def chat_stream(
                 s3_client=s3_client,
                 metadata=metadata,
                 job_store=job_store,
+                associations=associations,
             )
         )
 
@@ -920,6 +935,7 @@ async def _process_chat_job_background(
     s3_client: Any,
     metadata: Dict,
     job_store: JobStore,
+    associations: Dict = None,
 ):
     """
     Background task to process chat job with progress tracking.
@@ -939,6 +955,7 @@ async def _process_chat_job_background(
             metadata=metadata,
             use_fast_mode=False,
             tracker=tracker,
+            associations=associations,
         )
 
         logger.info(f"Successfully completed background job {job_id}")

@@ -18,6 +18,7 @@ async def process_streaming_chat(
     meta_collection: Any = None,
     use_fast_mode: bool = False,
     tracker: Optional[ProgressTracker] = None,
+    associations: Optional[Dict] = None,
 ) -> ProgressTracker:
     """
     Process a chat request with streaming progress updates
@@ -29,6 +30,8 @@ async def process_streaming_chat(
         collection: Deprecated (previously used for ChromaDB)
         meta_collection: Deprecated (previously used for ChromaDB)
         use_fast_mode: Deprecated (fast mode using ChromaDB has been removed)
+        tracker: Optional progress tracker
+        associations: Optional symbol-to-company mappings for better document selection
 
     Returns:
         ProgressTracker instance that can be used to stream updates
@@ -39,7 +42,14 @@ async def process_streaming_chat(
     # Start the processing in the background
     asyncio.create_task(
         _process_chat_async(
-            request, s3_client, metadata, tracker, collection, meta_collection, use_fast_mode
+            request,
+            s3_client,
+            metadata,
+            tracker,
+            collection,
+            meta_collection,
+            use_fast_mode,
+            associations,
         )
     )
 
@@ -54,6 +64,7 @@ async def _process_chat_async(
     collection: Any = None,
     meta_collection: Any = None,
     use_fast_mode: bool = False,
+    associations: Optional[Dict] = None,
 ):
     """Internal async processing function"""
 
@@ -77,7 +88,7 @@ async def _process_chat_async(
             )
             return
         else:
-            await _process_traditional_chat(request, s3_client, metadata, tracker)
+            await _process_traditional_chat(request, s3_client, metadata, tracker, associations)
 
     except Exception as e:
         logger.error(
@@ -91,7 +102,11 @@ async def _process_chat_async(
 
 
 async def _process_traditional_chat(
-    request: StreamingChatRequest, s3_client: Any, metadata: Dict, tracker: ProgressTracker
+    request: StreamingChatRequest,
+    s3_client: Any,
+    metadata: Dict,
+    tracker: ProgressTracker,
+    associations: Optional[Dict] = None,
 ):
     """Process chat using traditional S3 document loading"""
 
@@ -154,6 +169,7 @@ async def _process_traditional_chat(
                         current_document_texts={},  # Start with empty document_texts since this is stateless
                         config=download_config,
                         progress_callback=download_progress_callback,
+                        associations=associations,
                     )
                 )
 

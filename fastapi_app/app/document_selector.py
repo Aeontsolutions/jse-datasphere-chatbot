@@ -26,154 +26,437 @@ logger = get_logger(__name__)
 
 
 # =============================================================================
-# SEMANTIC DOCUMENT SELECTION
+# COMPANY EXTRACTION AND RESOLUTION (Two-Stage Approach)
 # =============================================================================
 
 
-def semantic_document_selection(query, metadata, conversation_history=None, meta_collection=None):
+def extract_companies_from_query(
+    query: str,
+    available_companies: List[str],
+    available_symbols: Optional[List[str]] = None,
+    conversation_history: Optional[List] = None,
+) -> Dict:
     """
-    Use embedding-based search in metadata collection with LLM fallback.
-    Now supports multi-company queries by extracting companies from the query
-    and running separate searches for each company.
+    Use fast LLM to extract company names/symbols from user query.
 
-    Operators can set the environment variable ``FORCE_LLM_FALLBACK`` to
-    ``true`` (case-insensitive) to bypass the embedding-based branch and jump
-    straight to the LLM fallback.  This is handy for load-testing the cache
-    mechanism.
+    This is Stage 1 of the two-stage document selection approach.
+    Uses a smaller, faster model (gemini-2.5-flash) for simple entity extraction.
 
     Args:
         query: User query
-        metadata: S3 metadata (used for fallback)
+        available_companies: List of valid company names from metadata
+        available_symbols: Optional list of valid trading symbols
         conversation_history: Optional conversation context
-        meta_collection: ChromaDB metadata collection (if None, falls back to LLM)
 
     Returns:
-        Dictionary with companies_mentioned and documents_to_load
-    """
-    # ------------------------------------------------------------------
-    # ChromaDB has been deprecated - always use LLM-based selection
-    # ------------------------------------------------------------------
-    logger.info("Using LLM-based document selection (ChromaDB deprecated)")
-    return semantic_document_selection_llm_fallback(query, metadata, conversation_history)
-
-
-def semantic_document_selection_llm_fallback(query, metadata, conversation_history=None):
-    """
-    Use LLM to determine which documents to load based on query and conversation history (fallback method).
-    Now optimized with Google Gemini context caching to reduce latency from ~20s to ~2-3s.
+        Dict with companies and symbols mentioned
     """
     start_time = time.time()
     try:
-        # Fallback to traditional approach if caching fails
-        logger.info("Cache unavailable, using traditional LLM fallback (~20s expected)")
         client = get_genai_client()
-        model_name = "gemini-3-flash-preview"
-
-        # Format metadata in a readable format for the LLM
-        metadata_str = json.dumps(metadata, indent=2)
+        model_name = "gemini-2.5-flash"  # Fast model for simple extraction
 
         # Format conversation history if available
         conversation_context = ""
         if conversation_history and len(conversation_history) > 0:
-            # Get the last few exchanges to provide context (limit to last 10 exchanges to keep it focused)
-            recent_history = conversation_history[-10:]
+            recent_history = conversation_history[-6:]  # Last 3 exchanges
             conversation_context = "\n".join(
                 [f"{msg['role']}: {msg['content']}" for msg in recent_history]
             )
-            conversation_context = f"""
-            Previous conversation history:
-            {conversation_context}
-            """
 
-        # Full prompt with metadata included (original behavior)
-        prompt = f"""
-        Based on the following user question, conversation history, and available document metadata, determine which documents are most relevant to answer the question.
+        # Build a concise prompt with just company/symbol lists
+        symbols_section = ""
+        if available_symbols:
+            symbols_section = f"Available trading symbols: {', '.join(available_symbols)}"
 
-        {conversation_context}
+        prompt = f"""Extract company names and trading symbols mentioned in the user query.
 
-        Current user question: "{query}"
+Available companies:
+{', '.join(available_companies)}
 
-        Available document metadata:
-        {metadata_str}
+{symbols_section}
 
-        For each company mentioned or implied in the question or previous conversation, select the most relevant documents.
-        Consider aliases, abbreviations, or partial references to companies.
-        Consider the full context of the conversation when determining relevance.
+{"Previous conversation:" if conversation_context else ""}
+{conversation_context}
 
-        IMPORTANT: Select a maximum of 3 documents total, prioritizing the most relevant ones.
+Current query: "{query}"
 
-        Return your response as a valid JSON object with this structure:
-        {{
-          "companies_mentioned": ["company1", "company2"],
-          "documents_to_load": [
-            {{
-              "company": "company name",
-              "document_link": "url",
-              "filename": "filename",
-              "reason": "brief explanation why this document is relevant"
-            }}
-          ]
-        }}
+Instructions:
+- Match company names even with partial mentions, abbreviations, or aliases
+- For follow-up questions like "what about their 2023 report?", identify companies from conversation context
+- Trading symbols are typically 2-5 uppercase letters (e.g., NCB, GK, MDS)
+- Return empty arrays if no companies/symbols are mentioned
 
-        ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
-        """
+Return ONLY valid JSON in this format:
+{{"companies": ["company1", "company2"], "symbols": ["SYM1", "SYM2"]}}
+"""
 
-        # Build content for the new SDK
+        # Build content for the SDK
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
 
-        # Generate content config
+        # Use low temperature for deterministic extraction
         generate_config = types.GenerateContentConfig(
-            temperature=0.3,  # Lower temperature for more deterministic JSON output
-            max_output_tokens=2048,
+            temperature=0.1,
+            max_output_tokens=512,
         )
 
-        # Generate response using the new SDK
         response = client.models.generate_content(
             model=model_name,
             contents=contents,
             config=generate_config,
         )
-        response_text = response.text
+        response_text = response.text.strip()
 
-        # Extract the JSON part from the response
-        try:
-            # Strip markdown code blocks if present (```json ... ``` or ``` ... ```)
-            clean_text = response_text.strip()
-            if clean_text.startswith("```"):
-                # Remove opening ```json or ```
-                first_newline = clean_text.find("\n")
-                if first_newline != -1:
-                    clean_text = clean_text[first_newline + 1 :]
-                # Remove closing ```
-                if clean_text.endswith("```"):
-                    clean_text = clean_text[:-3].strip()
+        # Parse JSON response
+        clean_text = response_text
+        if clean_text.startswith("```"):
+            first_newline = clean_text.find("\n")
+            if first_newline != -1:
+                clean_text = clean_text[first_newline + 1 :]
+            if clean_text.endswith("```"):
+                clean_text = clean_text[:-3].strip()
 
-            # Try to find JSON in the response
-            json_start = clean_text.find("{")
-            json_end = clean_text.rfind("}") + 1
-            if json_start >= 0 and json_end > json_start:
-                clean_text = clean_text[json_start:json_end]
+        json_start = clean_text.find("{")
+        json_end = clean_text.rfind("}") + 1
+        if json_start >= 0 and json_end > json_start:
+            clean_text = clean_text[json_start:json_end]
 
-            recommendation = json.loads(clean_text)
+        result = json.loads(clean_text)
 
-            logger.info("Successfully completed LLM fallback with traditional approach")
+        duration = time.time() - start_time
+        logger.info(
+            f"Company extraction completed in {duration:.2f}s: "
+            f"companies={result.get('companies', [])}, symbols={result.get('symbols', [])}"
+        )
 
-            # Record metrics for successful document selection
-            duration = time.time() - start_time
-            num_docs = len(recommendation.get("documents_to_load", []))
-            record_document_selection(duration=duration, num_documents=num_docs)
+        return result
 
-            return recommendation
-        except json.JSONDecodeError as e:
-            logger.error(
-                "llm_response_parse_failed",
-                extra={
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                    "response_preview": response_text[:200] if response_text else None,
-                },
+    except Exception as e:
+        logger.error(
+            "company_extraction_failed",
+            extra={"error": str(e), "error_type": type(e).__name__, "query": query[:100]},
+        )
+        return {"companies": [], "symbols": []}
+
+
+def resolve_companies(
+    extracted: Dict,
+    available_companies: List[str],
+    symbol_to_company: Optional[Dict[str, List[str]]] = None,
+) -> List[str]:
+    """
+    Resolve extracted companies/symbols to valid company names using Python.
+
+    This is Stage 2 of the two-stage document selection approach.
+    Uses case-insensitive matching, partial matching, and symbol resolution.
+    Deduplicates by lowercase key to ensure no duplicate companies with different casing.
+
+    Args:
+        extracted: Dict with 'companies' and 'symbols' from extraction step
+        available_companies: List of valid company names from metadata
+        symbol_to_company: Optional mapping from symbols to company names
+
+    Returns:
+        List of resolved, valid company names (using original metadata casing)
+    """
+    # Create a lowercase -> original casing map for consistent deduplication
+    available_map = {c.lower(): c for c in available_companies}
+    resolved_lower = set()  # Track by lowercase for deduplication
+    resolved_map = {}  # lowercase -> original casing from metadata
+
+    # Resolve symbols to companies first
+    if extracted.get("symbols") and symbol_to_company:
+        for symbol in extracted["symbols"]:
+            symbol_upper = symbol.upper()
+            matched_companies = None
+
+            # Try exact match
+            if symbol_upper in symbol_to_company:
+                matched_companies = symbol_to_company[symbol_upper]
+            else:
+                # Try case-insensitive search through keys
+                for key, companies in symbol_to_company.items():
+                    if key.upper() == symbol_upper:
+                        matched_companies = companies
+                        break
+
+            if matched_companies:
+                for company in matched_companies:
+                    # Normalize to metadata casing
+                    company_lower = company.lower()
+                    if company_lower in available_map and company_lower not in resolved_lower:
+                        resolved_lower.add(company_lower)
+                        resolved_map[company_lower] = available_map[company_lower]
+                    elif company_lower not in available_map:
+                        logger.warning(f"Symbol {symbol} mapped to unknown company: '{company}'")
+
+    # Match company names
+    for company in extracted.get("companies", []):
+        company_lower = company.lower()
+
+        # Skip if already resolved
+        if company_lower in resolved_lower:
+            continue
+
+        matched = False
+
+        # Try exact match (case-insensitive)
+        if company_lower in available_map:
+            resolved_lower.add(company_lower)
+            resolved_map[company_lower] = available_map[company_lower]
+            matched = True
+        else:
+            # Try partial match if no exact match
+            for valid_lower, valid_company in available_map.items():
+                # Check if extracted name is contained in valid name or vice versa
+                if company_lower in valid_lower or valid_lower in company_lower:
+                    if valid_lower not in resolved_lower:
+                        resolved_lower.add(valid_lower)
+                        resolved_map[valid_lower] = valid_company
+                        matched = True
+                        break
+
+        if not matched:
+            logger.warning(f"Could not resolve company: '{company}'")
+
+    result = list(resolved_map.values())
+    logger.info(f"Resolved {len(result)} companies: {result}")
+    return result
+
+
+def filter_documents_by_companies(metadata: Dict, companies: List[str]) -> Dict:
+    """
+    Filter document metadata to only include specified companies.
+
+    Args:
+        metadata: Full S3 metadata (company_name -> list of documents)
+        companies: List of company names to filter by
+
+    Returns:
+        Filtered metadata containing only the specified companies
+    """
+    companies_set = {c.lower() for c in companies}
+    filtered = {}
+
+    for company_key, documents in metadata.items():
+        if company_key.lower() in companies_set:
+            filtered[company_key] = documents
+
+    logger.info(
+        f"Filtered metadata: {len(filtered)} companies, "
+        f"{sum(len(docs) for docs in filtered.values())} documents"
+    )
+    return filtered
+
+
+def select_documents_from_filtered(
+    query: str,
+    filtered_metadata: Dict,
+    conversation_history: Optional[List] = None,
+    max_documents: int = 3,
+) -> Dict:
+    """
+    Select specific documents from the filtered company list.
+
+    This is the final stage: select the most relevant documents from
+    the pre-filtered set. Uses LLM with much smaller context.
+
+    Args:
+        query: User query
+        filtered_metadata: Metadata filtered to relevant companies only
+        conversation_history: Optional conversation context
+        max_documents: Maximum number of documents to select
+
+    Returns:
+        Dictionary with companies_mentioned and documents_to_load
+    """
+    if not filtered_metadata:
+        return {"companies_mentioned": [], "documents_to_load": []}
+
+    start_time = time.time()
+    try:
+        client = get_genai_client()
+        model_name = "gemini-2.5-flash"  # Fast model for selection
+
+        # Format the filtered metadata (much smaller than full metadata)
+        metadata_str = json.dumps(filtered_metadata, indent=2)
+
+        # Format conversation history
+        conversation_context = ""
+        if conversation_history and len(conversation_history) > 0:
+            recent_history = conversation_history[-6:]
+            conversation_context = "\n".join(
+                [f"{msg['role']}: {msg['content']}" for msg in recent_history]
             )
-            return None
+
+        prompt = f"""Select the most relevant documents to answer the user's question.
+
+{"Previous conversation:" if conversation_context else ""}
+{conversation_context}
+
+Current question: "{query}"
+
+Available documents:
+{metadata_str}
+
+Instructions:
+- Select a maximum of {max_documents} documents
+- Prefer annual reports for general company questions
+- Prefer financial statements for specific financial questions
+- Prefer the most recent documents unless a specific year is mentioned
+- Consider document_type and period when selecting
+
+Return ONLY valid JSON:
+{{
+  "companies_mentioned": ["company1", "company2"],
+  "documents_to_load": [
+    {{
+      "company": "company name",
+      "document_link": "full s3 link",
+      "filename": "filename.pdf",
+      "reason": "brief reason"
+    }}
+  ]
+}}
+"""
+
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
+
+        generate_config = types.GenerateContentConfig(
+            temperature=0.2,
+            max_output_tokens=2048,  # Increased to prevent JSON truncation
+        )
+
+        response = client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=generate_config,
+        )
+        response_text = response.text.strip()
+
+        # Parse JSON response
+        clean_text = response_text
+        if clean_text.startswith("```"):
+            first_newline = clean_text.find("\n")
+            if first_newline != -1:
+                clean_text = clean_text[first_newline + 1 :]
+            if clean_text.endswith("```"):
+                clean_text = clean_text[:-3].strip()
+
+        json_start = clean_text.find("{")
+        json_end = clean_text.rfind("}") + 1
+        if json_start >= 0 and json_end > json_start:
+            clean_text = clean_text[json_start:json_end]
+
+        result = json.loads(clean_text)
+
+        duration = time.time() - start_time
+        logger.info(
+            f"Document selection completed in {duration:.2f}s: "
+            f"{len(result.get('documents_to_load', []))} documents selected"
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(
+            "document_selection_failed",
+            extra={"error": str(e), "error_type": type(e).__name__},
+        )
+        return {"companies_mentioned": list(filtered_metadata.keys()), "documents_to_load": []}
+
+
+# =============================================================================
+# SEMANTIC DOCUMENT SELECTION (Main Entry Point)
+# =============================================================================
+
+
+def semantic_document_selection(
+    query: str,
+    metadata: Dict,
+    conversation_history: Optional[List] = None,
+    associations: Optional[Dict] = None,
+):
+    """
+    Use two-stage LLM approach to determine which documents to load.
+
+    Stage 1: Extract company names/symbols from query (fast model)
+    Stage 2: Resolve to valid companies using Python (deterministic)
+    Stage 3: Filter documents to matched companies (deterministic)
+    Stage 4: Select specific documents from filtered list (fast model)
+
+    This approach reduces hallucination risk and improves determinism by:
+    - Using smaller context windows
+    - Separating entity extraction from document selection
+    - Using Python for validation and filtering
+
+    Args:
+        query: User query
+        metadata: S3 metadata containing available documents (company -> documents)
+        conversation_history: Optional conversation context
+        associations: Optional dict with 'symbol_to_company' mapping from FinancialDataManager
+
+    Returns:
+        Dictionary with companies_mentioned and documents_to_load
+    """
+    start_time = time.time()
+    try:
+        logger.info("Using two-stage document selection")
+
+        # Get list of available companies from metadata keys
+        available_companies = list(metadata.keys())
+
+        # Get symbol mapping if associations provided
+        symbol_to_company = None
+        available_symbols = None
+        if associations:
+            symbol_to_company = associations.get("symbol_to_company", {})
+            available_symbols = list(symbol_to_company.keys()) if symbol_to_company else None
+
+        # Stage 1: Extract companies/symbols from query using fast model
+        extracted = extract_companies_from_query(
+            query=query,
+            available_companies=available_companies,
+            available_symbols=available_symbols,
+            conversation_history=conversation_history,
+        )
+
+        # Stage 2: Resolve extracted entities to valid company names
+        resolved_companies = resolve_companies(
+            extracted=extracted,
+            available_companies=available_companies,
+            symbol_to_company=symbol_to_company,
+        )
+
+        # If no companies resolved, return empty result
+        if not resolved_companies:
+            logger.warning("No companies could be resolved from query")
+            duration = time.time() - start_time
+            record_document_selection(duration=duration, num_documents=0)
+            return {"companies_mentioned": [], "documents_to_load": []}
+
+        # Stage 3: Filter metadata to only include resolved companies
+        filtered_metadata = filter_documents_by_companies(metadata, resolved_companies)
+
+        # Stage 4: Select specific documents from filtered list
+        result = select_documents_from_filtered(
+            query=query,
+            filtered_metadata=filtered_metadata,
+            conversation_history=conversation_history,
+            max_documents=3,
+        )
+
+        # Record metrics
+        duration = time.time() - start_time
+        num_docs = len(result.get("documents_to_load", []))
+        record_document_selection(duration=duration, num_documents=num_docs)
+
+        logger.info(
+            f"Two-stage document selection completed in {duration:.2f}s: "
+            f"{len(resolved_companies)} companies, {num_docs} documents"
+        )
+
+        return result
 
     except Exception as e:
         logger.error(
@@ -194,14 +477,31 @@ def semantic_document_selection_llm_fallback(query, metadata, conversation_histo
 
 
 def auto_load_relevant_documents(
-    s3_client, query, metadata, current_document_texts, conversation_history=None
+    s3_client,
+    query,
+    metadata,
+    current_document_texts,
+    conversation_history=None,
+    associations=None,
 ):
-    """Load relevant documents based on query and conversation history"""
+    """
+    Load relevant documents based on query and conversation history.
+
+    Args:
+        s3_client: S3 client for downloading documents
+        query: User query
+        metadata: S3 metadata (company -> documents)
+        current_document_texts: Already loaded documents
+        conversation_history: Optional conversation context
+        associations: Optional dict with 'symbol_to_company' mapping for better resolution
+    """
     document_texts = current_document_texts.copy() if current_document_texts else {}
     loaded_docs = []
 
-    # Use LLM to determine which documents to load, including conversation history
-    recommendation = semantic_document_selection(query, metadata, conversation_history)
+    # Use two-stage LLM approach to determine which documents to load
+    recommendation = semantic_document_selection(
+        query, metadata, conversation_history, associations
+    )
 
     if recommendation and "documents_to_load" in recommendation:
         docs_to_load = recommendation["documents_to_load"]
@@ -268,17 +568,19 @@ async def auto_load_relevant_documents_async(
     current_document_texts: Optional[Dict] = None,
     config: Optional[S3DownloadConfig] = None,
     progress_callback: Optional[callable] = None,
+    associations: Optional[Dict] = None,
 ) -> Tuple[Dict[str, str], str, List[str]]:
     """
     Asynchronously load relevant documents based on query and conversation history with concurrent downloads.
 
     Args:
         query: User query
-        metadata: Document metadata
+        metadata: Document metadata (company -> documents)
         conversation_history: Optional conversation context
         current_document_texts: Existing loaded documents
         config: Download configuration
         progress_callback: Optional callback for progress updates
+        associations: Optional dict with 'symbol_to_company' mapping for better resolution
 
     Returns:
         Tuple of (document_texts, message, loaded_docs)
@@ -295,8 +597,10 @@ async def auto_load_relevant_documents_async(
                 "document_selection_start", "Analyzing query to select relevant documents"
             )
 
-        # Use LLM to determine which documents to load, including conversation history
-        recommendation = semantic_document_selection(query, metadata, conversation_history)
+        # Use two-stage LLM approach to determine which documents to load
+        recommendation = semantic_document_selection(
+            query, metadata, conversation_history, associations
+        )
 
         if not recommendation or "documents_to_load" not in recommendation:
             message = "No relevant documents were identified for your query."
@@ -307,7 +611,7 @@ async def auto_load_relevant_documents_async(
         docs_to_load = recommendation["documents_to_load"]
         companies_mentioned = recommendation.get("companies_mentioned", [])
 
-        # Note: Document selection metrics already recorded in semantic_document_selection_llm_fallback
+        # Note: Document selection metrics already recorded in semantic_document_selection
 
         if progress_callback:
             await progress_callback(

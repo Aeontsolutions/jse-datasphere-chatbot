@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from app.document_selector import semantic_document_selection_llm_fallback
+from app.document_selector import semantic_document_selection
 from app.gemini_client import (
     create_metadata_cache,
     get_cache_status,
@@ -192,10 +192,8 @@ class TestCacheOptimization:
 
     @patch("app.utils.get_cached_model")
     @patch("app.utils.GenerativeModel")
-    def test_semantic_document_selection_llm_fallback_with_cache(
-        self, mock_vertex_model, mock_get_cached_model
-    ):
-        """Test LLM fallback using cached context for improved performance"""
+    def test_semantic_document_selection_with_cache(self, mock_vertex_model, mock_get_cached_model):
+        """Test LLM selection using cached context for improved performance"""
         # Mock cached model
         mock_cached_model = Mock()
         mock_response = Mock()
@@ -203,8 +201,8 @@ class TestCacheOptimization:
         mock_cached_model.generate_content.return_value = mock_response
         mock_get_cached_model.return_value = (mock_cached_model, True)
 
-        # Test LLM fallback with cache
-        result = semantic_document_selection_llm_fallback(
+        # Test LLM selection with cache
+        result = semantic_document_selection(
             query="Show me Access Bank financials",
             metadata=SAMPLE_METADATA,
             conversation_history=[],
@@ -223,10 +221,10 @@ class TestCacheOptimization:
 
     @patch("app.utils.get_cached_model")
     @patch("app.utils.GenerativeModel")
-    def test_semantic_document_selection_llm_fallback_without_cache(
+    def test_semantic_document_selection_without_cache(
         self, mock_vertex_model, mock_get_cached_model
     ):
-        """Test LLM fallback without cache (traditional approach)"""
+        """Test LLM selection without cache (traditional approach)"""
         # Mock cache failure
         mock_get_cached_model.return_value = (None, False)
 
@@ -237,8 +235,8 @@ class TestCacheOptimization:
         mock_model.generate_content.return_value = mock_response
         mock_vertex_model.return_value = mock_model
 
-        # Test LLM fallback without cache
-        result = semantic_document_selection_llm_fallback(
+        # Test LLM selection without cache
+        result = semantic_document_selection(
             query="Show me Access Bank financials",
             metadata=SAMPLE_METADATA,
             conversation_history=[],
@@ -297,7 +295,7 @@ class TestCacheOptimization:
         ]
 
         # Test with conversation history
-        result = semantic_document_selection_llm_fallback(
+        result = semantic_document_selection(
             query="What about their 2023 performance?",
             metadata=SAMPLE_METADATA,
             conversation_history=conversation_history,
