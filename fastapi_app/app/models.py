@@ -220,6 +220,19 @@ class FinancialDataRecord(BaseModel):
     )
 
 
+class ChartSpec(BaseModel):
+    """
+    Vega-Lite chart specification for visualizing financial data
+    """
+
+    chart_type: str = Field(
+        ..., description="Type of chart: line, bar, grouped_bar, horizontal_bar"
+    )
+    title: str = Field(..., description="Chart title")
+    description: str = Field(..., description="Human-readable description of the chart")
+    vega_lite: Dict[str, Any] = Field(..., description="Full Vega-Lite specification")
+
+
 class FinancialDataResponse(BaseModel):
     """
     Response model for financial data query endpoint
@@ -240,6 +253,9 @@ class FinancialDataResponse(BaseModel):
     )
     suggestions: Optional[List[str]] = Field(
         default=None, description="Suggestions for alternative queries"
+    )
+    chart: Optional[ChartSpec] = Field(
+        default=None, description="Vega-Lite chart specification if data is chartable"
     )
 
 

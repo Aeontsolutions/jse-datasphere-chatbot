@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from app.models import (
     ChatRequest,
     ChatResponse,
+    ChartSpec,
     StreamingChatRequest,
     FinancialDataRequest,
     FinancialDataResponse,
@@ -17,6 +18,7 @@ from app.models import (
     JobStatusResponse,
     JobStatus,
 )
+from app.charting import generate_chart
 from app.s3_client import init_s3_client
 from app.gemini_client import (
     init_vertex_ai,
@@ -740,8 +742,16 @@ async def fast_chat_v2(
             updated_conversation_history.append({"role": "assistant", "content": ai_response})
             if len(updated_conversation_history) > 20:
                 updated_conversation_history = updated_conversation_history[-20:]
+        # Generate chart if data is chartable
+        chart_spec = None
+        if results:
+            chart_data = generate_chart(results, request.query)
+            if chart_data:
+                chart_spec = ChartSpec(**chart_data)
+                logger.info(f"Generated {chart_data['chart_type']} chart: {chart_data['title']}")
+
         logger.info(
-            f"/fast_chat_v2 completed. data_found={bool(results)}, record_count={len(results) if results else 0}"
+            f"/fast_chat_v2 completed. data_found={bool(results)}, record_count={len(results) if results else 0}, has_chart={chart_spec is not None}"
         )
         return FinancialDataResponse(
             response=ai_response,
@@ -752,6 +762,7 @@ async def fast_chat_v2(
             conversation_history=updated_conversation_history,
             warnings=warnings if warnings else None,
             suggestions=suggestions if suggestions else None,
+            chart=chart_spec,
         )
     except HTTPException:
         raise

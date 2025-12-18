@@ -4,6 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>JSE Chat Assistant Test Client</title>
+  <!-- Vega-Lite for chart rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -187,6 +191,29 @@
       margin-top: 8px;
       font-size: 0.75rem;
       color: var(--subtle);
+    }
+    .chart-container {
+      align-self: flex-start;
+      max-width: 90%;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin: 8px 0;
+    }
+    .chart-container .chart-title {
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+    .chart-container .chart-description {
+      font-size: 0.8rem;
+      color: var(--subtle);
+      margin-bottom: 12px;
+    }
+    .chart-container .vega-embed {
+      width: 100%;
     }
     .streaming-panel {
       background: var(--panel);
@@ -474,7 +501,7 @@
       renderTranscript();
     }
 
-    function appendMessage(sessionId, role, content) {
+    function appendMessage(sessionId, role, content, chartSpec = null) {
       if (!state.messagesBySession[sessionId]) {
         state.messagesBySession[sessionId] = [];
       }
@@ -482,6 +509,7 @@
         role,
         content,
         timestamp: new Date().toISOString(),
+        chart: chartSpec,  // Store chart spec with the message
       });
       persistState();
       renderTranscript();
@@ -525,7 +553,7 @@
         dom.transcript.appendChild(placeholder);
         return;
       }
-      messages.forEach((msg) => {
+      messages.forEach((msg, index) => {
         const bubble = document.createElement("div");
         bubble.className = `message ${msg.role}`;
         bubble.innerHTML = `
@@ -533,6 +561,11 @@
           <small>${new Date(msg.timestamp).toLocaleTimeString()}</small>
         `;
         dom.transcript.appendChild(bubble);
+
+        // Render chart if present in this message
+        if (msg.chart && msg.chart.vega_lite) {
+          renderChartInTranscript(msg.chart, index);
+        }
       });
       dom.transcript.scrollTop = dom.transcript.scrollHeight;
     }
@@ -818,7 +851,11 @@
         data.answer ||
         data.result ||
         "No assistant response returned.";
-      appendMessage(state.selectedSessionId, "assistant", responseText);
+
+      // Pass chart spec with the message so it persists across re-renders
+      const chartSpec = (data.chart && data.chart.vega_lite) ? data.chart : null;
+      appendMessage(state.selectedSessionId, "assistant", responseText, chartSpec);
+
       const docs = data.documents_loaded;
       const extraDetails = [];
       if (docs?.length) {
@@ -830,6 +867,9 @@
       if (data.record_count) {
         extraDetails.push(`${data.record_count} financial records analyzed`);
       }
+      if (data.chart) {
+        extraDetails.push(`Chart: ${data.chart.chart_type} - ${data.chart.description}`);
+      }
       if (extraDetails.length) {
         appendMessage(
           state.selectedSessionId,
@@ -839,6 +879,57 @@
           )}`
         );
       }
+    }
+
+    function renderChartInTranscript(chartSpec, messageIndex) {
+      if (!chartSpec || !chartSpec.vega_lite) return;
+
+      // Create chart container
+      const container = document.createElement("div");
+      container.className = "chart-container";
+
+      // Add title and description
+      if (chartSpec.title) {
+        const title = document.createElement("div");
+        title.className = "chart-title";
+        title.textContent = chartSpec.title;
+        container.appendChild(title);
+      }
+
+      if (chartSpec.description) {
+        const desc = document.createElement("div");
+        desc.className = "chart-description";
+        desc.textContent = chartSpec.description;
+        container.appendChild(desc);
+      }
+
+      // Create chart div with unique ID based on message index
+      const chartId = `chart-${state.selectedSessionId}-${messageIndex}`;
+      const chartDiv = document.createElement("div");
+      chartDiv.id = chartId;
+      container.appendChild(chartDiv);
+
+      // Append to transcript
+      dom.transcript.appendChild(container);
+
+      // Render with Vega-Embed (use setTimeout to ensure DOM is ready)
+      setTimeout(() => {
+        vegaEmbed(`#${chartId}`, chartSpec.vega_lite, {
+          actions: {
+            export: true,
+            source: false,
+            compiled: false,
+            editor: false,
+          },
+          theme: "default",
+          renderer: "canvas",
+        }).then((result) => {
+          console.log("Chart rendered successfully:", chartSpec.chart_type);
+        }).catch((err) => {
+          console.error("Chart rendering error:", err);
+          chartDiv.innerHTML = `<p style="color: var(--error);">Failed to render chart: ${err.message}</p>`;
+        });
+      }, 0);
     }
 
     function resetSessionMessages() {
