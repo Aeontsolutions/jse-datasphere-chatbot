@@ -1,7 +1,7 @@
 """
 Gemini AI client initialization and response generation.
 
-This module provides functions for initializing Vertex AI and Google GenerativeAI,
+This module provides functions for initializing Google GenAI client,
 managing metadata caching for improved performance, and generating chat responses
 using Gemini models.
 """
@@ -11,11 +11,9 @@ import json
 import time
 from datetime import datetime, timedelta
 
-import google.generativeai as genai
 from fastapi import HTTPException
-from google.cloud import aiplatform
-from google.oauth2 import service_account
-from vertexai.preview.generative_models import GenerativeModel
+from google import genai
+from google.genai import types
 
 from app.config import get_config
 from app.logging_config import get_logger
@@ -24,10 +22,11 @@ from app.utils.monitoring import record_ai_request
 logger = get_logger(__name__)
 
 
-# Global variables to store the cached context
+# Global variables to store the cached context and client
 _metadata_cache = None
 _cache_expiry = None
 _cache_hash = None
+_genai_client = None
 
 
 # =============================================================================
@@ -35,60 +34,57 @@ _cache_hash = None
 # =============================================================================
 
 
-def init_vertex_ai():
-    """Initialize Vertex AI using service account credentials"""
+def get_genai_client():
+    """Get or create the GenAI client singleton"""
+    global _genai_client
+
+    if _genai_client is not None:
+        return _genai_client
+
     try:
         config = get_config()
 
-        # Get the service account info from config
-        service_account_info = config.gcp.service_account_dict
-
-        # Create credentials object from service account info
-        credentials = service_account.Credentials.from_service_account_info(
-            service_account_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-
-        # Get project ID from config
-        project_id = config.gcp.project_id
-
-        # Initialize Vertex AI with project details and credentials
-        aiplatform.init(
-            project=project_id,
-            location=config.gcp.location,
-            credentials=credentials,
+        # Initialize GenAI client with API key (uses Google AI API, not Vertex AI)
+        # Vertex AI requires OAuth2 credentials, API keys only work with Google AI API
+        _genai_client = genai.Client(
+            api_key=config.gcp.api_key,
         )
 
         logger.info(
-            "vertex_ai_initialized",
-            extra={"project_id": project_id, "location": config.gcp.location},
+            "genai_client_initialized",
+            extra={"project_id": config.gcp.project_id, "location": config.gcp.location},
         )
-        return True
+        return _genai_client
+
     except Exception as e:
         logger.error(
-            "vertex_ai_init_failed",
+            "genai_client_init_failed",
             extra={
                 "error": str(e),
                 "error_type": type(e).__name__,
-                "project_id": config.gcp.project_id if hasattr(config.gcp, "project_id") else None,
             },
         )
         raise HTTPException(status_code=503, detail="Failed to initialize AI service") from e
 
 
-def init_genai():
-    """Initialize Google GenerativeAI client"""
+def init_vertex_ai():
+    """Initialize Vertex AI - now delegates to get_genai_client for backwards compatibility"""
     try:
-        config = get_config()
-        api_key = config.gcp.api_key
+        get_genai_client()
+        return True
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "vertex_ai_init_failed", extra={"error": str(e), "error_type": type(e).__name__}
+        )
+        raise HTTPException(status_code=503, detail="Failed to initialize AI service") from e
 
-        if not api_key:
-            logger.error(
-                "genai_api_key_missing",
-                extra={"error": "GOOGLE_API_KEY not found in environment variables"},
-            )
-            raise HTTPException(status_code=503, detail="AI service not configured")
 
-        genai.configure(api_key=api_key)
+def init_genai():
+    """Initialize Google GenerativeAI client - now delegates to get_genai_client for backwards compatibility"""
+    try:
+        get_genai_client()
         logger.info("genai_initialized", status="success")
     except HTTPException:
         raise
@@ -113,8 +109,7 @@ def create_metadata_cache(metadata):
     global _metadata_cache, _cache_expiry, _cache_hash
 
     try:
-        # Initialize genai if not already done
-        init_genai()
+        client = get_genai_client()
 
         # Generate hash for metadata to detect changes
         current_hash = get_metadata_hash(metadata)
@@ -157,16 +152,13 @@ def create_metadata_cache(metadata):
             ]
             }}"""
 
-        # Build a dedicated client – required for the caches API
-        client = genai.Client()
-
         # Create the cache using Google Gemini explicit context caching
         cache = client.caches.create(
             model="gemini-2.0-flash-001",
-            config=genai.types.CreateCachedContentConfig(
+            config=types.CreateCachedContentConfig(
                 system_instruction=cached_content,
                 display_name="document-metadata-cache",
-                ttl_seconds=3600,  # 1-hour TTL
+                ttl="3600s",  # 1-hour TTL
             ),
         )
 
@@ -193,10 +185,8 @@ def get_cached_model(metadata):
     try:
         cache = create_metadata_cache(metadata)
         if cache:
-            # Create model that uses the cached context
-            model = genai.GenerativeModel(model_name="gemini-2.0-flash-001", cached_content=cache)
             logger.info("Created model with cached metadata context")
-            return model, True
+            return cache, True
         else:
             logger.info("Cache creation failed, falling back to regular model")
             return None, False
@@ -258,11 +248,11 @@ def generate_chat_response(
     query, document_texts, conversation_history=None, auto_load_message=None
 ):
     """Generate chat response using Gemini model"""
-    model_name = "gemini-2.5-pro"
+    model_name = "gemini-3-pro-preview"
     start_time = time.time()
 
     try:
-        model = GenerativeModel(model_name)
+        client = get_genai_client()
 
         # Format conversation history if available
         conversation_context = ""
@@ -304,8 +294,6 @@ def generate_chat_response(
             # Add auto-load message if relevant
             if auto_load_message and "Semantically selected" in auto_load_message:
                 prompt += f"\n\nNote: {auto_load_message}"
-
-            response = model.generate_content(prompt)
         else:
             # No document context, just use conversation
             prompt = f"""
@@ -319,14 +307,32 @@ def generate_chat_response(
 
             IMPORTANT: Use plain text formatting for all financial data. Do not use special formatting for dollar amounts or numbers.
             """
-            response = model.generate_content(prompt)
+
+        # Build content for the new SDK
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
+
+        # Generate content config
+        generate_config = types.GenerateContentConfig(
+            temperature=0.7,
+            max_output_tokens=8192,
+        )
+
+        # Generate response using the new SDK
+        response = client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=generate_config,
+        )
 
         duration = time.time() - start_time
+
+        # Extract response text
+        response_text = response.text
 
         logger.info(
             "chat_response_generated",
             extra={
-                "response_length": len(response.text),
+                "response_length": len(response_text),
                 "has_documents": bool(document_texts),
                 "has_history": bool(conversation_history),
                 "duration": duration,
@@ -334,17 +340,21 @@ def generate_chat_response(
         )
 
         # Record AI request metrics
-        # Note: Token counts are not directly available from the response
-        # They would need to be extracted from usage_metadata if available
+        input_tokens = None
+        output_tokens = None
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            input_tokens = getattr(response.usage_metadata, "prompt_token_count", None)
+            output_tokens = getattr(response.usage_metadata, "candidates_token_count", None)
+
         record_ai_request(
             model=model_name,
             duration=duration,
             success=True,
-            input_tokens=None,  # Would need to access response.usage_metadata if available
-            output_tokens=None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
-        return response.text
+        return response_text
 
     except Exception as e:
         duration = time.time() - start_time

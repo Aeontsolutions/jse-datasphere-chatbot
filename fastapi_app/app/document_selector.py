@@ -10,9 +10,10 @@ import json
 import time
 from typing import Dict, List, Optional, Tuple
 
-import google.generativeai as genai
+from google.genai import types
 
 from app.config import S3DownloadConfig, get_config
+from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.s3_client import (
     DownloadResult,
@@ -65,7 +66,8 @@ def semantic_document_selection_llm_fallback(query, metadata, conversation_histo
     try:
         # Fallback to traditional approach if caching fails
         logger.info("Cache unavailable, using traditional LLM fallback (~20s expected)")
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
+        client = get_genai_client()
+        model_name = "gemini-3-flash-preview"
 
         # Format metadata in a readable format for the LLM
         metadata_str = json.dumps(metadata, indent=2)
@@ -116,18 +118,43 @@ def semantic_document_selection_llm_fallback(query, metadata, conversation_histo
         ONLY return valid JSON. Do not include any explanations or text outside the JSON structure.
         """
 
-        response = model.generate_content(prompt)
+        # Build content for the new SDK
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
+
+        # Generate content config
+        generate_config = types.GenerateContentConfig(
+            temperature=0.3,  # Lower temperature for more deterministic JSON output
+            max_output_tokens=2048,
+        )
+
+        # Generate response using the new SDK
+        response = client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=generate_config,
+        )
         response_text = response.text
 
         # Extract the JSON part from the response
         try:
-            # Try to find JSON in the response
-            json_start = response_text.find("{")
-            json_end = response_text.rfind("}") + 1
-            if json_start >= 0 and json_end > json_start:
-                response_text = response_text[json_start:json_end]
+            # Strip markdown code blocks if present (```json ... ``` or ``` ... ```)
+            clean_text = response_text.strip()
+            if clean_text.startswith("```"):
+                # Remove opening ```json or ```
+                first_newline = clean_text.find("\n")
+                if first_newline != -1:
+                    clean_text = clean_text[first_newline + 1 :]
+                # Remove closing ```
+                if clean_text.endswith("```"):
+                    clean_text = clean_text[:-3].strip()
 
-            recommendation = json.loads(response_text)
+            # Try to find JSON in the response
+            json_start = clean_text.find("{")
+            json_end = clean_text.rfind("}") + 1
+            if json_start >= 0 and json_end > json_start:
+                clean_text = clean_text[json_start:json_end]
+
+            recommendation = json.loads(clean_text)
 
             logger.info("Successfully completed LLM fallback with traditional approach")
 
