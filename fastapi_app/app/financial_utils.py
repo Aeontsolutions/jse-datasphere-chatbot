@@ -8,11 +8,20 @@ import google.generativeai as genai
 from google.cloud import bigquery
 from google.oauth2 import service_account
 
+# DSPy integration (optional, graceful fallback)
+from app.dspy_modules import (
+    configure_dspy_lm,
+    get_query_parser,
+    get_response_formatter,
+)
 from app.logging_config import get_logger
 from app.models import FinancialDataFilters, FinancialDataRecord
 from app.utils.monitoring import record_ai_request, record_bigquery_query
 
 logger = get_logger(__name__)
+
+# Feature flag for DSPy usage (default: False for safe rollout)
+USE_DSPY = os.getenv("USE_DSPY", "false").lower() in ("true", "1", "yes")
 
 
 def get_row_attr(row, attr):
@@ -68,6 +77,7 @@ class FinancialDataManager:
             )
 
         self._initialize_ai_model()
+        self._initialize_dspy()
         try:
             self._initialize_bigquery_client()
             self.load_metadata_from_bigquery()
@@ -127,6 +137,28 @@ class FinancialDataManager:
         except Exception as e:
             logger.error(f"❌ Failed to initialize Gemini AI model: {e}")
             self.model = None
+
+    def _initialize_dspy(self):
+        """Initialize DSPy if enabled via feature flag."""
+        self.use_dspy = USE_DSPY
+        self.dspy_query_parser = None
+        self.dspy_response_formatter = None
+
+        if not self.use_dspy:
+            logger.info("DSPy disabled (USE_DSPY=false). Using Gemini directly.")
+            return
+
+        try:
+            if configure_dspy_lm():
+                self.dspy_query_parser = get_query_parser()
+                self.dspy_response_formatter = get_response_formatter()
+                logger.info("✅ DSPy initialized successfully")
+            else:
+                logger.warning("❌ DSPy configuration failed, falling back to Gemini")
+                self.use_dspy = False
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize DSPy: {e}")
+            self.use_dspy = False
 
     def load_metadata_from_bigquery(self):
         """Load metadata (companies, symbols, years, standard_items, associations) from BigQuery."""
@@ -295,13 +327,116 @@ class FinancialDataManager:
 
         return "\n".join(context_items)
 
+    def _build_metadata_context(self) -> str:
+        """Build metadata context string for DSPy modules."""
+        if not self.metadata:
+            return ""
+
+        parts = []
+        if self.metadata.get("companies"):
+            companies_preview = self.metadata["companies"][:15]
+            parts.append(f"Companies: {', '.join(companies_preview)}...")
+        if self.metadata.get("symbols"):
+            parts.append(f"Symbols: {', '.join(self.metadata['symbols'])}")
+        if self.metadata.get("years"):
+            parts.append(f"Years: {', '.join(self.metadata['years'])}")
+        if self.metadata.get("standard_items"):
+            parts.append(f"Metrics: {', '.join(self.metadata['standard_items'])}")
+
+        # Add symbol-company mappings
+        if self.metadata.get("associations", {}).get("symbol_to_company"):
+            mappings = []
+            for symbol, companies in self.metadata["associations"]["symbol_to_company"].items():
+                mappings.append(f"{symbol}: {', '.join(companies)}")
+            parts.append(f"Symbol-Company Mappings:\n{chr(10).join(mappings)}")
+
+        return "\n".join(parts)
+
+    def _parse_with_dspy(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        last_query_data: Optional[Dict] = None,
+    ) -> Optional[FinancialDataFilters]:
+        """Parse query using DSPy module with post-processing."""
+        start_time = time.time()
+
+        try:
+            conversation_context = self.get_conversation_context(conversation_history)
+            metadata_context = self._build_metadata_context()
+
+            result = self.dspy_query_parser.parse(
+                query=query,
+                conversation_context=conversation_context,
+                available_metadata=metadata_context,
+            )
+
+            if result is None:
+                return None
+
+            # Apply same post-processing as Gemini path
+            # Normalize standard_items synonyms
+            if result.get("standard_items"):
+                metric_synonyms = {
+                    "net profit": "net_profit",
+                    "gross profit": "gross_profit",
+                    "revenue": "revenue",
+                    "eps": "eps",
+                    "profit": "net_profit",
+                    "net profit margin": "net_profit_margin",
+                    "gross profit margin": "gross_profit_margin",
+                    "operating profit": "operating_profit",
+                    "operating income": "operating_profit",
+                    "return on equity": "roe",
+                    "return on asset": "roa",
+                    "return on assets": "roa",
+                    "current ratio": "current_ratio",
+                    "debt to equity ratio": "debt_to_equity_ratio",
+                    "efficiency ratio": "efficiency_ratio",
+                }
+                result["standard_items"] = [
+                    metric_synonyms.get(item.lower(), item.replace(" ", "_"))
+                    for item in result["standard_items"]
+                ]
+
+            # Handle follow-up context from last query
+            if result.get("is_follow_up") and last_query_data:
+                last_filters = last_query_data.get("filters", {})
+                if not result.get("companies") and not result.get("symbols"):
+                    result["companies"] = last_filters.get("companies", [])
+                    result["symbols"] = last_filters.get("symbols", [])
+                if not result.get("years") and last_filters.get("years"):
+                    result["years"] = last_filters.get("years", [])
+                if not result.get("standard_items") and last_filters.get("standard_items"):
+                    result["standard_items"] = last_filters.get("standard_items", [])
+
+            # Post-process using associations
+            if self.metadata and "associations" in self.metadata:
+                result = self._post_process_filters(result)
+
+            duration = time.time() - start_time
+            logger.info(f"DSPy query parsing completed in {duration:.2f}s")
+
+            return FinancialDataFilters(**result)
+
+        except Exception as e:
+            logger.error(f"DSPy query parsing error: {e}")
+            return None
+
     def parse_user_query(
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         last_query_data: Optional[Dict] = None,
     ) -> FinancialDataFilters:
-        """Use Gemini to parse user query and extract filter parameters with conversation context"""
+        """Use DSPy or Gemini to parse user query and extract filter parameters with conversation context"""
+
+        # Try DSPy first if enabled
+        if self.use_dspy and self.dspy_query_parser:
+            dspy_result = self._parse_with_dspy(query, conversation_history, last_query_data)
+            if dspy_result is not None:
+                return dspy_result
+            logger.warning("DSPy parsing failed, falling back to Gemini")
 
         if not self.model:
             # Fallback to basic parsing if AI model is not available
@@ -921,6 +1056,56 @@ class FinancialDataManager:
 
         return False
 
+    def _format_with_dspy(
+        self,
+        records: List[FinancialDataRecord],
+        query: str,
+        interpretation: str,
+        is_follow_up: bool = False,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        recommend_deep_research: bool = False,
+    ) -> Optional[str]:
+        """Format response using DSPy module."""
+        try:
+            # Prepare data summary
+            data_summary = json.dumps([r.dict() for r in records[:20]], indent=2)
+
+            # Get conversation context
+            conversation_context = ""
+            if is_follow_up and conversation_history:
+                recent_messages = conversation_history[-4:]
+                conversation_context = "\n".join(
+                    [
+                        f"{msg.get('role', 'unknown')}: {msg.get('content', '')}"
+                        for msg in recent_messages
+                    ]
+                )
+
+            result = self.dspy_response_formatter.format(
+                query=query,
+                interpretation=interpretation,
+                data_summary=data_summary,
+                record_count=len(records),
+                is_follow_up=is_follow_up,
+                conversation_context=conversation_context,
+                recommend_deep_research=recommend_deep_research,
+            )
+
+            if result is None:
+                return None
+
+            response = result.get("response", "")
+
+            # Append Deep Research recommendation if needed and not already included
+            if recommend_deep_research and "deep research" not in response.lower():
+                response += "\n\nFor more comprehensive financial information and detailed analysis, you might want to try Deep Research, our comprehensive research tool."
+
+            return response
+
+        except Exception as e:
+            logger.error(f"DSPy response formatting error: {e}")
+            return None
+
     def format_response(
         self,
         records: List[FinancialDataRecord],
@@ -935,6 +1120,20 @@ class FinancialDataManager:
         should_recommend_deep_research = self._should_recommend_deep_research(
             records, query, interpretation
         )
+
+        # Try DSPy first if enabled and we have records
+        if self.use_dspy and self.dspy_response_formatter and records:
+            dspy_result = self._format_with_dspy(
+                records=records,
+                query=query,
+                interpretation=interpretation,
+                is_follow_up=is_follow_up,
+                conversation_history=conversation_history,
+                recommend_deep_research=should_recommend_deep_research,
+            )
+            if dspy_result is not None:
+                return dspy_result
+            logger.warning("DSPy formatting failed, falling back to Gemini")
 
         if not records:
             if should_recommend_deep_research:
