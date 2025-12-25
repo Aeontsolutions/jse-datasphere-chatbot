@@ -6,6 +6,7 @@ All configuration values are loaded from environment variables with proper valid
 """
 
 import json
+import os
 from typing import Optional
 
 from pydantic import Field, field_validator
@@ -84,8 +85,7 @@ class RedisConfig(BaseSettings):
 
     url: Optional[str] = Field(
         default=None,
-        alias="REDIS_URL",
-        description="Redis connection URL (environment variable: REDIS_URL)",
+        description="Redis connection URL (checks REDIS_URL, RedisUrl, REDISURL)",
     )
     ttl_seconds: int = Field(default=900, description="TTL for job data in seconds")
     max_progress_history: int = Field(default=50, description="Max progress updates to retain")
@@ -96,6 +96,22 @@ class RedisConfig(BaseSettings):
         case_sensitive=False,
         extra="ignore",  # Ignore extra environment variables
     )
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def check_multiple_redis_env_vars(cls, v: Optional[str]) -> Optional[str]:
+        """
+        Check multiple environment variable names for Redis URL.
+
+        AWS Copilot injects CloudFormation outputs as uppercase env vars without underscores,
+        so 'RedisUrl' output becomes 'REDISURL'. This validator ensures compatibility with:
+        - REDIS_URL (standard)
+        - RedisUrl (CloudFormation output naming)
+        - REDISURL (Copilot injection)
+        """
+        if v:
+            return v
+        return os.getenv("REDIS_URL") or os.getenv("RedisUrl") or os.getenv("REDISURL")
 
 
 class S3DownloadConfig(BaseSettings):
