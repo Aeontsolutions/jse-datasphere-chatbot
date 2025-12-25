@@ -199,10 +199,14 @@ async def execute_financial_query(
     start_time = time.time()
 
     try:
-        # Build filters from tool arguments
-        symbols = [s.upper() for s in args.get("symbols", [])]
-        years = [str(y) for y in args.get("years", [])]
-        standard_items = [item.lower().replace(" ", "_") for item in args.get("standard_items", [])]
+        # Build filters from tool arguments (handle None values from LLM)
+        raw_symbols = args.get("symbols") or []
+        raw_years = args.get("years") or []
+        raw_items = args.get("standard_items") or []
+
+        symbols = [s.upper() for s in raw_symbols if s]
+        years = [str(y) for y in raw_years if y]
+        standard_items = [item.lower().replace(" ", "_") for item in raw_items if item]
 
         filters = FinancialDataFilters(
             companies=[],
@@ -559,25 +563,47 @@ Examples:
             # Default to both on parse failure
             return {"financial": True, "web_search": True}
 
-    def _optimize_prompt(
+    async def _optimize_prompt(
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """
-        Optimize/disambiguate the user prompt considering conversation history.
+        Optimize/disambiguate the user prompt by resolving pronouns and references.
 
-        Resolves pronouns and contextual references like "it", "they",
-        "that company", "those numbers" to their specific entities.
+        Uses Gemini 2.5 Flash to resolve contextual references like "it", "they",
+        "their", "that company" to their specific entities based on conversation history.
 
         Args:
             query: User's current query
             conversation_history: Previous conversation messages
 
         Returns:
-            Optimized query with resolved references
+            Optimized query with resolved references (or original if no history)
         """
         if not conversation_history:
+            return query
+
+        # Check if query contains pronouns or references that need resolution
+        needs_resolution = any(
+            word in query.lower()
+            for word in [
+                "their",
+                "they",
+                "them",
+                "it",
+                "its",
+                "this",
+                "that",
+                "these",
+                "those",
+                "the company",
+                "the stock",
+                "same",
+            ]
+        )
+
+        if not needs_resolution:
             return query
 
         # Build context from recent history (last 3 exchanges = 6 messages)
@@ -590,15 +616,60 @@ Examples:
 
         context = "\n".join(context_parts)
 
-        # Create optimized prompt that includes context
-        optimized = f"""Given this conversation context:
-{context}
+        # Use Gemini 2.5 Flash for fast pronoun resolution
+        system_instruction = """You are a query rewriter. Your ONLY job is to resolve pronouns and references.
 
-The user now asks: "{query}"
+Given conversation context and a query, rewrite the query by replacing all pronouns and references
+(like "their", "they", "it", "the company", "this", "that") with the specific entities they refer to.
 
-Resolve any pronouns or references (like "it", "they", "that company", "those numbers", "what about") to their specific entities based on the conversation context. Then answer the question."""
+IMPORTANT:
+- Output ONLY the rewritten query, nothing else
+- Keep the same intent and meaning
+- If you can't determine what a pronoun refers to, keep the original query
+- Do not add explanations or commentary
 
-        return optimized
+Examples:
+Context: "user: What is NCB's revenue?  assistant: NCB's revenue was $5M."
+Query: "What about their profit?"
+Output: What is NCB's profit?
+
+Context: "user: Tell me about GraceKennedy  assistant: GK is a conglomerate..."
+Query: "How did they perform in 2023?"
+Output: How did GraceKennedy perform in 2023?"""
+
+        contents = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=f"Context:\n{context}\n\nQuery: {query}")],
+            )
+        ]
+
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.1,  # Low for deterministic output
+            max_output_tokens=256,  # Short output - just the rewritten query
+        )
+
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
+                config=config,
+            )
+
+            optimized = response.text.strip() if response.text else query
+            # Remove quotes if the model wrapped the output
+            if optimized.startswith('"') and optimized.endswith('"'):
+                optimized = optimized[1:-1]
+            if optimized.startswith("'") and optimized.endswith("'"):
+                optimized = optimized[1:-1]
+
+            logger.info(f"Prompt optimization: '{query}' -> '{optimized}'")
+            return optimized
+
+        except Exception as e:
+            logger.warning(f"Prompt optimization failed: {e}, using original query")
+            return query
 
     def _get_available_metadata_context(self) -> str:
         """
@@ -690,8 +761,8 @@ You can use both tools together for comprehensive answers."""
         if not enable_web_search and not enable_financial_data:
             return self._build_no_tools_response(query, conversation_history)
 
-        # Step 1: Optimize prompt
-        optimized_query = self._optimize_prompt(query, conversation_history)
+        # Step 1: Optimize prompt (resolve pronouns/references from conversation context)
+        optimized_query = await self._optimize_prompt(query, conversation_history)
 
         # Step 2: Route query to determine which tools to use
         routing = await self._route_query(

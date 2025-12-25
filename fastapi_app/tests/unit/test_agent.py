@@ -355,3 +355,124 @@ class TestBuildFinancialContext:
         assert "GraceKennedy" in result
         assert "revenue" in result
         assert "2023" in result
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestOptimizePrompt:
+    """Test the prompt optimization for pronoun resolution."""
+
+    async def test_no_optimization_without_history(self, orchestrator):
+        """Query without conversation history should return unchanged."""
+        result = await orchestrator._optimize_prompt(
+            query="What is GK revenue?",
+            conversation_history=None,
+        )
+        assert result == "What is GK revenue?"
+
+    async def test_no_optimization_without_pronouns(self, orchestrator):
+        """Query without pronouns should return unchanged."""
+        result = await orchestrator._optimize_prompt(
+            query="What is GK revenue for 2023?",
+            conversation_history=[
+                {"role": "user", "content": "Tell me about NCB"},
+                {"role": "assistant", "content": "NCB is a bank..."},
+            ],
+        )
+        assert result == "What is GK revenue for 2023?"
+
+    async def test_optimization_with_pronoun_calls_llm(self, orchestrator):
+        """Query with pronouns should call LLM for resolution."""
+        mock_response = MagicMock()
+        mock_response.text = "What is GraceKennedy's revenue for the last 5 years?"
+
+        orchestrator.client.models.generate_content = MagicMock(return_value=mock_response)
+
+        result = await orchestrator._optimize_prompt(
+            query="What was their revenue for the last 5 years?",
+            conversation_history=[
+                {"role": "user", "content": "Tell me about GraceKennedy"},
+                {"role": "assistant", "content": "GK is a conglomerate..."},
+            ],
+        )
+
+        # LLM should have been called
+        orchestrator.client.models.generate_content.assert_called_once()
+        assert result == "What is GraceKennedy's revenue for the last 5 years?"
+
+    async def test_optimization_handles_llm_failure(self, orchestrator):
+        """LLM failure should return original query."""
+        orchestrator.client.models.generate_content = MagicMock(side_effect=Exception("API error"))
+
+        result = await orchestrator._optimize_prompt(
+            query="What was their revenue?",
+            conversation_history=[
+                {"role": "user", "content": "Tell me about GK"},
+            ],
+        )
+
+        # Should fall back to original query
+        assert result == "What was their revenue?"
+
+    async def test_optimization_removes_quotes(self, orchestrator):
+        """LLM response with quotes should have quotes stripped."""
+        mock_response = MagicMock()
+        mock_response.text = '"What is NCB revenue?"'
+
+        orchestrator.client.models.generate_content = MagicMock(return_value=mock_response)
+
+        result = await orchestrator._optimize_prompt(
+            query="What is their revenue?",
+            conversation_history=[
+                {"role": "user", "content": "Tell me about NCB"},
+            ],
+        )
+
+        assert result == "What is NCB revenue?"
+
+
+@pytest.mark.unit
+class TestExecuteFinancialQueryNullHandling:
+    """Test that execute_financial_query handles null/None values from LLM."""
+
+    def test_null_symbols_handled(self, mock_financial_manager):
+        """Null symbols in args should not cause error."""
+        from app.agent import execute_financial_query
+        import asyncio
+
+        # Mock the query_data method
+        mock_financial_manager.query_data = MagicMock(return_value=[])
+        mock_financial_manager.metadata = {"associations": {}}
+        mock_financial_manager._post_process_filters = MagicMock(side_effect=lambda x: x)
+
+        # Args with null values (as LLM might return)
+        args = {"symbols": None, "years": ["2023"], "standard_items": ["revenue"]}
+
+        # Should not raise NoneType error
+        result = asyncio.get_event_loop().run_until_complete(
+            execute_financial_query(mock_financial_manager, args)
+        )
+
+        records, filters, chart, sources = result
+        assert filters.symbols == []  # Should be empty list, not None
+
+    def test_all_null_args_handled(self, mock_financial_manager):
+        """All null args should not cause error."""
+        from app.agent import execute_financial_query
+        import asyncio
+
+        mock_financial_manager.query_data = MagicMock(return_value=[])
+        mock_financial_manager.metadata = {"associations": {}}
+        mock_financial_manager._post_process_filters = MagicMock(side_effect=lambda x: x)
+
+        # All null values
+        args = {"symbols": None, "years": None, "standard_items": None}
+
+        result = asyncio.get_event_loop().run_until_complete(
+            execute_financial_query(mock_financial_manager, args)
+        )
+
+        records, filters, chart, sources = result
+        assert filters.symbols == []
+        assert filters.years == []
+        assert filters.standard_items == []
