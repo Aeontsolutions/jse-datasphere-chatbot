@@ -211,16 +211,22 @@ async def execute_financial_query(
             if chart_data:
                 chart_spec = chart_data
 
-        # Build source citations
+        # Build source citations with explicit metadata
         symbols_str = ", ".join(filters.symbols) if filters.symbols else "all"
         years_str = ", ".join(filters.years) if filters.years else "all years"
-        sources = [
-            {
-                "type": "database",
-                "description": f"JSE Financial Database: {symbols_str} ({years_str})",
-                "table": "financial_data",
-            }
-        ]
+        source_entry = {
+            "type": "database",
+            "description": f"JSE Financial Database: {symbols_str} ({years_str})",
+            "table": "financial_data",
+        }
+        # Add explicit lists for filtering/display (backwards compatible - new fields)
+        if filters.symbols:
+            source_entry["symbols"] = filters.symbols
+        if filters.years:
+            source_entry["years"] = filters.years
+        if filters.standard_items:
+            source_entry["metrics"] = filters.standard_items
+        sources = [source_entry]
 
         duration_ms = (time.time() - start_time) * 1000
         logger.info(
@@ -911,20 +917,61 @@ Cite your sources."""
                     chunks = []
                     for chunk in grounding.grounding_chunks:
                         if hasattr(chunk, "web") and chunk.web:
+                            web = chunk.web
+                            # Extract all available fields from the web chunk
+                            title = getattr(web, "title", None)
+                            uri = getattr(web, "uri", None)
+                            domain = getattr(web, "domain", None)
+
                             chunk_info = {
-                                "title": chunk.web.title if hasattr(chunk.web, "title") else None,
-                                "uri": chunk.web.uri if hasattr(chunk.web, "uri") else None,
+                                "title": title,
+                                "uri": uri,
+                                "domain": domain,
                             }
                             chunks.append(chunk_info)
-                            if chunk_info["title"]:
-                                sources.append(
-                                    {
-                                        "type": "web",
-                                        "description": chunk_info["title"],
-                                        "url": chunk_info.get("uri", ""),
-                                    }
-                                )
+
+                            # Build source citation with complete URL
+                            # Only add if we have either a title or URL
+                            if title or uri:
+                                source_entry = {
+                                    "type": "web",
+                                    "description": title
+                                    or domain
+                                    or "Web Source",  # backwards compat
+                                    "title": title,  # explicit title field
+                                }
+                                # Only include url if we have one (avoid empty strings)
+                                if uri:
+                                    source_entry["url"] = uri
+                                # Include domain if available
+                                if domain:
+                                    source_entry["domain"] = domain
+                                sources.append(source_entry)
                     search_results["grounding_chunks"] = chunks
+
+                # Extract grounding supports - maps response text segments to source chunks
+                if hasattr(grounding, "grounding_supports") and grounding.grounding_supports:
+                    supports = []
+                    for support in grounding.grounding_supports:
+                        support_entry = {}
+                        # Extract segment info (text range in response)
+                        if hasattr(support, "segment") and support.segment:
+                            segment = support.segment
+                            support_entry["text_start"] = getattr(segment, "start_index", None)
+                            support_entry["text_end"] = getattr(segment, "end_index", None)
+                            support_entry["text"] = getattr(segment, "text", None)
+                        # Extract chunk indices (which sources support this text)
+                        if hasattr(support, "grounding_chunk_indices"):
+                            indices = support.grounding_chunk_indices
+                            support_entry["chunk_indices"] = list(indices) if indices else []
+                        # Extract confidence scores (may be empty for Gemini 2.5+)
+                        if hasattr(support, "confidence_scores"):
+                            scores = support.confidence_scores
+                            support_entry["confidence_scores"] = list(scores) if scores else []
+                        if support_entry:
+                            supports.append(support_entry)
+                    if supports:
+                        search_results["grounding_supports"] = supports
 
                 if hasattr(grounding, "web_search_queries") and grounding.web_search_queries:
                     search_results["search_queries"] = list(grounding.web_search_queries)
@@ -1081,21 +1128,53 @@ Provide a clear, well-cited response with follow-up suggestions."""
                 chunks = []
                 for chunk in grounding.grounding_chunks:
                     if hasattr(chunk, "web") and chunk.web:
+                        web = chunk.web
+                        # Extract all available fields from the web chunk
+                        title = getattr(web, "title", None)
+                        uri = getattr(web, "uri", None)
+                        domain = getattr(web, "domain", None)
+
                         chunk_info = {
-                            "title": chunk.web.title if hasattr(chunk.web, "title") else None,
-                            "uri": chunk.web.uri if hasattr(chunk.web, "uri") else None,
+                            "title": title,
+                            "uri": uri,
+                            "domain": domain,
                         }
                         chunks.append(chunk_info)
-                        # Add to sources
-                        if chunk_info["title"]:
-                            sources.append(
-                                {
-                                    "type": "web",
-                                    "description": chunk_info["title"],
-                                    "url": chunk_info.get("uri", ""),
-                                }
-                            )
+
+                        # Build source citation with complete URL
+                        if title or uri:
+                            source_entry = {
+                                "type": "web",
+                                "description": title or domain or "Web Source",  # backwards compat
+                                "title": title,  # explicit title field
+                            }
+                            if uri:
+                                source_entry["url"] = uri
+                            if domain:
+                                source_entry["domain"] = domain
+                            sources.append(source_entry)
                 web_search_results["grounding_chunks"] = chunks
+
+            # Extract grounding supports - maps response text segments to source chunks
+            if hasattr(grounding, "grounding_supports") and grounding.grounding_supports:
+                supports = []
+                for support in grounding.grounding_supports:
+                    support_entry = {}
+                    if hasattr(support, "segment") and support.segment:
+                        segment = support.segment
+                        support_entry["text_start"] = getattr(segment, "start_index", None)
+                        support_entry["text_end"] = getattr(segment, "end_index", None)
+                        support_entry["text"] = getattr(segment, "text", None)
+                    if hasattr(support, "grounding_chunk_indices"):
+                        indices = support.grounding_chunk_indices
+                        support_entry["chunk_indices"] = list(indices) if indices else []
+                    if hasattr(support, "confidence_scores"):
+                        scores = support.confidence_scores
+                        support_entry["confidence_scores"] = list(scores) if scores else []
+                    if support_entry:
+                        supports.append(support_entry)
+                if supports:
+                    web_search_results["grounding_supports"] = supports
 
             if hasattr(grounding, "web_search_queries") and grounding.web_search_queries:
                 web_search_results["search_queries"] = list(grounding.web_search_queries)

@@ -347,8 +347,9 @@ class AgentChatResponse(BaseModel):
     )
 
     # === NEW FIELDS (agent-specific, additive only) ===
-    sources: Optional[List[Dict[str, str]]] = Field(
-        default=None, description="List of sources cited in the response"
+    sources: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="List of sources cited in the response (values may be strings or lists)",
     )
     web_search_results: Optional[Dict[str, Any]] = Field(
         default=None, description="Google Search grounding metadata"
