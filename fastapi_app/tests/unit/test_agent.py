@@ -8,6 +8,7 @@ from app.agent import (
     FINANCIAL_KEYWORDS,
     WEB_SEARCH_KEYWORDS,
     YEAR_PATTERN,
+    VAGUE_PERFORMANCE_PATTERNS,
 )
 
 
@@ -58,6 +59,11 @@ class TestQueryRoutingConstants:
         """Year pattern should not match invalid years."""
         assert not YEAR_PATTERN.search("1999")
         assert not YEAR_PATTERN.search("no year here")
+
+    def test_vague_performance_patterns_include_key_phrases(self):
+        """Vague performance patterns should include common vague phrases."""
+        expected = {"how well did", "how did", "perform", "tell me about", "overview"}
+        assert expected.issubset(VAGUE_PERFORMANCE_PATTERNS)
 
 
 @pytest.mark.unit
@@ -165,6 +171,61 @@ class TestQueryRoutingRuleBased:
         assert result["use_financial"] is False
         assert result["use_web_search"] is False
         assert result["routing_method"] == "disabled"
+
+    async def test_route_vague_query_with_symbol_uses_both(self, orchestrator):
+        """Vague performance query with symbol should route to BOTH tools."""
+        result = await orchestrator._route_query(
+            query="How well did GK perform in 2023?",
+            enable_web_search=True,
+            enable_financial_data=True,
+        )
+        assert result["use_financial"] is True
+        assert result["use_web_search"] is True
+        assert result["routing_method"] == "rule_based"
+        assert result.get("reason") == "vague_performance_query"
+
+    async def test_route_vague_query_how_did_with_symbol(self, orchestrator):
+        """'How did X do' pattern with symbol should route to BOTH tools."""
+        result = await orchestrator._route_query(
+            query="How did NCB do last year?",
+            enable_web_search=True,
+            enable_financial_data=True,
+        )
+        assert result["use_financial"] is True
+        assert result["use_web_search"] is True
+        assert result["routing_method"] == "rule_based"
+
+    async def test_route_vague_query_tell_me_about(self, orchestrator):
+        """'Tell me about X' pattern with symbol should route to BOTH tools."""
+        result = await orchestrator._route_query(
+            query="Tell me about GK performance in 2023",
+            enable_web_search=True,
+            enable_financial_data=True,
+        )
+        assert result["use_financial"] is True
+        assert result["use_web_search"] is True
+
+    async def test_route_vague_query_overview(self, orchestrator):
+        """'Overview of X' pattern with symbol should route to BOTH tools."""
+        result = await orchestrator._route_query(
+            query="Give me an overview of CPJ for 2023",
+            enable_web_search=True,
+            enable_financial_data=True,
+        )
+        assert result["use_financial"] is True
+        assert result["use_web_search"] is True
+
+    async def test_route_specific_metric_not_vague(self, orchestrator):
+        """Query with specific metric should NOT be treated as vague."""
+        # Even though it has "how well", it specifies "revenue" so it's not vague
+        result = await orchestrator._route_query(
+            query="What is GK revenue for 2023?",
+            enable_web_search=True,
+            enable_financial_data=True,
+        )
+        # Should route to financial only since it has a specific metric
+        assert result["use_financial"] is True
+        assert result["use_web_search"] is False
 
 
 @pytest.mark.unit

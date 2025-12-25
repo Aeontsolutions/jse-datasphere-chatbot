@@ -101,6 +101,26 @@ WEB_SEARCH_KEYWORDS = {
 # Year pattern for detecting financial year references
 YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 
+# Vague performance patterns - queries that mention a company but don't specify
+# what metrics they want. These should trigger BOTH tools since the financial
+# tool can't extract specific metrics from vague queries.
+VAGUE_PERFORMANCE_PATTERNS = {
+    "how well did",
+    "how did",
+    "how has",
+    "how is",
+    "how are",
+    "how was",
+    "perform",  # catches "perform", "performed", "performing"
+    "doing",
+    "fared",
+    "going",
+    "tell me about",
+    "what about",
+    "overview",
+    "summary",
+}
+
 
 # ==============================================================================
 # TOOL DECLARATIONS
@@ -386,7 +406,31 @@ class AgentOrchestrator:
                 has_web_signal = True
                 break
 
+        # Check for vague performance patterns - these indicate the user wants
+        # general info without specifying metrics, so we need both tools
+        has_vague_pattern = False
+        for pattern in VAGUE_PERFORMANCE_PATTERNS:
+            if pattern in query_lower:
+                has_vague_pattern = True
+                break
+
         # === ROUTING DECISION ===
+
+        # Vague query with symbol/year: user asks about company performance without
+        # specifying metrics -> use BOTH tools to provide comprehensive response
+        if has_vague_pattern and (has_symbol or has_year):
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                f"Query routing: both_tools (vague_performance) in {duration_ms:.2f}ms | "
+                f"symbol={has_symbol}, year={has_year}, vague_pattern=True"
+            )
+            return {
+                "use_financial": True,
+                "use_web_search": True,
+                "routing_method": "rule_based",
+                "confidence": "medium",
+                "reason": "vague_performance_query",
+            }
 
         # Clear financial-only signal: has symbol/year + financial keywords, no web keywords
         if has_financial_signal and not has_web_signal:
