@@ -1,0 +1,55 @@
+name: Lint
+
+on:
+  push:
+    branches: [main, refactor]
+  pull_request:
+    branches: [main, refactor]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-lint-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-lint-
+
+    - name: Install dependencies
+      run: |
+        cd fastapi_app
+        python -m pip install --upgrade pip
+        pip install black ruff mypy
+
+    - name: Run Black (Check Only)
+      run: |
+        cd fastapi_app
+        black --check --diff .
+
+    - name: Run Ruff
+      run: |
+        cd fastapi_app
+        ruff check .
+
+    - name: Run MyPy (Type Checking)
+      continue-on-error: true
+      run: |
+        cd fastapi_app
+        mypy app/ || echo "MyPy type checking found issues - review recommended"
+
+    - name: Check for common security issues
+      run: |
+        cd fastapi_app
+        pip install bandit
+        bandit -r app/ -ll || true

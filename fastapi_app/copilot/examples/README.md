@@ -1,6 +1,6 @@
 # AWS Copilot Configuration Examples
 
-**Version:** 1.0.0  
+**Version:** 1.0.0
 **Last Updated:** 2025-01-XX
 
 This directory contains sanitized example AWS Copilot configuration files that are safe to commit to GitHub. All sensitive information (API keys, credentials, etc.) has been replaced with placeholders.
@@ -196,5 +196,3 @@ For issues or questions:
 ---
 
 **Note:** These are example files. Always review and customize them for your specific use case before deployment.
-
-

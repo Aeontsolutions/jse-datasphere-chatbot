@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jacie Streaming Chat Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .chat-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            margin-bottom: 15px;
+            box-sizing: border-box;
+        }
+        .btn {
+            background: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        .btn:hover { background: #0056b3; }
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .progress-container {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border-left: 4px solid #007bff;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #007bff, #28a745);
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+        .status-message {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .step-info {
+            font-size: 14px;
+            color: #666;
+        }
+        .response-container {
+            margin: 20px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border-left: 4px solid #28a745;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border-left-color: #dc3545;
+        }
+        .hidden { display: none; }
+        .options {
+            margin: 15px 0;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 6px;
+        }
+        .option {
+            margin: 8px 0;
+        }
+        .option label {
+            margin-left: 8px;
+            font-weight: 500;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .endpoint-selection {
+            margin-bottom: 20px;
+        }
+        .endpoint-btn {
+            background: #6c757d;
+            margin-right: 10px;
+        }
+        .endpoint-btn.active {
+            background: #007bff;
+        }
+        .debug-panel {
+            transition: all 0.3s ease;
+        }
+        .debug-panel:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .progress-container.connecting {
+            border-left-color: #ffc107;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Jacie Streaming Chat Test</h1>
+
+        <div class="endpoint-selection">
+            <button class="btn endpoint-btn active" onclick="selectEndpoint('chat', true)">Deep Research</button>
+            <!--button class="btn endpoint-btn" onclick="selectEndpoint('fast_chat', true)">Fast Chat (Vector DB)</button-->
+            <button class="btn endpoint-btn" onclick="selectEndpoint('fast_chat_v2', false)">Chat</button>
+        </div>
+
+        <div class="options">
+            <div class="option">
+                <input type="checkbox" id="autoLoad" checked>
+                <label for="autoLoad">Auto-load documents</label>
+            </div>
+            <div class="option">
+                <input type="checkbox" id="memoryEnabled" checked>
+                <label for="memoryEnabled">Enable memory (conversation history)</label>
+            </div>
+            <div class="option">
+                <label style="font-weight: 500; margin-right: 15px;">Environment:</label>
+                <label style="margin-right: 15px;">
+                    <input type="radio" name="environment" value="local" checked onchange="updateEnvironment()"> Local
+                </label>
+                <label style="margin-right: 15px;">
+                    <input type="radio" name="environment" value="dev" onchange="updateEnvironment()"> Dev
+                </label>
+                <label>
+                    <input type="radio" name="environment" value="prod" onchange="updateEnvironment()"> Prod
+                </label>
+            </div>
+            <div class="option">
+                <button class="btn" onclick="loadTestQueries()" style="background: #28a745; font-size: 12px; padding: 6px 12px;">Load Test Queries</button>
+                <span style="margin-left: 10px; font-size: 12px; color: #666;">Quick test queries for different scenarios</span>
+            </div>
+        </div>
+
+        <textarea
+            class="chat-input"
+            id="queryInput"
+            placeholder="Ask a question about JSE documents..."
+            rows="3"
+        ></textarea>
+
+        <button class="btn" onclick="startStreamingChat().catch(console.error)" id="sendBtn">
+            Send Message
+        </button>
+        <button class="btn" onclick="clearChat()" style="background: #6c757d;">
+            Clear
+        </button>
+
+        <div class="progress-container hidden" id="progressContainer">
+            <div class="status-message" id="statusMessage">Initializing...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="step-info" id="stepInfo">Step: starting</div>
+            <div id="connectionStatus" style="font-size: 12px; color: #666; margin-top: 5px;">Connecting...</div>
+        </div>
+
+        <div class="response-container hidden" id="responseContainer">
+            <h3>Response:</h3>
+            <div id="responseText"></div>
+            <div id="responseDetails" style="margin-top: 15px; font-size: 14px; color: #666;"></div>
+        </div>
+
+        <!-- Debug Panel for Testing -->
+        <div class="debug-panel" id="debugPanel" style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 6px; border: 1px solid #dee2e6;">
+            <h4 style="margin-top: 0; color: #495057;">🔧 Debug Panel</h4>
+            <div style="margin-bottom: 10px;">
+                <label style="font-weight: 500; margin-right: 10px;">
+                    <input type="checkbox" id="debugMode" onchange="toggleDebugMode()"> Enable Debug Mode
+                </label>
+                <button class="btn" onclick="clearDebugLog()" style="background: #6c757d; font-size: 12px; padding: 6px 12px;">Clear Log</button>
+            </div>
+            <div id="debugLog" style="background: #fff; border: 1px solid #dee2e6; border-radius: 4px; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentEndpoint = 'chat';
+        let useStreaming = true;
+        let conversationHistory = [];
+        let debugMode = false;
+        let connectionStartTime = null;
+        let currentEnvironment = 'local';
+        let activeJobId = null;
+        let jobPollingTimer = null;
+        const JOB_POLL_INTERVAL_MS = 1000;
+
+        // Environment base URLs
+        const environmentUrls = {
+            local: 'http://localhost:8000',
+            dev: 'http://jse-da-Publi-1wgQS45FnwpV-1192199831.us-east-1.elb.amazonaws.com',
+            prod: 'http://jse-da-Publi-ehai7dwBXRyV-969154490.us-east-1.elb.amazonaws.com'
+        };
+
+        function updateEnvironment() {
+            const selected = document.querySelector('input[name="environment"]:checked');
+            if (selected) {
+                currentEnvironment = selected.value;
+                logDebug(`🌐 Environment switched to: ${currentEnvironment} (${environmentUrls[currentEnvironment]})`);
+            }
+        }
+
+        function selectEndpoint(endpoint, streaming) {
+            currentEndpoint = endpoint;
+            useStreaming = streaming;
+
+            // Update button states
+            document.querySelectorAll('.endpoint-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            logDebug(`🔗 Selected endpoint: ${endpoint} (${streaming ? 'Streaming' : 'Non-Streaming'})`);
+        }
+
+        async function startStreamingChat() {
+            const query = document.getElementById('queryInput').value.trim();
+            if (!query) {
+                alert('Please enter a question');
+                return;
+            }
+
+            const autoLoad = document.getElementById('autoLoad').checked;
+            const memoryEnabled = document.getElementById('memoryEnabled').checked;
+
+            // Show progress, hide response
+            document.getElementById('progressContainer').classList.remove('hidden');
+            document.getElementById('responseContainer').classList.add('hidden');
+            document.getElementById('sendBtn').disabled = true;
+            stopJobPolling();
+            activeJobId = null;
+
+            // Reset progress
+            if (useStreaming) {
+                updateProgress('start', 'Starting streaming request...', 0);
+            } else {
+                updateProgress('start', 'Making non-streaming request...', 0);
+            }
+
+            // Start timing
+            connectionStartTime = Date.now();
+
+            // Determine URL based on selected environment and streaming preference
+            const baseUrl = environmentUrls[currentEnvironment];
+            const url = `${baseUrl}/${currentEndpoint}${useStreaming ? '/stream' : ''}`;
+
+            // Log request details
+            const requestType = useStreaming ? 'streaming' : 'non-streaming';
+            logDebug(`🚀 Starting ${requestType} chat request`);
+            logDebug(`📝 Query: "${query}"`);
+            logDebug(`🌐 Environment: ${currentEnvironment}`);
+            logDebug(`🔗 URL: ${url}`);
+            logDebug(`⚙️ Auto-load: ${autoLoad}, Memory: ${memoryEnabled}`);
+
+            // Prepare request data
+            const requestData = {
+                query: query,
+                auto_load_documents: autoLoad,
+                memory_enabled: memoryEnabled,
+                conversation_history: memoryEnabled ? conversationHistory : null
+            };
+
+                        if (useStreaming) {
+                            const response = await fetch(url, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                credentials: 'include',  // Required for sticky session cookies
+                                body: JSON.stringify(requestData)
+                            });
+
+                            if (!response.ok) {
+                                const errorMsg = `HTTP error! status: ${response.status}`;
+                                logDebug(`❌ ${errorMsg}`);
+                                throw new Error(errorMsg);
+                            }
+
+                            const contentType = response.headers.get('content-type') || '';
+                            if (contentType.includes('text/event-stream')) {
+                                logDebug(`✅ Connection established successfully (SSE)`);
+                                document.getElementById('connectionStatus').textContent = 'Connected - Receiving stream...';
+                                document.getElementById('connectionStatus').style.color = '#28a745';
+
+                                const reader = response.body.getReader();
+                                const decoder = new TextDecoder();
+                                let buffer = '';
+
+                                try {
+                                    while (true) {
+                                        const { done, value } = await reader.read();
+
+                                        if (done) {
+                                            const duration = Date.now() - connectionStartTime;
+                                            logDebug(`🏁 Stream completed in ${duration}ms`);
+                                            console.log('Stream completed');
+                                            break;
+                                        }
+
+                                        const chunk = decoder.decode(value, { stream: true });
+                                        buffer += chunk;
+
+                                        const lines = buffer.split('\n');
+                                        buffer = lines.pop() || '';
+
+                                        let currentEvent = '';
+
+                                        for (const line of lines) {
+                                            if (line.trim() === '') continue;
+
+                                            if (debugMode) {
+                                                console.log('Processing line:', line);
+                                            }
+
+                                            if (line.startsWith('event: ')) {
+                                                currentEvent = line.substring(7);
+                                                logDebug(`📡 Event: ${currentEvent}`);
+                                            } else if (line.startsWith('data: ')) {
+                                                const data = line.substring(6);
+                                                logDebug(`📦 Data: ${data.substring(0, 100)}${data.length > 100 ? '...' : ''}`);
+
+                                                try {
+                                                    const parsed = JSON.parse(data);
+                                                    handleStreamEvent(currentEvent || 'unknown', parsed);
+                                                } catch (e) {
+                                                    logDebug(`⚠️ Parse error: ${e.message}`);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch (error) {
+                                    const duration = Date.now() - connectionStartTime;
+                                    logDebug(`💥 Stream error after ${duration}ms: ${error.message}`);
+                                    console.error('Stream processing error:', error);
+                                    showError(`Error: ${error.message}`);
+                                } finally {
+                                    document.getElementById('sendBtn').disabled = false;
+                                }
+                            } else {
+                                logDebug('ℹ️ Server responded with job payload instead of SSE stream');
+                                await handleJobModeResponse(response, baseUrl);
+                            }
+                        } else {
+                // Use non-streaming approach
+                logDebug(`📡 Making non-streaming request to ${url}`);
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    credentials: 'include',  // Required for sticky session cookies
+                    body: JSON.stringify(requestData)
+                });
+
+                if (!response.ok) {
+                    const errorMsg = `HTTP error! status: ${response.status}`;
+                    logDebug(`❌ ${errorMsg}`);
+                    throw new Error(errorMsg);
+                }
+
+                logDebug(`✅ Non-streaming request completed successfully`);
+
+                try {
+                    const result = await response.json();
+                    const duration = Date.now() - connectionStartTime;
+                    logDebug(`🏁 Non-streaming response received in ${duration}ms`);
+
+                    // Update progress to show completion
+                    updateProgress('complete', 'Request completed successfully', 100);
+
+                    // Show result directly (no streaming events)
+                    showResult(result);
+                } catch (error) {
+                    const duration = Date.now() - connectionStartTime;
+                    logDebug(`💥 Non-streaming error after ${duration}ms: ${error.message}`);
+                    console.error('Non-streaming processing error:', error);
+                    showError(`Error: ${error.message}`);
+                } finally {
+                    document.getElementById('sendBtn').disabled = false;
+                }
+            }
+        }
+
+        function handleStreamEvent(event, data) {
+            const duration = Date.now() - connectionStartTime;
+            logDebug(`⏱️ [${duration}ms] Processing ${event} event`);
+
+            if (debugMode) {
+                console.log('Received SSE event:', event, data);
+            }
+
+            switch (event) {
+                case 'progress':
+                    logDebug(`📊 Progress: ${data.step} - ${data.progress}% - ${data.message}`);
+                    if (debugMode) console.log('Processing progress update:', data.step, data.message, data.progress);
+                    updateProgress(data.step, data.message, data.progress, data.details);
+                    break;
+                case 'result':
+                    logDebug(`✅ Final result received`);
+                    if (debugMode) console.log('Processing final result');
+                    showResult(data);
+                    break;
+                case 'error':
+                    logDebug(`❌ Error event: ${data.error}`);
+                    if (debugMode) console.log('Processing error:', data.error);
+                    showError(data.error);
+                    break;
+                case 'heartbeat':
+                    logDebug(`💓 Heartbeat received`);
+                    // Keep connection alive, do nothing
+                    break;
+                default:
+                    logDebug(`❓ Unknown event type: ${event}`);
+                    if (debugMode) console.log('Unknown event type:', event);
+                    break;
+            }
+        }
+
+        async function handleJobModeResponse(response, baseUrl) {
+            try {
+                const jobPayload = await response.json();
+                if (!jobPayload.job_id) {
+                    throw new Error('Invalid job response payload');
+                }
+                const pollingPath = jobPayload.polling_url || `/jobs/${jobPayload.job_id}`;
+                const statusUrl = pollingPath.startsWith('http') ? pollingPath : `${baseUrl}${pollingPath}`;
+                activeJobId = jobPayload.job_id;
+                logDebug(`🆔 Job created: ${jobPayload.job_id}`);
+                document.getElementById('connectionStatus').textContent = 'Job queued - polling status...';
+                document.getElementById('connectionStatus').style.color = '#ffc107';
+                startJobPolling(statusUrl);
+            } catch (error) {
+                logDebug(`❌ Failed to parse job response: ${error.message}`);
+                showError(`Job creation error: ${error.message}`);
+            }
+        }
+
+        function startJobPolling(statusUrl) {
+            stopJobPolling();
+            const poll = async () => {
+                try {
+                    const response = await fetch(statusUrl, {
+                        credentials: 'include'  // Required for sticky session cookies
+                    });
+                    if (!response.ok) {
+                        throw new Error(`Job polling failed (${response.status})`);
+                    }
+                    const jobStatus = await response.json();
+                    handleJobStatus(jobStatus);
+                } catch (error) {
+                    logDebug(`⚠️ Job polling error: ${error.message}`);
+                    stopJobPolling();
+                    showError(`Job polling error: ${error.message}`);
+                }
+            };
+            poll();
+            jobPollingTimer = setInterval(() => {
+                poll();
+            }, JOB_POLL_INTERVAL_MS);
+        }
+
+        function stopJobPolling() {
+            if (jobPollingTimer) {
+                clearInterval(jobPollingTimer);
+                jobPollingTimer = null;
+            }
+        }
+
+        function handleJobStatus(jobStatus) {
+            const status = jobStatus.status || 'unknown';
+            const jobId = jobStatus.job_id || activeJobId || 'unknown';
+            logDebug(`📬 Job status (${jobId}): ${status}`);
+            activeJobId = jobId;
+
+            const statusColors = {
+                queued: '#ffc107',
+                running: '#17a2b8',
+                succeeded: '#28a745',
+                failed: '#dc3545'
+            };
+
+            document.getElementById('connectionStatus').textContent = `Job ${status}`;
+            document.getElementById('connectionStatus').style.color = statusColors[status] || '#17a2b8';
+
+            updateProgressFromJob(jobStatus);
+
+            if (status === 'succeeded') {
+                stopJobPolling();
+                if (jobStatus.result) {
+                    showResult(jobStatus.result);
+                } else {
+                    showError('Job completed without a result payload');
+                }
+            } else if (status === 'failed') {
+                stopJobPolling();
+                showError(jobStatus.error || 'Job failed');
+            }
+        }
+
+        function updateProgressFromJob(jobStatus) {
+            const latest = jobStatus.latest_progress
+                || (jobStatus.progress && jobStatus.progress.length > 0
+                    ? jobStatus.progress[jobStatus.progress.length - 1]
+                    : null);
+            if (latest) {
+                updateProgress(latest.step || 'processing', latest.message || '', latest.progress || 0, latest.details);
+            } else {
+                updateProgress('queued', 'Job queued...', 0);
+            }
+        }
+
+        function updateProgress(step, message, progress, details) {
+            document.getElementById('statusMessage').textContent = message;
+            document.getElementById('progressFill').style.width = progress + '%';
+            document.getElementById('stepInfo').textContent = `Step: ${step}`;
+
+            if (details) {
+                const detailsText = Object.entries(details)
+                    .map(([key, value]) => `${key}: ${value}`)
+                    .join(', ');
+                document.getElementById('stepInfo').textContent += ` (${detailsText})`;
+            }
+        }
+
+        function showResult(result) {
+            stopJobPolling();
+            activeJobId = null;
+            document.getElementById('progressContainer').classList.add('hidden');
+            document.getElementById('responseContainer').classList.remove('hidden');
+            document.getElementById('responseContainer').classList.remove('error');
+
+            document.getElementById('responseText').textContent = result.response;
+
+            let details = [];
+            if (result.documents_loaded && result.documents_loaded.length > 0) {
+                details.push(`Documents loaded: ${result.documents_loaded.length}`);
+            }
+            if (result.document_selection_message) {
+                details.push(`Selection: ${result.document_selection_message}`);
+            }
+
+            document.getElementById('responseDetails').textContent = details.join(' | ');
+
+            // Update conversation history if memory is enabled
+            if (document.getElementById('memoryEnabled').checked && result.conversation_history) {
+                conversationHistory = result.conversation_history;
+            }
+
+            document.getElementById('sendBtn').disabled = false;
+        }
+
+        function showError(error) {
+            stopJobPolling();
+            activeJobId = null;
+            document.getElementById('progressContainer').classList.add('hidden');
+            document.getElementById('responseContainer').classList.remove('hidden');
+            document.getElementById('responseContainer').classList.add('error');
+
+            document.getElementById('responseText').textContent = `Error: ${error}`;
+            document.getElementById('responseDetails').textContent = '';
+
+            document.getElementById('sendBtn').disabled = false;
+        }
+
+        function clearChat() {
+            document.getElementById('queryInput').value = '';
+            document.getElementById('progressContainer').classList.add('hidden');
+            document.getElementById('responseContainer').classList.add('hidden');
+            conversationHistory = [];
+            stopJobPolling();
+            activeJobId = null;
+        }
+
+        // Debug utility functions
+        function toggleDebugMode() {
+            debugMode = document.getElementById('debugMode').checked;
+            const debugLog = document.getElementById('debugLog');
+            debugLog.style.display = debugMode ? 'block' : 'none';
+
+            if (debugMode) {
+                logDebug('🔧 Debug mode enabled');
+            }
+        }
+
+        function logDebug(message) {
+            const debugLog = document.getElementById('debugLog');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.style.marginBottom = '2px';
+            logEntry.innerHTML = `<span style="color: #6c757d;">[${timestamp}]</span> ${message}`;
+            debugLog.appendChild(logEntry);
+            debugLog.scrollTop = debugLog.scrollHeight;
+        }
+
+        function clearDebugLog() {
+            const debugLog = document.getElementById('debugLog');
+            debugLog.innerHTML = '';
+        }
+
+        function loadTestQueries() {
+            const testQueries = [
+                "What are the main financial highlights for MTN Group?",
+                "Show me the revenue trends for the last 3 years",
+                "What are the key risks mentioned in the annual reports?",
+                "Compare the performance of different sectors",
+                "What is the dividend policy of major companies?",
+                "Test query with special characters: @#$%^&*()",
+                "Very long query to test how the system handles extended input and whether it properly processes streaming responses with multiple progress updates and detailed information about the financial data processing pipeline"
+            ];
+
+            // Add financial-specific queries for non-streaming endpoint
+            if (currentEndpoint === 'fast_chat_v2' && !useStreaming) {
+                testQueries.push(
+                    "What is the current share price of MTN Group?",
+                    "Show me the quarterly earnings for 2023",
+                    "What are the top 5 companies by market cap?",
+                    "Compare MTN vs Vodacom financial performance",
+                    "What is the P/E ratio for major JSE companies?"
+                );
+            }
+
+            const queryInput = document.getElementById('queryInput');
+            const randomQuery = testQueries[Math.floor(Math.random() * testQueries.length)];
+            queryInput.value = randomQuery;
+
+            logDebug(`📝 Loaded test query: "${randomQuery}"`);
+        }
+
+        // Enable Enter key to send message
+        document.getElementById('queryInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                startStreamingChat().catch(console.error);
+            }
+        });
+    </script>
+</body>
+</html>

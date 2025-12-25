@@ -1,12 +1,48 @@
 #!/usr/bin/env python3
 """
-Pytest configuration and common fixtures for streaming tests.
+Comprehensive test fixtures for JSE DataSphere Chatbot.
+
+Provides mocked dependencies and test data for unit and integration tests.
 """
 
-import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock
-from app.models import StreamingChatRequest, ProgressUpdate
+import os
+from io import BytesIO
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import boto3
+import pytest
+from fastapi.testclient import TestClient
+
+from app.models import ProgressUpdate, StreamingChatRequest
+
+# Set mock environment variables at module import time (before app.main imports config)
+# This must happen BEFORE any app imports to prevent validation errors
+os.environ.update(
+    {
+        # AWS Config
+        "AWS_ACCESS_KEY_ID": "test-access-key-id",
+        "AWS_SECRET_ACCESS_KEY": "test-secret-access-key",
+        "AWS_REGION": "us-east-1",
+        "DOCUMENT_METADATA_S3_BUCKET": "test-bucket",
+        # GCP Config - Gemini
+        "GEMINI_API_KEY": "test-gemini-api-key",
+        # GCP Config - Vertex AI
+        "VERTEX_AI_PROJECT_ID": "test-project-id",
+        "VERTEX_AI_LOCATION": "us-central1",
+        # GCP Config - Google Cloud (env_prefix="GCP_")
+        "GCP_PROJECT_ID": "test-project-id",
+        "GCP_SERVICE_ACCOUNT_INFO": '{"type": "service_account", "project_id": "test"}',
+        "GOOGLE_API_KEY": "test-google-api-key",
+        # BigQuery Config (env_prefix="BIGQUERY_")
+        "BIGQUERY_DATASET": "test_dataset",
+        "BIGQUERY_TABLE": "test_table",
+        # Redis Config - Set empty to use in-memory job store
+        "REDIS_URL": "",
+        # App Config
+        "LOG_LEVEL": "INFO",
+    }
+)
 
 
 @pytest.fixture(scope="session")
@@ -26,9 +62,45 @@ def mock_streaming_request():
         memory_enabled=True,
         conversation_history=[
             {"role": "user", "content": "Previous question"},
-            {"role": "assistant", "content": "Previous answer"}
-        ]
+            {"role": "assistant", "content": "Previous answer"},
+        ],
     )
+
+
+@pytest.fixture
+def mock_config():
+    """Mock application configuration."""
+    config = Mock()
+    config.aws.region = "us-east-1"
+    config.aws.DOCUMENT_METADATA_S3_BUCKET = "test-bucket"
+    config.aws.access_key_id = "test-key"
+    config.aws.secret_access_key = "test-secret"
+    config.gcp.project_id = "test-project"
+    config.gcp.api_key = "test-api-key"
+    config.bigquery.dataset = "test-dataset"
+    config.bigquery.table = "test-table"
+    config.redis.url = None
+    config.log_level = "INFO"
+    return config
+
+
+@pytest.fixture(autouse=True, scope="function")
+def auto_mock_config(monkeypatch, mock_config):
+    """Automatically mock get_config() for all tests to avoid requiring real credentials."""
+    with patch("app.config.get_config", return_value=mock_config):
+        with patch("app.metadata_loader.get_config", return_value=mock_config):
+            with patch("app.s3_client.get_config", return_value=mock_config):
+                with patch("app.gemini_client.get_config", return_value=mock_config):
+                    with patch("app.document_selector.get_config", return_value=mock_config):
+                        yield
+
+
+@pytest.fixture(autouse=True)
+def mock_genai_configure():
+    """Auto-mock Google GenerativeAI configuration for all tests to prevent real API calls."""
+    with patch("google.generativeai.configure"):
+        with patch("google.generativeai.GenerativeModel"):
+            yield
 
 
 @pytest.fixture
@@ -37,6 +109,8 @@ def mock_s3_client():
     client = Mock()
     client.download_file = AsyncMock()
     client.head_object = AsyncMock()
+    client.download_fileobj = Mock()
+    client.get_object = Mock(return_value={"Body": Mock(read=Mock(return_value=b"test content"))})
     return client
 
 
@@ -50,27 +124,81 @@ def mock_metadata():
                 "filename": "mtn_annual_report_2023.pdf",
                 "company": "MTN",
                 "year": "2023",
-                "type": "annual_report"
+                "type": "annual_report",
             },
             {
                 "filename": "vod_financial_statements_2023.pdf",
                 "company": "VOD",
                 "year": "2023",
-                "type": "financial_statements"
-            }
-        ]
+                "type": "financial_statements",
+            },
+        ],
     }
+
+
+@pytest.fixture
+def mock_bigquery_client():
+    """Mock BigQuery client for testing."""
+    client = Mock()
+    client.query = Mock(return_value=Mock(result=Mock(return_value=[])))
+    return client
+
+
+@pytest.fixture
+def mock_gemini_model():
+    """Mock Gemini AI model for testing."""
+    model = Mock()
+    model.generate_content = Mock(return_value=Mock(text='{"answer": "test response"}'))
+    return model
+
+
+@pytest.fixture
+def test_client():
+    """FastAPI test client."""
+    from app.main import app
+
+    return TestClient(app)
+
+
+@pytest.fixture
+async def async_test_client():
+    """Async FastAPI test client."""
+    from httpx import AsyncClient
+
+    from app.main import app
+
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        yield client
+
+
+@pytest.fixture
+def mock_pdf_bytes():
+    """Mock PDF file bytes for testing."""
+    # Simple PDF header (not a real PDF, but enough for testing)
+    return b"%PDF-1.4\n%Test PDF content\n%%EOF"
+
+
+@pytest.fixture
+def aws_credentials(monkeypatch):
+    """Mocked AWS Credentials for boto3."""
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SECURITY_TOKEN", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
 
 
 @pytest.fixture
 def mock_chroma_collection():
     """Create a mock ChromaDB collection for testing."""
     collection = Mock()
-    collection.query = AsyncMock(return_value={
-        "documents": [["Test document content"]],
-        "metadatas": [[{"filename": "test.pdf"}]],
-        "distances": [[0.1]]
-    })
+    collection.query = AsyncMock(
+        return_value={
+            "documents": [["Test document content"]],
+            "metadatas": [[{"filename": "test.pdf"}]],
+            "distances": [[0.1]],
+        }
+    )
     return collection
 
 
@@ -78,11 +206,13 @@ def mock_chroma_collection():
 def mock_meta_collection():
     """Create a mock metadata collection for testing."""
     collection = Mock()
-    collection.query = AsyncMock(return_value={
-        "documents": [["Test metadata"]],
-        "metadatas": [[{"company": "MTN"}]],
-        "distances": [[0.1]]
-    })
+    collection.query = AsyncMock(
+        return_value={
+            "documents": [["Test metadata"]],
+            "metadatas": [[{"company": "MTN"}]],
+            "distances": [[0.1]],
+        }
+    )
     return collection
 
 
@@ -90,7 +220,7 @@ def mock_meta_collection():
 def mock_financial_manager():
     """Create a mock financial manager for testing."""
     manager = Mock()
-    
+
     # Mock the filters object
     mock_filters = Mock()
     mock_filters.companies = ["MTN"]
@@ -98,17 +228,14 @@ def mock_financial_manager():
     mock_filters.standard_items = ["revenue"]
     mock_filters.interpretation = "Query about MTN revenue in 2023"
     mock_filters.is_follow_up = False
-    
+
     manager.parse_user_query = AsyncMock(return_value=mock_filters)
-    manager.validate_data_availability = AsyncMock(return_value={
-        "warnings": [],
-        "suggestions": []
-    })
-    manager.query_data = AsyncMock(return_value=[
-        {"company": "MTN", "year": "2023", "revenue": 1000000}
-    ])
+    manager.validate_data_availability = AsyncMock(return_value={"warnings": [], "suggestions": []})
+    manager.query_data = AsyncMock(
+        return_value=[{"company": "MTN", "year": "2023", "revenue": 1000000}]
+    )
     manager.format_response = AsyncMock(return_value="MTN revenue in 2023 was 1,000,000")
-    
+
     return manager
 
 
@@ -120,23 +247,23 @@ def sample_progress_update():
         message="Test progress message",
         progress=50.0,
         timestamp="2024-01-01T12:00:00Z",
-        details={"documents_loaded": 2, "companies": ["MTN"]}
+        details={"documents_loaded": 2, "companies": ["MTN"]},
     )
 
 
 @pytest.fixture
 def sample_sse_message():
     """Create a sample SSE message for testing."""
-    return "event: progress\ndata: {\"step\": \"test\", \"progress\": 50, \"message\": \"Test\"}\n\n"
+    return 'event: progress\ndata: {"step": "test", "progress": 50, "message": "Test"}\n\n'
 
 
 @pytest.fixture
 def sample_sse_stream():
     """Create a sample SSE stream with multiple events."""
     return (
-        "event: progress\ndata: {\"step\": \"start\", \"progress\": 5, \"message\": \"Starting...\"}\n\n"
-        "event: progress\ndata: {\"step\": \"processing\", \"progress\": 50, \"message\": \"Processing...\"}\n\n"
-        "event: result\ndata: {\"response\": \"Final result\", \"documents_loaded\": [\"doc1.pdf\"]}\n\n"
+        'event: progress\ndata: {"step": "start", "progress": 5, "message": "Starting..."}\n\n'
+        'event: progress\ndata: {"step": "processing", "progress": 50, "message": "Processing..."}\n\n'
+        'event: result\ndata: {"response": "Final result", "documents_loaded": ["doc1.pdf"]}\n\n'
     )
 
 
@@ -146,29 +273,25 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests"
-    )
-    config.addinivalue_line(
-        "markers", "unit: marks tests as unit tests"
-    )
+    config.addinivalue_line("markers", "integration: marks tests as integration tests")
+    config.addinivalue_line("markers", "unit: marks tests as unit tests")
 
 
 # Async test utilities
 class AsyncTestCase:
     """Base class for async test cases."""
-    
+
     @pytest.fixture(autouse=True)
     def setup_event_loop(self, event_loop):
         """Set up the event loop for async tests."""
         self.loop = event_loop
         asyncio.set_event_loop(event_loop)
-    
+
     async def assert_async_raises(self, exception_class, coro):
         """Assert that a coroutine raises a specific exception."""
         with pytest.raises(exception_class):
             await coro
-    
+
     async def assert_async_not_raises(self, coro):
         """Assert that a coroutine does not raise any exception."""
         try:
@@ -180,19 +303,20 @@ class AsyncTestCase:
 # Helper functions for testing
 def parse_sse_message(message):
     """Parse an SSE message and return event type and data."""
-    lines = message.strip().split('\n')
+    lines = message.strip().split("\n")
     event_type = ""
     data = {}
-    
+
     for line in lines:
-        if line.startswith('event: '):
+        if line.startswith("event: "):
             event_type = line[7:]
-        elif line.startswith('data: '):
+        elif line.startswith("data: "):
             import json
+
             data_str = line[6:]
             if data_str and data_str != "{}":
                 data = json.loads(data_str)
-    
+
     return event_type, data
 
 
@@ -209,6 +333,6 @@ def create_mock_streaming_response(events):
     """Create a mock streaming response with SSE events."""
     response = Mock()
     response.status_code = 200
-    response.iter_content.return_value = [event.encode('utf-8') for event in events]
+    response.iter_content.return_value = [event.encode("utf-8") for event in events]
     response.raise_for_status = Mock()
-    return response 
+    return response

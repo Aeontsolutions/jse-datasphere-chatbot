@@ -70,7 +70,7 @@ try:
     print('✅ FinancialDataManager import successful')
 except Exception as e:
     print(f'❌ FinancialDataManager import failed: {e}')
-    
+
 try:
     # Also test the basic data loading
     sys.path.insert(0, os.getcwd())
@@ -90,4 +90,4 @@ echo "📝 Notes:"
 echo "   - If you see any ❌ errors, the fast_chat_v2 endpoint may not work properly"
 echo "   - ⚠️  warnings indicate features that may be limited but endpoint should still work"
 echo "   - Make sure your .env file contains the necessary API keys"
-echo "" 
+echo ""

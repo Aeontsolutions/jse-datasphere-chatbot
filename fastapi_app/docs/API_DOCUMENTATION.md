@@ -61,82 +61,36 @@ Chat with documents using Gemini AI.
 | document_selection_message | string | Message about document selection process |
 | conversation_history | array | Updated conversation history |
 
-### Fast Chat
+### Fast Chat V2 (Financial Data)
 
 ```
-POST /fast_chat
+POST /fast_chat_v2
 ```
 
-A retrieval-augmented chat endpoint that first fetches documents from ChromaDB and then lets Gemini answer strictly based on that context. It is *faster* than the normal `/chat` endpoint because it performs vector search every turn and builds a larger context for the model.
+A specialized endpoint for querying financial data using natural language. This endpoint uses BigQuery to retrieve structured financial data and provides AI-powered analysis with conversation memory support.
 
-This endpoint uses the `ChatRequest` and `ChatResponse` models. The `auto_load_documents` parameter from `ChatRequest` is not used.
+Note: The `/fast_chat` endpoint has been deprecated in favor of direct document loading via `/chat` and financial queries via `/fast_chat_v2`.
 
 **Request Parameters:**
 
 | Parameter              | Type    | Required | Description                                                              |
 | ---------------------- | ------- | -------- | ------------------------------------------------------------------------ |
-| query                  | string  | Yes      | User query/question                                                      |
+| query                  | string  | Yes      | User query/question about financial data                                 |
 | conversation_history   | array   | No       | Previous conversation history as a list of role-content pairs            |
 | memory_enabled         | boolean | No       | Whether to use conversation memory (default: true)                       |
 
 **Response Parameters:**
 
-| Parameter                  | Type   | Description                                                        |
-| -------------------------- | ------ | ------------------------------------------------------------------ |
-| response                   | string | AI response to the query                                           |
-| documents_loaded           | array  | List of documents that were loaded to answer the query             |
-| document_selection_message | string | Message about document selection process                           |
-| conversation_history       | array  | Updated conversation history                                       |
-
-### ChromaDB Endpoints
-
-These endpoints allow for direct interaction with the ChromaDB vector store.
-
-#### Add/Update Documents
-
-```
-POST /chroma/update
-```
-
-Add or upsert documents into the ChromaDB vector store.
-
-**Request Parameters:**
-
-| Parameter | Type              | Required | Description                                  |
-| --------- | ----------------- | -------- | -------------------------------------------- |
-| documents | array of strings  | Yes      | The document contents to add or update.      |
-| metadatas | array of objects  | No       | Metadata associated with each document.      |
-| ids       | array of strings  | No       | Unique IDs for each document.                |
-
-**Response Parameters:**
-
-| Parameter | Type             | Description                                          |
-| --------- | ---------------- | ---------------------------------------------------- |
-| status    | string           | "success" if the operation was successful.           |
-| ids       | array of strings | List of ids for the added/updated documents.         |
-
-#### Query Documents
-
-```
-POST /chroma/query
-```
-
-Query the ChromaDB vector store to retrieve the most similar documents based on a query string.
-
-**Request Parameters:**
-
-| Parameter | Type    | Required | Description                                  |
-| --------- | ------- | -------- | -------------------------------------------- |
-| query     | string  | Yes      | The query text to search for.                |
-| n_results | integer | No       | The number of results to return (default: 5).|
-
-**Response Parameters:**
-
-| Parameter | Type             | Description                        |
-| --------- | ---------------- | ---------------------------------- |
-| ids       | array of strings | List of retrieved document IDs.    |
-| documents | array of strings | List of retrieved document contents. |
-| metadatas | array of objects | List of retrieved document metadatas.|
+| Parameter                  | Type    | Description                                                        |
+| -------------------------- | ------- | ------------------------------------------------------------------ |
+| response                   | string  | AI response with financial analysis                                |
+| data_found                 | boolean | Whether financial data was found for the query                     |
+| record_count               | integer | Number of financial records retrieved                              |
+| filters_used               | object  | Companies, symbols, years, and metrics used in the query           |
+| data_preview               | array   | Sample of the retrieved financial data                             |
+| warnings                   | array   | Any warnings about the query or data                               |
+| suggestions                | array   | Suggestions for improving the query                                |
+| conversation_history       | array   | Updated conversation history                                       |
 
 ## Environment Setup
 
@@ -204,93 +158,68 @@ Create a `.env` file based on the provided `.env.example` file.
 }
 ```
 
-### Fast Chat Request
+### Financial Chat Request
 
 ```json
 {
-  "query": "What is the revenue for Company X in 2023?",
+  "query": "Show me NCB revenue for 2023",
   "conversation_history": [
     {
       "role": "user",
-      "content": "Tell me about Company X"
+      "content": "Tell me about NCB"
     },
     {
       "role": "assistant",
-      "content": "Company X is a technology company founded in..."
+      "content": "NCB is the National Commercial Bank of Jamaica..."
     }
   ],
   "memory_enabled": true
 }
 ```
 
-### Fast Chat Response
+### Financial Chat Response
 
 ```json
 {
-  "response": "According to the 2023 annual report, Company X reported a revenue of $10.5 billion, which represents a 15% increase from the previous year.",
-  "documents_loaded": [
-    "Company_X_Annual_Report_2023.pdf"
+  "response": "Based on the financial data, NCB reported revenue of $X.XX billion for 2023, which represents...",
+  "data_found": true,
+  "record_count": 15,
+  "filters_used": {
+    "companies": ["National Commercial Bank Jamaica Limited"],
+    "symbols": ["NCB"],
+    "years": ["2023"],
+    "items": ["Revenue", "Total Revenue"]
+  },
+  "data_preview": [
+    {
+      "company": "National Commercial Bank Jamaica Limited",
+      "symbol": "NCB",
+      "year": "2023",
+      "item": "Revenue",
+      "value": 1234567890,
+      "formatted_value": "$1.23B"
+    }
   ],
-  "document_selection_message": "Semantically selected 1 documents based on your query:\n• Company_X_Annual_Report_2023.pdf - Contains financial information for Company X for the year 2023",
+  "warnings": [],
+  "suggestions": [],
   "conversation_history": [
     {
       "role": "user",
-      "content": "Tell me about Company X"
+      "content": "Tell me about NCB"
     },
     {
       "role": "assistant",
-      "content": "Company X is a technology company founded in..."
+      "content": "NCB is the National Commercial Bank of Jamaica..."
     },
     {
       "role": "user",
-      "content": "What is the revenue for Company X in 2023?"
+      "content": "Show me NCB revenue for 2023"
     },
     {
       "role": "assistant",
-      "content": "According to the 2023 annual report, Company X reported a revenue of $10.5 billion, which represents a 15% increase from the previous year."
+      "content": "Based on the financial data, NCB reported revenue of $X.XX billion for 2023..."
     }
   ]
-}
-```
-
-### ChromaAddRequest
-
-```json
-{
-  "documents": [
-    "This is a document about ChromaDB.",
-    "This is another document about vector stores."
-  ],
-  "metadatas": [
-    {"source": "doc1.txt"},
-    {"source": "doc2.txt"}
-  ],
-  "ids": ["id1", "id2"]
-}
-```
-
-### ChromaAddResponse
-```json
-{
-  "status": "success",
-  "ids": ["id1", "id2"]
-}
-```
-
-### ChromaQueryRequest
-```json
-{
-  "query": "What is ChromaDB?",
-  "n_results": 1
-}
-```
-
-### ChromaQueryResponse
-```json
-{
-  "ids": ["id1"],
-  "documents": ["This is a document about ChromaDB."],
-  "metadatas": [{"source": "doc1.txt"}]
 }
 ```
 

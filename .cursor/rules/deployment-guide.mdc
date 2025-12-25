@@ -1,6 +1,6 @@
 ---
 description: When trying to explain or understand how to deploy the app
-globs: 
+globs:
 alwaysApply: false
 ---
 # Deployment & Vector DB Management Guide

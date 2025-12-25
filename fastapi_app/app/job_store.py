@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from app.models import ProgressUpdate, JobStatus, JobStatusResponse
+from app.models import JobStatus, JobStatusResponse, ProgressUpdate
 
 
 @dataclass
