@@ -17,6 +17,8 @@ from app.models import (
     JobCreateResponse,
     JobStatusResponse,
     JobStatus,
+    AgentChatRequest,
+    AgentChatResponse,
 )
 from app.charting import generate_chart
 from app.s3_client import init_s3_client
@@ -30,6 +32,7 @@ from app.metadata_loader import load_metadata_from_s3
 from app.document_selector import auto_load_relevant_documents
 from app.streaming_chat import process_streaming_chat
 from app.financial_utils import FinancialDataManager
+from app.agent import AgentOrchestrator
 from app.job_store import JobStore, JobProgressSink
 from app.redis_job_store import RedisJobStore
 from app.progress_tracker import ProgressTracker
@@ -933,6 +936,108 @@ async def refresh_cache_endpoint():
     except Exception as e:
         logger.error(f"Error refreshing cache: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error refreshing cache: {str(e)}")
+
+
+# ==============================================================================
+# AGENT CHAT ENDPOINT
+# ==============================================================================
+
+
+@app.post("/agent/chat", response_model=AgentChatResponse)
+async def agent_chat(
+    request: AgentChatRequest,
+    financial_manager: Any = Depends(get_financial_manager),
+):
+    """
+    Agentic research endpoint that combines multiple data sources with source citations.
+
+    This endpoint uses Gemini 3 with tool calling to intelligently:
+    1. Analyze the user's query and optimize it (resolve pronouns, references)
+    2. Determine which tools to use (Google Search, SQL financial data)
+    3. Execute tools to gather context
+    4. Synthesize a comprehensive response based ONLY on gathered context
+    5. Cite all sources explicitly
+    6. Suggest follow-up questions
+
+    The agent will NOT hallucinate - it only responds based on data retrieved from tools.
+
+    Tools available:
+    - Google Search: For web grounding and recent news
+    - SQL Query: For financial data from JSE database
+
+    Response is backward compatible with FinancialDataResponse.
+    """
+    logger.info(
+        f"/agent/chat called. query='{request.query[:200]}', "
+        f"web_search={request.enable_web_search}, "
+        f"financial={request.enable_financial_data}, "
+        f"memory_enabled={request.memory_enabled}"
+    )
+
+    # Log conversation history for debugging
+    if request.conversation_history:
+        logger.info(f"Conversation history: {len(request.conversation_history)} messages")
+        for idx, msg in enumerate(request.conversation_history[-3:]):
+            content_preview = msg.get("content", "")[:100]
+            logger.info(f"  [{idx}] {msg.get('role', 'unknown')}: {content_preview}...")
+    else:
+        logger.info("No conversation history received")
+
+    try:
+        # Check if financial manager is available (required for SQL queries)
+        if request.enable_financial_data and not financial_manager:
+            logger.warning("Financial data requested but manager not available")
+
+        # Get associations from financial manager for better resolution
+        associations = None
+        if financial_manager and financial_manager.metadata:
+            associations = financial_manager.metadata.get("associations")
+
+        # Create orchestrator
+        orchestrator = AgentOrchestrator(
+            financial_manager=financial_manager,
+            associations=associations,
+        )
+
+        # Run the agent
+        result = await orchestrator.run(
+            query=request.query,
+            conversation_history=request.conversation_history,
+            enable_web_search=request.enable_web_search,
+            enable_financial_data=request.enable_financial_data,
+        )
+
+        # Build response (backward compatible with FinancialDataResponse)
+        response = AgentChatResponse(
+            response=result["response"],
+            data_found=result["data_found"],
+            record_count=result["record_count"],
+            filters_used=result.get("filters_used"),
+            data_preview=result.get("data_preview"),
+            conversation_history=result["conversation_history"] if request.memory_enabled else None,
+            warnings=result.get("warnings"),
+            suggestions=result.get("suggestions"),
+            chart=result.get("chart"),
+            sources=result.get("sources"),
+            web_search_results=result.get("web_search_results"),
+            tools_executed=result.get("tools_executed"),
+        )
+
+        logger.info(
+            f"/agent/chat completed. response_chars={len(response.response)}, "
+            f"data_found={response.data_found}, "
+            f"record_count={response.record_count}, "
+            f"tools_executed={response.tools_executed}"
+        )
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error in agent chat endpoint: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing agent chat: {str(e)}",
+        )
 
 
 # ==============================================================================
