@@ -8,6 +8,7 @@ This module provides the AgentOrchestrator class that combines:
 The agent enforces source citations and provides follow-up suggestions.
 """
 
+import json
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -24,6 +25,81 @@ from app.models import (
 )
 
 logger = get_logger(__name__)
+
+
+# ==============================================================================
+# QUERY ROUTING CONSTANTS
+# ==============================================================================
+
+# Financial intent indicators - queries about company financials/metrics
+FINANCIAL_KEYWORDS = {
+    # Metrics
+    "revenue",
+    "profit",
+    "eps",
+    "earnings",
+    "margin",
+    "assets",
+    "liabilities",
+    "equity",
+    "roe",
+    "roa",
+    "ratio",
+    "dividend",
+    "income",
+    "cash flow",
+    "net profit",
+    "gross profit",
+    "operating profit",
+    "shareholders equity",
+    "total assets",
+    "total liabilities",
+    "current ratio",
+    "debt to equity",
+    # Actions/contexts
+    "financials",
+    "financial",
+    "performance",
+    "compare",
+    "comparison",
+    "balance sheet",
+    "income statement",
+    "fiscal",
+    "quarterly",
+    "annual",
+}
+
+# Web search intent indicators - queries about news/current events
+WEB_SEARCH_KEYWORDS = {
+    "news",
+    "latest",
+    "recent",
+    "recently",
+    "announced",
+    "announcement",
+    "today",
+    "yesterday",
+    "this week",
+    "this month",
+    "update",
+    "updates",
+    "breaking",
+    "report",
+    "reports",
+    "article",
+    "press release",
+    "what happened",
+    "current",
+    "now",
+    "trending",
+    "market news",
+    "stock news",
+    "industry trends",
+    "outlook",
+}
+
+# Year pattern for detecting financial year references
+YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 
 
 # ==============================================================================
@@ -218,6 +294,221 @@ class AgentOrchestrator:
 
         return tools
 
+    async def _route_query(
+        self,
+        query: str,
+        enable_web_search: bool,
+        enable_financial_data: bool,
+    ) -> Dict[str, Any]:
+        """
+        Determine which tools are needed for this query using hybrid approach.
+
+        Strategy:
+        1. Rule-based classification for obvious cases (~0ms overhead)
+        2. Gemini 2.5 Flash fallback for ambiguous queries (~200-400ms)
+
+        Args:
+            query: User's query (may be optimized with context)
+            enable_web_search: Whether web search is enabled by user
+            enable_financial_data: Whether financial data is enabled by user
+
+        Returns:
+            Dict with keys:
+                - use_financial: bool
+                - use_web_search: bool
+                - routing_method: str ("rule_based", "llm_fallback", "default")
+                - confidence: str ("high", "medium", "low")
+        """
+        start_time = time.time()
+        query_lower = query.lower()
+
+        # Default: respect user's enabled flags
+        if not enable_web_search and not enable_financial_data:
+            return {
+                "use_financial": False,
+                "use_web_search": False,
+                "routing_method": "disabled",
+                "confidence": "high",
+            }
+
+        # If only one tool is enabled, use it
+        if not enable_web_search:
+            return {
+                "use_financial": True,
+                "use_web_search": False,
+                "routing_method": "single_tool",
+                "confidence": "high",
+            }
+        if not enable_financial_data:
+            return {
+                "use_financial": False,
+                "use_web_search": True,
+                "routing_method": "single_tool",
+                "confidence": "high",
+            }
+
+        # === RULE-BASED CLASSIFICATION ===
+        has_financial_signal = False
+        has_web_signal = False
+        has_symbol = False
+        has_year = False
+
+        # Check for stock symbols in query (from metadata)
+        if self.financial_manager and self.financial_manager.metadata:
+            symbols = self.financial_manager.metadata.get("symbols", [])
+            query_upper = query.upper()
+            for symbol in symbols:
+                if symbol in query_upper:
+                    has_symbol = True
+                    has_financial_signal = True
+                    break
+
+        # Check for year patterns (strong financial signal)
+        if YEAR_PATTERN.search(query):
+            has_year = True
+            has_financial_signal = True
+
+        # Check for financial keywords
+        for keyword in FINANCIAL_KEYWORDS:
+            if keyword in query_lower:
+                has_financial_signal = True
+                break
+
+        # Check for web search keywords
+        for keyword in WEB_SEARCH_KEYWORDS:
+            if keyword in query_lower:
+                has_web_signal = True
+                break
+
+        # === ROUTING DECISION ===
+
+        # Clear financial-only signal: has symbol/year + financial keywords, no web keywords
+        if has_financial_signal and not has_web_signal:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                f"Query routing: financial_only (rule_based) in {duration_ms:.2f}ms | "
+                f"symbol={has_symbol}, year={has_year}"
+            )
+            return {
+                "use_financial": True,
+                "use_web_search": False,
+                "routing_method": "rule_based",
+                "confidence": "high",
+            }
+
+        # Clear web-only signal: has web keywords, no financial signals
+        if has_web_signal and not has_financial_signal:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(f"Query routing: web_only (rule_based) in {duration_ms:.2f}ms")
+            return {
+                "use_financial": False,
+                "use_web_search": True,
+                "routing_method": "rule_based",
+                "confidence": "high",
+            }
+
+        # Both signals present - likely needs both tools
+        if has_financial_signal and has_web_signal:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(f"Query routing: both_tools (rule_based) in {duration_ms:.2f}ms")
+            return {
+                "use_financial": True,
+                "use_web_search": True,
+                "routing_method": "rule_based",
+                "confidence": "medium",
+            }
+
+        # === AMBIGUOUS: No clear signals - use LLM fallback ===
+        logger.info("Query routing: ambiguous, using LLM fallback")
+        try:
+            llm_result = await self._classify_with_llm(query)
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(f"Query routing: {llm_result} (llm_fallback) in {duration_ms:.2f}ms")
+            return {
+                "use_financial": llm_result.get("financial", True),
+                "use_web_search": llm_result.get("web_search", True),
+                "routing_method": "llm_fallback",
+                "confidence": "medium",
+            }
+        except Exception as e:
+            # On LLM failure, default to both tools
+            logger.warning(f"LLM routing fallback failed: {e}, defaulting to both tools")
+            return {
+                "use_financial": True,
+                "use_web_search": True,
+                "routing_method": "default",
+                "confidence": "low",
+            }
+
+    async def _classify_with_llm(self, query: str) -> Dict[str, bool]:
+        """
+        Use Gemini 2.5 Flash for fast query classification.
+
+        Only called when rule-based routing is ambiguous.
+        Uses low temperature and minimal tokens for speed.
+
+        Args:
+            query: The user's query to classify
+
+        Returns:
+            Dict with {"financial": bool, "web_search": bool}
+        """
+        system_instruction = """You are a query classifier for a Jamaica Stock Exchange (JSE) assistant.
+Classify whether the query needs:
+1. Financial database data (company financials, metrics, historical data)
+2. Web search (news, current events, market trends, general info)
+
+Respond with ONLY a JSON object, no other text:
+{"financial": true/false, "web_search": true/false}
+
+Examples:
+- "What is NCB's revenue?" -> {"financial": true, "web_search": false}
+- "Latest news about Jamaica Stock Exchange" -> {"financial": false, "web_search": true}
+- "How does NCB compare to industry trends?" -> {"financial": true, "web_search": true}
+- "Tell me about GraceKennedy" -> {"financial": true, "web_search": true}
+"""
+
+        contents = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=query)],
+            )
+        ]
+
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.1,  # Very low for deterministic classification
+            max_output_tokens=64,  # Just need JSON response
+        )
+
+        # Use fast model for classification
+        response = self.client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=config,
+        )
+
+        # Parse JSON response
+        response_text = response.text.strip() if response.text else ""
+
+        # Handle potential markdown code blocks
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+            response_text = response_text.strip()
+
+        try:
+            result = json.loads(response_text)
+            return {
+                "financial": result.get("financial", True),
+                "web_search": result.get("web_search", True),
+            }
+        except json.JSONDecodeError:
+            logger.warning(f"Failed to parse LLM classification response: {response_text}")
+            # Default to both on parse failure
+            return {"financial": True, "web_search": True}
+
     def _optimize_prompt(
         self,
         query: str,
@@ -352,6 +643,18 @@ You can use both tools together for comprehensive answers."""
         # Step 1: Optimize prompt
         optimized_query = self._optimize_prompt(query, conversation_history)
 
+        # Step 2: Route query to determine which tools to use
+        routing = await self._route_query(
+            query,  # Use original query for routing (not optimized)
+            enable_web_search,
+            enable_financial_data,
+        )
+        logger.info(
+            f"Query routing result: use_financial={routing['use_financial']}, "
+            f"use_web_search={routing['use_web_search']}, "
+            f"method={routing['routing_method']}, confidence={routing['confidence']}"
+        )
+
         # Initialize results
         tools_executed = []
         sources = []
@@ -361,12 +664,13 @@ You can use both tools together for comprehensive answers."""
         web_search_results = None
         financial_context = ""
         web_context = ""
+        # Note: routing info available in 'routing' dict for debugging
 
         try:
             # ================================================================
-            # PHASE 1: Financial Data Query (if enabled)
+            # PHASE 1: Financial Data Query (if routed)
             # ================================================================
-            if enable_financial_data and self.financial_manager:
+            if routing["use_financial"] and self.financial_manager:
                 logger.info("Phase 1: Querying financial database...")
                 financial_result = await self._run_financial_phase(optimized_query)
 
@@ -377,11 +681,13 @@ You can use both tools together for comprehensive answers."""
                     chart_spec = financial_result.get("chart")
                     sources.extend(financial_result.get("sources", []))
                     financial_context = financial_result.get("context", "")
+            else:
+                logger.info("Phase 1: Skipped (routing decision)")
 
             # ================================================================
-            # PHASE 2: Web Search (if enabled)
+            # PHASE 2: Web Search (if routed)
             # ================================================================
-            if enable_web_search:
+            if routing["use_web_search"]:
                 logger.info("Phase 2: Performing web search...")
                 web_result = await self._run_web_search_phase(optimized_query)
 
@@ -390,6 +696,8 @@ You can use both tools together for comprehensive answers."""
                     web_search_results = web_result.get("search_results")
                     sources.extend(web_result.get("sources", []))
                     web_context = web_result.get("context", "")
+            else:
+                logger.info("Phase 2: Skipped (routing decision)")
 
             # ================================================================
             # PHASE 3: Synthesize Response
@@ -523,7 +831,7 @@ Call the query_financial_data function with these parameters."""
         # Group by company
         by_company = {}
         for record in records[:50]:  # Limit to 50 records
-            company = record.company_name or record.symbol
+            company = record.company or record.symbol
             if company not in by_company:
                 by_company[company] = []
             by_company[company].append(record)
@@ -532,8 +840,8 @@ Call the query_financial_data function with these parameters."""
             context_parts.append(f"\n{company}:")
             for r in company_records:
                 year = r.year or "N/A"
-                item = r.standard_item or "metric"
-                value = r.value
+                metric_name = r.standard_item or "metric"
+                value = r.item
                 if value is not None:
                     # Format large numbers
                     if abs(value) >= 1_000_000:
@@ -542,7 +850,10 @@ Call the query_financial_data function with these parameters."""
                         formatted = f"${value/1_000:,.2f}K"
                     else:
                         formatted = f"{value:,.2f}"
-                    context_parts.append(f"  - {item} ({year}): {formatted}")
+                    context_parts.append(f"  - {metric_name} ({year}): {formatted}")
+                else:
+                    # Use formatted_value for display when item is None
+                    context_parts.append(f"  - {metric_name} ({year}): {r.formatted_value}")
 
         return "\n".join(context_parts)
 
