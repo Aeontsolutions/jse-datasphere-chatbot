@@ -357,3 +357,49 @@ class AgentChatResponse(BaseModel):
     tools_executed: Optional[List[str]] = Field(
         default=None, description="List of tools that were executed"
     )
+
+    # === CLARIFICATION FIELDS ===
+    needs_clarification: bool = Field(
+        default=False,
+        description="Whether the system needs user clarification before proceeding",
+    )
+    clarification_question: Optional[str] = Field(
+        default=None, description="Question to ask user if clarification is needed"
+    )
+
+
+# ==============================================================================
+# PROMPT OPTIMIZATION MODELS
+# ==============================================================================
+
+
+class ClarificationReason(str, Enum):
+    """Reasons why clarification might be needed."""
+
+    NO_ENTITY = "no_entity"  # No company/symbol identified
+    AMBIGUOUS_COMPARISON = "ambiguous_comparison"  # "compare banks" without specifics
+    UNRESOLVED_PRONOUN = "unresolved_pronoun"  # "they" with no context
+
+
+class PromptOptimizationResult(BaseModel):
+    """
+    Result of prompt optimization with context resolution and clarification detection.
+    """
+
+    optimized_query: str = Field(..., description="The query with resolved references")
+    needs_clarification: bool = Field(
+        default=False, description="Whether clarification is needed before proceeding"
+    )
+    clarification_question: Optional[str] = Field(
+        default=None, description="Question to ask user if clarification is needed"
+    )
+    clarification_reason: Optional[ClarificationReason] = Field(
+        default=None, description="Why clarification is needed"
+    )
+    resolved_context: Dict[str, Any] = Field(
+        default_factory=dict, description="Context resolved from conversation history"
+    )
+    defaults_applied: List[str] = Field(
+        default_factory=list, description="List of defaults that were applied"
+    )
+    confidence: str = Field(default="high", description="Confidence level: high, medium, low")

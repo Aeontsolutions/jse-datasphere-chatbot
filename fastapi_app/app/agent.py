@@ -20,8 +20,10 @@ from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.models import (
     ChartSpec,
+    ClarificationReason,
     FinancialDataFilters,
     FinancialDataRecord,
+    PromptOptimizationResult,
 )
 
 logger = get_logger(__name__)
@@ -120,6 +122,54 @@ VAGUE_PERFORMANCE_PATTERNS = {
     "overview",
     "summary",
 }
+
+
+# ==============================================================================
+# PROMPT OPTIMIZATION CONSTANTS
+# ==============================================================================
+
+# Clarification templates for different ambiguity reasons
+CLARIFICATION_TEMPLATES = {
+    "no_entity": (
+        "Which company or stock would you like information about? "
+        "For example, you could ask about NCB, GraceKennedy, or any JSE-listed company."
+    ),
+    "unresolved_pronoun": (
+        "Could you clarify which company you're referring to? "
+        "I don't have enough context from our conversation to determine what you mean."
+    ),
+    "ambiguous_comparison": (
+        "I'd be happy to compare companies for you. "
+        "Could you specify which ones you'd like me to compare?"
+    ),
+}
+
+# Default metrics when user asks for vague "performance"
+DEFAULT_PERFORMANCE_METRICS = ["revenue", "net_profit", "eps"]
+
+# Pronouns and references that need resolution from context
+PRONOUNS_NEEDING_RESOLUTION = {
+    "their",
+    "they",
+    "them",
+    "it",
+    "its",
+    "the company",
+    "the stock",
+    "this company",
+    "that company",
+}
+
+# Relative time patterns for resolution
+RELATIVE_TIME_PATTERNS = {
+    "last_n_years": re.compile(r"(?:last|past)\s+(\d+)\s+years?", re.IGNORECASE),
+    "last_year": re.compile(r"\blast\s+year\b", re.IGNORECASE),
+    "recently": re.compile(r"\brecent(?:ly)?\b", re.IGNORECASE),
+    "this_year": re.compile(r"\bthis\s+year\b", re.IGNORECASE),
+}
+
+# Marker to detect previous clarification in history (for 1-round max)
+CLARIFICATION_MARKER = "I want to make sure I understand"
 
 
 # ==============================================================================
@@ -567,45 +617,79 @@ Examples:
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-    ) -> str:
+    ) -> PromptOptimizationResult:
         """
-        Optimize/disambiguate the user prompt by resolving pronouns and references.
+        Optimize the user prompt with full context resolution and ambiguity detection.
 
-        Uses Gemini 2.5 Flash to resolve contextual references like "it", "they",
-        "their", "that company" to their specific entities based on conversation history.
+        This method:
+        1. Extracts context from conversation history
+        2. Detects critical ambiguities that require clarification
+        3. Applies sensible defaults for minor gaps
+        4. Resolves pronouns using LLM if needed
 
         Args:
             query: User's current query
             conversation_history: Previous conversation messages
 
         Returns:
-            Optimized query with resolved references (or original if no history)
+            PromptOptimizationResult with optimized query and metadata
         """
-        if not conversation_history:
-            return query
+        # Step 1: Extract context from history
+        extracted_context = self._extract_context_from_history(conversation_history)
+        logger.info(f"Extracted context: {extracted_context}")
 
-        # Check if query contains pronouns or references that need resolution
-        needs_resolution = any(
-            word in query.lower()
-            for word in [
-                "their",
-                "they",
-                "them",
-                "it",
-                "its",
-                "this",
-                "that",
-                "these",
-                "those",
-                "the company",
-                "the stock",
-                "same",
-            ]
+        # Step 2: Check for critical ambiguities
+        ambiguity = self._detect_ambiguity(query, extracted_context, conversation_history)
+        if ambiguity:
+            reason, question = ambiguity
+            logger.info(f"Ambiguity detected: {reason.value}")
+            return PromptOptimizationResult(
+                optimized_query=query,
+                needs_clarification=True,
+                clarification_question=question,
+                clarification_reason=reason,
+                resolved_context=extracted_context,
+                defaults_applied=[],
+                confidence="low",
+            )
+
+        # Step 3: Apply defaults for minor gaps
+        enriched_context, defaults_applied = self._apply_defaults(query, extracted_context)
+        if defaults_applied:
+            logger.info(f"Defaults applied: {defaults_applied}")
+
+        # Step 4: Resolve pronouns with LLM if needed
+        optimized_query = query
+        needs_resolution = any(word in query.lower() for word in PRONOUNS_NEEDING_RESOLUTION)
+
+        if needs_resolution and conversation_history:
+            optimized_query = await self._resolve_pronouns_with_llm(query, conversation_history)
+
+        return PromptOptimizationResult(
+            optimized_query=optimized_query,
+            needs_clarification=False,
+            clarification_question=None,
+            clarification_reason=None,
+            resolved_context=enriched_context,
+            defaults_applied=defaults_applied,
+            confidence="high" if not defaults_applied else "medium",
         )
 
-        if not needs_resolution:
-            return query
+    async def _resolve_pronouns_with_llm(
+        self,
+        query: str,
+        conversation_history: List[Dict[str, str]],
+    ) -> str:
+        """
+        Use Gemini 2.5 Flash to resolve pronouns in the query.
 
+        Args:
+            query: The query with pronouns
+            conversation_history: Previous conversation for context
+
+        Returns:
+            Query with resolved pronouns
+        """
         # Build context from recent history (last 3 exchanges = 6 messages)
         recent_history = conversation_history[-6:]
         context_parts = []
@@ -664,11 +748,11 @@ Output: How did GraceKennedy perform in 2023?"""
             if optimized.startswith("'") and optimized.endswith("'"):
                 optimized = optimized[1:-1]
 
-            logger.info(f"Prompt optimization: '{query}' -> '{optimized}'")
+            logger.info(f"Pronoun resolution: '{query}' -> '{optimized}'")
             return optimized
 
         except Exception as e:
-            logger.warning(f"Prompt optimization failed: {e}, using original query")
+            logger.warning(f"Pronoun resolution failed: {e}, using original query")
             return query
 
     def _get_available_metadata_context(self) -> str:
@@ -697,6 +781,311 @@ Output: How did GraceKennedy perform in 2023?"""
             context_parts.append(f"Available metrics: {', '.join(items)}")
 
         return "\n".join(context_parts)
+
+    def _extract_context_from_history(
+        self,
+        conversation_history: Optional[List[Dict[str, str]]],
+    ) -> Dict[str, Any]:
+        """
+        Extract entities, time periods, and metrics from conversation history.
+
+        Args:
+            conversation_history: Previous conversation messages
+
+        Returns:
+            Dict with keys: entities, years, metrics, last_focus
+        """
+        if not conversation_history:
+            return {"entities": [], "years": [], "metrics": [], "last_focus": None}
+
+        entities = []
+        years = []
+        metrics = []
+        last_focus = None
+
+        # Get metadata for validation
+        valid_symbols = set()
+        valid_years = set()
+        valid_metrics = set()
+        if self.financial_manager and self.financial_manager.metadata:
+            valid_symbols = set(self.financial_manager.metadata.get("symbols", []))
+            valid_years = set(self.financial_manager.metadata.get("years", []))
+            valid_metrics = set(self.financial_manager.metadata.get("standard_items", []))
+
+        # Scan last 6 messages (3 exchanges)
+        recent_history = conversation_history[-6:]
+        for msg in recent_history:
+            content = msg.get("content", "")
+            content_upper = content.upper()
+
+            # Extract symbols
+            for symbol in valid_symbols:
+                if symbol in content_upper:
+                    if symbol not in entities:
+                        entities.append(symbol)
+                    last_focus = symbol
+
+            # Extract years
+            year_matches = YEAR_PATTERN.findall(content)
+            for year in year_matches:
+                if year in valid_years and year not in years:
+                    years.append(year)
+
+            # Extract metrics (case-insensitive)
+            content_lower = content.lower()
+            for metric in valid_metrics:
+                if metric.lower() in content_lower and metric not in metrics:
+                    metrics.append(metric)
+
+        return {
+            "entities": entities,
+            "years": years,
+            "metrics": metrics,
+            "last_focus": last_focus,
+        }
+
+    def _has_previous_clarification(
+        self,
+        conversation_history: Optional[List[Dict[str, str]]],
+    ) -> bool:
+        """Check if the previous assistant message was a clarification request."""
+        if not conversation_history or len(conversation_history) < 2:
+            return False
+
+        # Check last assistant message
+        for msg in reversed(conversation_history):
+            if msg.get("role") == "assistant":
+                content = msg.get("content", "")
+                return CLARIFICATION_MARKER in content
+        return False
+
+    def _detect_ambiguity(
+        self,
+        query: str,
+        extracted_context: Dict[str, Any],
+        conversation_history: Optional[List[Dict[str, str]]],
+    ) -> Optional[Tuple[ClarificationReason, str]]:
+        """
+        Detect if the query has critical ambiguities requiring clarification.
+
+        Args:
+            query: The user's query
+            extracted_context: Context extracted from history
+            conversation_history: Previous conversation
+
+        Returns:
+            None if no clarification needed, or (reason, question) tuple
+        """
+        # Skip clarification if we already asked (1-round max)
+        if self._has_previous_clarification(conversation_history):
+            logger.info("Skipping clarification (1-round max reached)")
+            return None
+
+        query_lower = query.lower()
+        query_upper = query.upper()
+
+        # Check if query has entity
+        has_entity_in_query = False
+        if self.financial_manager and self.financial_manager.metadata:
+            symbols = self.financial_manager.metadata.get("symbols", [])
+            for symbol in symbols:
+                if symbol in query_upper:
+                    has_entity_in_query = True
+                    break
+
+        has_entity_in_context = bool(extracted_context.get("entities"))
+
+        # Check 1: No entity anywhere - clarify
+        if not has_entity_in_query and not has_entity_in_context:
+            # Exception: General market questions don't need entity
+            general_patterns = ["market", "jse", "stock exchange", "index", "sector"]
+            is_general = any(p in query_lower for p in general_patterns)
+            if not is_general:
+                return (
+                    ClarificationReason.NO_ENTITY,
+                    CLARIFICATION_TEMPLATES["no_entity"],
+                )
+
+        # Check 2: Unresolved pronouns
+        has_pronoun = any(p in query_lower for p in PRONOUNS_NEEDING_RESOLUTION)
+        if has_pronoun and not has_entity_in_context:
+            return (
+                ClarificationReason.UNRESOLVED_PRONOUN,
+                CLARIFICATION_TEMPLATES["unresolved_pronoun"],
+            )
+
+        # Check 3: Ambiguous comparison
+        if "compare" in query_lower:
+            # Count entities in query
+            entity_count = 0
+            if self.financial_manager and self.financial_manager.metadata:
+                symbols = self.financial_manager.metadata.get("symbols", [])
+                for symbol in symbols:
+                    if symbol in query_upper:
+                        entity_count += 1
+            # Also count entities from context
+            entity_count += len(extracted_context.get("entities", []))
+            if entity_count < 2:
+                return (
+                    ClarificationReason.AMBIGUOUS_COMPARISON,
+                    CLARIFICATION_TEMPLATES["ambiguous_comparison"],
+                )
+
+        return None
+
+    def _resolve_relative_time(self, query: str) -> Tuple[str, List[str]]:
+        """
+        Resolve relative time expressions to specific years.
+
+        Args:
+            query: The user's query
+
+        Returns:
+            Tuple of (resolved_years_list, defaults_applied_list)
+        """
+        resolved_years = []
+        defaults_applied = []
+
+        # Get most recent year from metadata
+        if not self.financial_manager or not self.financial_manager.metadata:
+            return resolved_years, defaults_applied
+
+        available_years = sorted(self.financial_manager.metadata.get("years", []))
+        if not available_years:
+            return resolved_years, defaults_applied
+
+        most_recent = int(available_years[-1])
+
+        # Check for "last N years"
+        match = RELATIVE_TIME_PATTERNS["last_n_years"].search(query)
+        if match:
+            n = int(match.group(1))
+            resolved_years = [str(most_recent - i) for i in range(n)]
+            resolved_years = [y for y in resolved_years if y in available_years]
+            defaults_applied.append(f"year (last {n} years → {', '.join(resolved_years)})")
+            return resolved_years, defaults_applied
+
+        # Check for "last year"
+        if RELATIVE_TIME_PATTERNS["last_year"].search(query):
+            last_year = str(most_recent - 1)
+            if last_year in available_years:
+                resolved_years = [last_year]
+                defaults_applied.append(f"year (last year → {last_year})")
+            return resolved_years, defaults_applied
+
+        # Check for "recently"
+        if RELATIVE_TIME_PATTERNS["recently"].search(query):
+            recent_years = [str(most_recent), str(most_recent - 1)]
+            resolved_years = [y for y in recent_years if y in available_years]
+            defaults_applied.append(f"year (recently → {', '.join(resolved_years)})")
+            return resolved_years, defaults_applied
+
+        # Check for "this year"
+        if RELATIVE_TIME_PATTERNS["this_year"].search(query):
+            this_year = str(most_recent)
+            if this_year in available_years:
+                resolved_years = [this_year]
+                defaults_applied.append(f"year (this year → {this_year})")
+            return resolved_years, defaults_applied
+
+        return resolved_years, defaults_applied
+
+    def _apply_defaults(
+        self,
+        query: str,
+        extracted_context: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], List[str]]:
+        """
+        Apply sensible defaults for minor gaps.
+
+        Args:
+            query: The user's query
+            extracted_context: Context extracted from history
+
+        Returns:
+            Tuple of (enriched_context, defaults_applied_list)
+        """
+        defaults_applied = []
+        enriched = extracted_context.copy()
+
+        # Check if query has explicit year
+        has_explicit_year = bool(YEAR_PATTERN.search(query))
+
+        # Check for relative time expressions
+        if not has_explicit_year:
+            relative_years, relative_defaults = self._resolve_relative_time(query)
+            if relative_years:
+                enriched["years"] = relative_years
+                defaults_applied.extend(relative_defaults)
+            elif not enriched.get("years"):
+                # No year specified - default to most recent
+                if self.financial_manager and self.financial_manager.metadata:
+                    available_years = sorted(self.financial_manager.metadata.get("years", []))
+                    if available_years:
+                        most_recent = available_years[-1]
+                        enriched["years"] = [most_recent]
+                        defaults_applied.append(f"year (defaulted to {most_recent})")
+
+        # Check for vague metrics
+        query_lower = query.lower()
+        vague_metric_patterns = ["performance", "how did", "how has", "doing", "financials"]
+        has_vague_metric = any(p in query_lower for p in vague_metric_patterns)
+        has_explicit_metric = False
+        if self.financial_manager and self.financial_manager.metadata:
+            valid_metrics = self.financial_manager.metadata.get("standard_items", [])
+            has_explicit_metric = any(m.lower() in query_lower for m in valid_metrics)
+
+        if has_vague_metric and not has_explicit_metric and not enriched.get("metrics"):
+            enriched["metrics"] = DEFAULT_PERFORMANCE_METRICS
+            defaults_applied.append(
+                f"metrics (defaulted to {', '.join(DEFAULT_PERFORMANCE_METRICS)})"
+            )
+
+        return enriched, defaults_applied
+
+    def _build_clarification_response(
+        self,
+        query: str,
+        optimization_result: PromptOptimizationResult,
+        conversation_history: Optional[List[Dict[str, str]]],
+    ) -> Dict[str, Any]:
+        """
+        Build a response requesting user clarification.
+
+        Args:
+            query: Original user query
+            optimization_result: The optimization result with clarification info
+            conversation_history: Previous conversation
+
+        Returns:
+            Response dictionary for clarification
+        """
+        response_text = (
+            f"{CLARIFICATION_MARKER} your question correctly before proceeding.\n\n"
+            f"{optimization_result.clarification_question}"
+        )
+
+        # Update conversation history with clarification
+        updated_history = self._update_conversation_history(
+            query, response_text, conversation_history
+        )
+
+        return {
+            "response": response_text,
+            "data_found": False,
+            "record_count": 0,
+            "needs_clarification": True,
+            "clarification_question": optimization_result.clarification_question,
+            "tools_executed": None,
+            "sources": None,
+            "filters_used": None,
+            "data_preview": None,
+            "chart": None,
+            "web_search_results": None,
+            "suggestions": None,
+            "conversation_history": updated_history,
+            "warnings": None,
+        }
 
     def _build_system_instruction(self) -> str:
         """
@@ -761,8 +1150,20 @@ You can use both tools together for comprehensive answers."""
         if not enable_web_search and not enable_financial_data:
             return self._build_no_tools_response(query, conversation_history)
 
-        # Step 1: Optimize prompt (resolve pronouns/references from conversation context)
-        optimized_query = await self._optimize_prompt(query, conversation_history)
+        # Step 1: Optimize prompt (resolve pronouns/references, detect ambiguity)
+        optimization_result = await self._optimize_prompt(query, conversation_history)
+
+        # Step 1.5: Short-circuit if clarification is needed
+        if optimization_result.needs_clarification:
+            logger.info(f"Clarification needed: {optimization_result.clarification_reason}")
+            return self._build_clarification_response(
+                query, optimization_result, conversation_history
+            )
+
+        optimized_query = optimization_result.optimized_query
+        logger.info(f"Optimized query: '{optimized_query}'")
+        if optimization_result.defaults_applied:
+            logger.info(f"Defaults applied: {optimization_result.defaults_applied}")
 
         # Step 2: Route query to determine which tools to use
         routing = await self._route_query(

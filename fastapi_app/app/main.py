@@ -1021,6 +1021,9 @@ async def agent_chat(
             sources=result.get("sources"),
             web_search_results=result.get("web_search_results"),
             tools_executed=result.get("tools_executed"),
+            # Clarification fields
+            needs_clarification=result.get("needs_clarification", False),
+            clarification_question=result.get("clarification_question"),
         )
 
         logger.info(
