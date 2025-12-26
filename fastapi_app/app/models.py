@@ -290,3 +290,116 @@ class JobStatusResponse(BaseModel):
         default=None, description="Final job payload if completed"
     )
     error: Optional[str] = Field(default=None, description="Error message if job failed")
+
+
+# ==============================================================================
+# AGENT CHAT MODELS
+# ==============================================================================
+
+
+class AgentChatRequest(BaseModel):
+    """
+    Request model for agent chat endpoint.
+    Similar to FinancialDataRequest but with tool toggles.
+    """
+
+    query: str = Field(..., description="Natural language query about financial data or companies")
+    conversation_history: Optional[List[Dict[str, str]]] = Field(
+        default=None, description="Previous conversation history as a list of role-content pairs"
+    )
+    memory_enabled: bool = Field(default=True, description="Whether to use conversation memory")
+    enable_web_search: bool = Field(
+        default=True, description="Whether to enable Google Search for web grounding"
+    )
+    enable_financial_data: bool = Field(
+        default=True, description="Whether to enable SQL financial data queries"
+    )
+
+
+class AgentChatResponse(BaseModel):
+    """
+    Response model for agent chat endpoint.
+    BACKWARD COMPATIBLE with FinancialDataResponse - includes all existing fields
+    plus new agent-specific fields.
+    """
+
+    # === EXISTING FIELDS (from FinancialDataResponse for backward compatibility) ===
+    response: str = Field(..., description="AI-generated response with source citations")
+    data_found: bool = Field(..., description="Whether any financial data was found")
+    record_count: int = Field(..., description="Number of financial records found")
+    filters_used: Optional[FinancialDataFilters] = Field(
+        default=None, description="Filters that were applied to SQL query"
+    )
+    data_preview: Optional[List[FinancialDataRecord]] = Field(
+        default=None, description="Preview of financial data records"
+    )
+    conversation_history: Optional[List[Dict[str, str]]] = Field(
+        default=None, description="Updated conversation history"
+    )
+    warnings: Optional[List[str]] = Field(
+        default=None, description="Any warnings about data availability"
+    )
+    suggestions: Optional[List[str]] = Field(
+        default=None, description="Suggested follow-up questions"
+    )
+    chart: Optional[ChartSpec] = Field(
+        default=None, description="Vega-Lite chart specification if data is chartable"
+    )
+
+    # === NEW FIELDS (agent-specific, additive only) ===
+    sources: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="List of sources cited in the response (values may be strings or lists)",
+    )
+    web_search_results: Optional[Dict[str, Any]] = Field(
+        default=None, description="Google Search grounding metadata"
+    )
+    tools_executed: Optional[List[str]] = Field(
+        default=None, description="List of tools that were executed"
+    )
+
+    # === CLARIFICATION FIELDS ===
+    needs_clarification: bool = Field(
+        default=False,
+        description="Whether the system needs user clarification before proceeding",
+    )
+    clarification_question: Optional[str] = Field(
+        default=None, description="Question to ask user if clarification is needed"
+    )
+
+
+# ==============================================================================
+# PROMPT OPTIMIZATION MODELS
+# ==============================================================================
+
+
+class ClarificationReason(str, Enum):
+    """Reasons why clarification might be needed."""
+
+    NO_ENTITY = "no_entity"  # No company/symbol identified
+    AMBIGUOUS_COMPARISON = "ambiguous_comparison"  # "compare banks" without specifics
+    UNRESOLVED_PRONOUN = "unresolved_pronoun"  # "they" with no context
+
+
+class PromptOptimizationResult(BaseModel):
+    """
+    Result of prompt optimization with context resolution and clarification detection.
+    """
+
+    optimized_query: str = Field(..., description="The query with resolved references")
+    needs_clarification: bool = Field(
+        default=False, description="Whether clarification is needed before proceeding"
+    )
+    clarification_question: Optional[str] = Field(
+        default=None, description="Question to ask user if clarification is needed"
+    )
+    clarification_reason: Optional[ClarificationReason] = Field(
+        default=None, description="Why clarification is needed"
+    )
+    resolved_context: Dict[str, Any] = Field(
+        default_factory=dict, description="Context resolved from conversation history"
+    )
+    defaults_applied: List[str] = Field(
+        default_factory=list, description="List of defaults that were applied"
+    )
+    confidence: str = Field(default="high", description="Confidence level: high, medium, low")
