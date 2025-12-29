@@ -367,6 +367,45 @@ class AgentChatResponse(BaseModel):
         default=None, description="Question to ask user if clarification is needed"
     )
 
+    # === INTERNAL/DEBUG FIELDS ===
+    cost_summary: Optional["CostSummary"] = Field(
+        default=None,
+        description="Internal: Cost tracking summary for this request (developer/ops monitoring)",
+    )
+
+
+# ==============================================================================
+# COST TRACKING MODELS (Internal/Debug)
+# ==============================================================================
+
+
+class PhaseCost(BaseModel):
+    """Cost breakdown for a single agent phase."""
+
+    phase: str = Field(..., description="Agent phase name (e.g., 'classification', 'synthesis')")
+    model: str = Field(..., description="Model used for this phase")
+    input_tokens: int = Field(default=0, description="Number of input tokens")
+    output_tokens: int = Field(default=0, description="Number of output tokens")
+    cached_tokens: int = Field(default=0, description="Number of cached tokens")
+    input_cost_usd: float = Field(default=0.0, description="Cost for input tokens in USD")
+    output_cost_usd: float = Field(default=0.0, description="Cost for output tokens in USD")
+    total_cost_usd: float = Field(default=0.0, description="Total cost for this phase in USD")
+
+
+class CostSummary(BaseModel):
+    """
+    Cost summary for an agent request.
+
+    Internal/debug field - not part of the public API contract.
+    Used for developer monitoring and UAT testing.
+    """
+
+    total_input_tokens: int = Field(default=0, description="Total input tokens across all phases")
+    total_output_tokens: int = Field(default=0, description="Total output tokens across all phases")
+    total_cached_tokens: int = Field(default=0, description="Total cached tokens across all phases")
+    total_cost_usd: float = Field(default=0.0, description="Total cost in USD across all phases")
+    phases: List[PhaseCost] = Field(default_factory=list, description="Cost breakdown by phase")
+
 
 # ==============================================================================
 # PROMPT OPTIMIZATION MODELS
@@ -403,3 +442,7 @@ class PromptOptimizationResult(BaseModel):
         default_factory=list, description="List of defaults that were applied"
     )
     confidence: str = Field(default="high", description="Confidence level: high, medium, low")
+    llm_routing: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="LLM-determined tool routing (use_financial, use_web_search, etc.)",
+    )

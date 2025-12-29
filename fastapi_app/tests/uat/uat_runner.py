@@ -98,6 +98,7 @@ class TestResult:
     error_category: ErrorCategory = ErrorCategory.NONE
     retry_count: int = 0
     validation_details: List[ValidationDetail] = field(default_factory=list)
+    cost_summary: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -122,6 +123,21 @@ class ErrorStats:
 
 
 @dataclass
+class CostStats:
+    """Cost statistics for reporting."""
+
+    total_cost_usd: float
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cached_tokens: int
+    cost_by_phase: Dict[str, float]
+    tokens_by_phase: Dict[str, int]
+    avg_cost_per_request_usd: float
+    min_cost_usd: float
+    max_cost_usd: float
+
+
+@dataclass
 class TestReport:
     """Summary report of all test executions."""
 
@@ -132,6 +148,7 @@ class TestReport:
     total_duration_ms: float
     latency_by_category: Dict[str, LatencyStats]
     error_stats: ErrorStats
+    cost_stats: Optional[CostStats]
     results: List[TestResult]
     generated_at: datetime
 
@@ -277,6 +294,9 @@ class UATTestRunner:
             validation_results = self._validate_response(test_case, response_data)
             passed = all(v.passed for v in validation_results)
 
+            # Extract cost summary for tracking
+            cost_summary = self._extract_cost_summary(response_data)
+
             return TestResult(
                 test_id=test_id,
                 category=category,
@@ -288,6 +308,7 @@ class UATTestRunner:
                 actual=self._extract_actual(response_data),
                 error_category=ErrorCategory.NONE if passed else ErrorCategory.VALIDATION,
                 validation_details=validation_results,
+                cost_summary=cost_summary,
             )
 
         except httpx.TimeoutException as e:
@@ -374,7 +395,7 @@ class UATTestRunner:
 
     def _extract_actual(self, response: Dict[str, Any]) -> Dict[str, Any]:
         """Extract relevant fields from response for reporting."""
-        return {
+        result = {
             "tools_executed": response.get("tools_executed"),
             "needs_clarification": response.get("needs_clarification"),
             "clarification_question": response.get("clarification_question"),
@@ -384,6 +405,26 @@ class UATTestRunner:
             "has_sources": bool(response.get("sources")),
             "has_chart": bool(response.get("chart")),
         }
+
+        # Extract cost summary if available
+        cost_summary = response.get("cost_summary")
+        if cost_summary:
+            result["total_cost_usd"] = cost_summary.get("total_cost_usd", 0)
+            result["total_input_tokens"] = cost_summary.get("total_input_tokens", 0)
+            result["total_output_tokens"] = cost_summary.get("total_output_tokens", 0)
+
+        return result
+
+    def _extract_cost_summary(self, response: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Extract cost summary from response for detailed tracking."""
+        cost_summary = response.get("cost_summary")
+        if not cost_summary:
+            return None
+
+        # Handle both dict and Pydantic model responses
+        if hasattr(cost_summary, "model_dump"):
+            return cost_summary.model_dump()
+        return cost_summary
 
     def _validate_response(
         self,
@@ -745,6 +786,9 @@ class UATTestRunner:
             retry_failure_count=retry_failure,
         )
 
+        # Calculate cost statistics
+        cost_stats = self._calculate_cost_stats()
+
         passed = sum(1 for r in self.results if r.passed)
         total = len(self.results)
 
@@ -756,8 +800,55 @@ class UATTestRunner:
             total_duration_ms=round(sum(r.duration_ms for r in self.results), 2),
             latency_by_category=latency_by_category,
             error_stats=error_stats,
+            cost_stats=cost_stats,
             results=self.results,
             generated_at=datetime.now(),
+        )
+
+    def _calculate_cost_stats(self) -> Optional[CostStats]:
+        """Calculate cost statistics from all test results."""
+        # Collect costs from results that have cost_summary
+        costs = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_cached_tokens = 0
+        cost_by_phase: Dict[str, float] = {}
+        tokens_by_phase: Dict[str, int] = {}
+
+        for result in self.results:
+            if result.cost_summary:
+                cost = result.cost_summary.get("total_cost_usd", 0)
+                costs.append(cost)
+                total_input_tokens += result.cost_summary.get("total_input_tokens", 0)
+                total_output_tokens += result.cost_summary.get("total_output_tokens", 0)
+                total_cached_tokens += result.cost_summary.get("total_cached_tokens", 0)
+
+                # Aggregate by phase
+                phases = result.cost_summary.get("phases", [])
+                for phase in phases:
+                    phase_name = phase.get("phase", "unknown")
+                    phase_cost = phase.get("total_cost_usd", 0)
+                    phase_tokens = phase.get("input_tokens", 0) + phase.get("output_tokens", 0)
+
+                    cost_by_phase[phase_name] = cost_by_phase.get(phase_name, 0) + phase_cost
+                    tokens_by_phase[phase_name] = tokens_by_phase.get(phase_name, 0) + phase_tokens
+
+        if not costs:
+            return None
+
+        total_cost = sum(costs)
+        avg_cost = total_cost / len(costs) if costs else 0
+
+        return CostStats(
+            total_cost_usd=round(total_cost, 6),
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+            total_cached_tokens=total_cached_tokens,
+            cost_by_phase={k: round(v, 6) for k, v in cost_by_phase.items()},
+            tokens_by_phase=tokens_by_phase,
+            avg_cost_per_request_usd=round(avg_cost, 6),
+            min_cost_usd=round(min(costs), 6) if costs else 0,
+            max_cost_usd=round(max(costs), 6) if costs else 0,
         )
 
     def print_report(self, report: TestReport) -> None:
@@ -793,6 +884,30 @@ class UATTestRunner:
                 f"{'OVERALL':<25} {overall.count:>6} {overall.min_ms:>9.0f}ms {overall.avg_ms:>9.0f}ms "
                 f"{overall.p95_ms:>9.0f}ms {overall.max_ms:>9.0f}ms"
             )
+
+        # Cost statistics
+        if report.cost_stats:
+            print("\n" + "-" * 70)
+            print("COST STATISTICS (USD)")
+            print("-" * 70)
+            print(f"Total Cost:      ${report.cost_stats.total_cost_usd:.6f}")
+            print(f"Avg per Request: ${report.cost_stats.avg_cost_per_request_usd:.6f}")
+            print(
+                f"Min/Max:         ${report.cost_stats.min_cost_usd:.6f} / ${report.cost_stats.max_cost_usd:.6f}"
+            )
+            print(
+                f"Total Tokens:    {report.cost_stats.total_input_tokens:,} input, {report.cost_stats.total_output_tokens:,} output"
+            )
+            if report.cost_stats.total_cached_tokens > 0:
+                print(f"Cached Tokens:   {report.cost_stats.total_cached_tokens:,}")
+
+            if report.cost_stats.cost_by_phase:
+                print("\nCost by Phase:")
+                for phase, cost in sorted(
+                    report.cost_stats.cost_by_phase.items(), key=lambda x: x[1], reverse=True
+                ):
+                    tokens = report.cost_stats.tokens_by_phase.get(phase, 0)
+                    print(f"  {phase:<20} ${cost:.6f}  ({tokens:,} tokens)")
 
         # Error statistics
         if report.error_stats.total_errors > 0 or report.error_stats.retry_success_count > 0:
@@ -863,6 +978,7 @@ class UATTestRunner:
                 cat: asdict(stats) for cat, stats in report.latency_by_category.items()
             },
             "error_stats": asdict(report.error_stats),
+            "cost_stats": asdict(report.cost_stats) if report.cost_stats else None,
             "results": [
                 {
                     "test_id": r.test_id,
@@ -877,6 +993,7 @@ class UATTestRunner:
                     "error_category": r.error_category.value,
                     "retry_count": r.retry_count,
                     "validation_details": [asdict(v) for v in r.validation_details],
+                    "cost_summary": r.cost_summary,
                 }
                 for r in report.results
             ],

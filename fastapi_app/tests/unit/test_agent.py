@@ -264,15 +264,28 @@ class TestQueryRoutingLLMFallback:
         assert result["confidence"] == "low"
 
 
+def _create_mock_response_with_usage(text: str) -> MagicMock:
+    """Create a mock response with proper usage_metadata for cost tracking tests."""
+    mock_response = MagicMock()
+    mock_response.text = text
+    mock_response.usage_metadata = MagicMock()
+    mock_response.usage_metadata.prompt_token_count = 100
+    mock_response.usage_metadata.candidates_token_count = 50
+    mock_response.usage_metadata.cached_content_token_count = 0
+    mock_response.usage_metadata.total_token_count = 150
+    return mock_response
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
+@patch("app.agent.record_ai_cost")
+@patch("app.agent.record_ai_request")
 class TestClassifyWithLLM:
     """Test the LLM classification method."""
 
-    async def test_classify_parses_json_response(self, orchestrator):
+    async def test_classify_parses_json_response(self, mock_request, mock_cost, orchestrator):
         """LLM classification should parse valid JSON response."""
-        mock_response = MagicMock()
-        mock_response.text = '{"financial": true, "web_search": false}'
+        mock_response = _create_mock_response_with_usage('{"financial": true, "web_search": false}')
 
         orchestrator.client.models.generate_content = MagicMock(return_value=mock_response)
 
@@ -280,10 +293,11 @@ class TestClassifyWithLLM:
         assert result["financial"] is True
         assert result["web_search"] is False
 
-    async def test_classify_handles_markdown_json(self, orchestrator):
+    async def test_classify_handles_markdown_json(self, mock_request, mock_cost, orchestrator):
         """LLM classification should handle markdown-wrapped JSON."""
-        mock_response = MagicMock()
-        mock_response.text = '```json\n{"financial": false, "web_search": true}\n```'
+        mock_response = _create_mock_response_with_usage(
+            '```json\n{"financial": false, "web_search": true}\n```'
+        )
 
         orchestrator.client.models.generate_content = MagicMock(return_value=mock_response)
 
@@ -291,10 +305,9 @@ class TestClassifyWithLLM:
         assert result["financial"] is False
         assert result["web_search"] is True
 
-    async def test_classify_defaults_on_invalid_json(self, orchestrator):
+    async def test_classify_defaults_on_invalid_json(self, mock_request, mock_cost, orchestrator):
         """LLM classification should default to both on invalid JSON."""
-        mock_response = MagicMock()
-        mock_response.text = "I think you need both tools"
+        mock_response = _create_mock_response_with_usage("I think you need both tools")
 
         orchestrator.client.models.generate_content = MagicMock(return_value=mock_response)
 
@@ -359,18 +372,20 @@ class TestBuildFinancialContext:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+@patch("app.agent.record_ai_cost")
+@patch("app.agent.record_ai_request")
 class TestOptimizePrompt:
     """Test the prompt optimization for pronoun resolution."""
 
-    async def test_no_optimization_without_history(self, orchestrator):
+    async def test_no_optimization_without_history(self, mock_request, mock_cost, orchestrator):
         """Query without conversation history should return unchanged."""
         result = await orchestrator._optimize_prompt(
             query="What is GK revenue?",
             conversation_history=None,
         )
-        assert result == "What is GK revenue?"
+        assert result.optimized_query == "What is GK revenue?"
 
-    async def test_no_optimization_without_pronouns(self, orchestrator):
+    async def test_no_optimization_without_pronouns(self, mock_request, mock_cost, orchestrator):
         """Query without pronouns should return unchanged."""
         result = await orchestrator._optimize_prompt(
             query="What is GK revenue for 2023?",
@@ -379,12 +394,13 @@ class TestOptimizePrompt:
                 {"role": "assistant", "content": "NCB is a bank..."},
             ],
         )
-        assert result == "What is GK revenue for 2023?"
+        assert result.optimized_query == "What is GK revenue for 2023?"
 
-    async def test_optimization_with_pronoun_calls_llm(self, orchestrator):
+    async def test_optimization_with_pronoun_calls_llm(self, mock_request, mock_cost, orchestrator):
         """Query with pronouns should call LLM for resolution."""
-        mock_response = MagicMock()
-        mock_response.text = "What is GraceKennedy's revenue for the last 5 years?"
+        mock_response = _create_mock_response_with_usage(
+            "What is GraceKennedy's revenue for the last 5 years?"
+        )
 
         orchestrator.client.models.generate_content = MagicMock(return_value=mock_response)
 
@@ -398,9 +414,9 @@ class TestOptimizePrompt:
 
         # LLM should have been called
         orchestrator.client.models.generate_content.assert_called_once()
-        assert result == "What is GraceKennedy's revenue for the last 5 years?"
+        assert result.optimized_query == "What is GraceKennedy's revenue for the last 5 years?"
 
-    async def test_optimization_handles_llm_failure(self, orchestrator):
+    async def test_optimization_handles_llm_failure(self, mock_request, mock_cost, orchestrator):
         """LLM failure should return original query."""
         orchestrator.client.models.generate_content = MagicMock(side_effect=Exception("API error"))
 
@@ -412,12 +428,11 @@ class TestOptimizePrompt:
         )
 
         # Should fall back to original query
-        assert result == "What was their revenue?"
+        assert result.optimized_query == "What was their revenue?"
 
-    async def test_optimization_removes_quotes(self, orchestrator):
+    async def test_optimization_removes_quotes(self, mock_request, mock_cost, orchestrator):
         """LLM response with quotes should have quotes stripped."""
-        mock_response = MagicMock()
-        mock_response.text = '"What is NCB revenue?"'
+        mock_response = _create_mock_response_with_usage('"What is NCB revenue?"')
 
         orchestrator.client.models.generate_content = MagicMock(return_value=mock_response)
 
@@ -428,7 +443,7 @@ class TestOptimizePrompt:
             ],
         )
 
-        assert result == "What is NCB revenue?"
+        assert result.optimized_query == "What is NCB revenue?"
 
 
 @pytest.mark.unit

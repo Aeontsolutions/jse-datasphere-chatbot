@@ -21,10 +21,14 @@ from app.logging_config import get_logger
 from app.models import (
     ChartSpec,
     ClarificationReason,
+    CostSummary,
     FinancialDataFilters,
     FinancialDataRecord,
+    PhaseCost,
     PromptOptimizationResult,
 )
+from app.utils.cost_tracking import calculate_cost_from_response
+from app.utils.monitoring import record_ai_cost, record_ai_request
 
 logger = get_logger(__name__)
 
@@ -91,6 +95,10 @@ WEB_SEARCH_KEYWORDS = {
     "article",
     "press release",
     "what happened",
+    "happening",
+    "what is happening",
+    "what's happening",
+    "going on",
     "current",
     "now",
     "trending",
@@ -148,16 +156,26 @@ CLARIFICATION_TEMPLATES = {
 DEFAULT_PERFORMANCE_METRICS = ["revenue", "net_profit", "eps"]
 
 # Pronouns and references that need resolution from context
+# Note: We use word boundaries for short pronouns to avoid false matches
+# e.g., "the stock" would match "the stock market" incorrectly
 PRONOUNS_NEEDING_RESOLUTION = {
     "their",
     "they",
     "them",
-    "it",
-    "its",
+    "its",  # "it" removed - too many false positives in "it is", "it was", etc.
     "the company",
-    "the stock",
     "this company",
     "that company",
+}
+
+# Patterns that should NOT trigger pronoun resolution (general market terms)
+GENERAL_MARKET_TERMS = {
+    "stock market",
+    "the market",
+    "the jse",
+    "the exchange",
+    "trading",
+    "stocks",
 }
 
 # Relative time patterns for resolution
@@ -345,7 +363,48 @@ class AgentOrchestrator:
         self.financial_manager = financial_manager
         self.associations = associations
         self.client = get_genai_client()
-        self.model_name = "gemini-3-pro-preview"
+        self.model_name = "gemini-2.5-flash"
+        # Cost tracking for current request (reset per run)
+        self._phase_costs: List[PhaseCost] = []
+
+    def _reset_cost_tracking(self) -> None:
+        """Reset cost tracking for a new request."""
+        self._phase_costs = []
+
+    def _add_phase_cost(
+        self,
+        phase: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cached_tokens: int,
+        input_cost: float,
+        output_cost: float,
+        total_cost: float,
+    ) -> None:
+        """Add a phase cost to the current request's tracking."""
+        self._phase_costs.append(
+            PhaseCost(
+                phase=phase,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_tokens=cached_tokens,
+                input_cost_usd=input_cost,
+                output_cost_usd=output_cost,
+                total_cost_usd=total_cost,
+            )
+        )
+
+    def _build_cost_summary(self) -> CostSummary:
+        """Build a CostSummary from accumulated phase costs."""
+        return CostSummary(
+            total_input_tokens=sum(p.input_tokens for p in self._phase_costs),
+            total_output_tokens=sum(p.output_tokens for p in self._phase_costs),
+            total_cached_tokens=sum(p.cached_tokens for p in self._phase_costs),
+            total_cost_usd=sum(p.total_cost_usd for p in self._phase_costs),
+            phases=self._phase_costs.copy(),
+        )
 
     def _build_tools(
         self,
@@ -460,6 +519,11 @@ class AgentOrchestrator:
                 has_web_signal = True
                 break
 
+        # Check for general market patterns - these refer to the market as a whole,
+        # not specific stocks. When combined with web keywords, route to web only.
+        general_market_patterns = ["jse market", "stock market", "stock exchange", "the market"]
+        is_general_market = any(p in query_lower for p in general_market_patterns)
+
         # Check for vague performance patterns - these indicate the user wants
         # general info without specifying metrics, so we need both tools
         has_vague_pattern = False
@@ -504,6 +568,18 @@ class AgentOrchestrator:
         if has_web_signal and not has_financial_signal:
             duration_ms = (time.time() - start_time) * 1000
             logger.info(f"Query routing: web_only (rule_based) in {duration_ms:.2f}ms")
+            return {
+                "use_financial": False,
+                "use_web_search": True,
+                "routing_method": "rule_based",
+                "confidence": "high",
+            }
+
+        # General market query with web signal: route to web only
+        # (e.g., "What is happening on the JSE market?" - refers to exchange, not stock)
+        if is_general_market and has_web_signal:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(f"Query routing: web_only (general_market) in {duration_ms:.2f}ms")
             return {
                 "use_financial": False,
                 "use_web_search": True,
@@ -586,10 +662,45 @@ Examples:
         )
 
         # Use fast model for classification
+        model_name = "gemini-2.5-flash"
+        start_time = time.time()
         response = self.client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=model_name,
             contents=contents,
             config=config,
+        )
+        duration = time.time() - start_time
+
+        # Track cost for classification phase
+        cost_result = calculate_cost_from_response(
+            model=model_name, response=response, phase="classification"
+        )
+        record_ai_cost(
+            model=cost_result.model,
+            phase=cost_result.phase,
+            input_tokens=cost_result.token_usage.input_tokens,
+            output_tokens=cost_result.token_usage.output_tokens,
+            input_cost=cost_result.input_cost,
+            output_cost=cost_result.output_cost,
+            total_cost=cost_result.total_cost,
+            cached_tokens=cost_result.token_usage.cached_tokens,
+        )
+        self._add_phase_cost(
+            phase=cost_result.phase,
+            model=cost_result.model,
+            input_tokens=cost_result.token_usage.input_tokens,
+            output_tokens=cost_result.token_usage.output_tokens,
+            cached_tokens=cost_result.token_usage.cached_tokens,
+            input_cost=cost_result.input_cost,
+            output_cost=cost_result.output_cost,
+            total_cost=cost_result.total_cost,
+        )
+        record_ai_request(
+            model=model_name,
+            duration=duration,
+            success=True,
+            input_tokens=cost_result.token_usage.input_tokens,
+            output_tokens=cost_result.token_usage.output_tokens,
         )
 
         # Parse JSON response
@@ -613,6 +724,118 @@ Examples:
             # Default to both on parse failure
             return {"financial": True, "web_search": True}
 
+    async def _expand_vague_query_with_llm(self, query: str) -> str:
+        """
+        Use Gemini 2.5 Flash to expand a vague performance query into specific metrics.
+
+        For queries like "How well did GK perform?", this method expands them to
+        include specific financial metrics that can be queried from the database.
+
+        Args:
+            query: The vague query to expand
+
+        Returns:
+            Expanded query with specific metrics, or original query if expansion fails
+        """
+        # Get available metrics from metadata for context
+        available_metrics = []
+        if self.financial_manager and self.financial_manager.metadata:
+            available_metrics = self.financial_manager.metadata.get("standard_items", [])[:15]
+
+        metrics_context = (
+            ", ".join(available_metrics)
+            if available_metrics
+            else "revenue, net_profit, eps, total_assets"
+        )
+
+        system_instruction = f"""You are a query rewriter for a Jamaica Stock Exchange (JSE) financial assistant.
+
+Your job is to expand vague performance queries into specific, queryable requests.
+
+Available metrics in the database: {metrics_context}
+
+RULES:
+1. Keep the company name and time period from the original query
+2. Add 2-4 specific metrics that best answer vague terms like "perform", "doing", "fared"
+3. Output ONLY the rewritten query, nothing else
+4. If the query is already specific, return it unchanged
+
+Examples:
+- "How well did GK perform in 2023?" -> "What were GK's revenue, net_profit, and eps for 2023?"
+- "How is NCB doing?" -> "What are NCB's revenue, net_profit, and total_assets for the most recent year?"
+- "Tell me about CPJ's performance" -> "What are CPJ's revenue, net_profit, eps, and roe?"
+- "What is NCB's revenue for 2023?" -> "What is NCB's revenue for 2023?" (already specific)
+"""
+
+        contents = [
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=f"Expand this query: {query}")],
+            )
+        ]
+
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.1,  # Low for consistent output
+            max_output_tokens=128,  # Short - just the rewritten query
+        )
+
+        try:
+            model_name = "gemini-2.5-flash"
+            start_time = time.time()
+            response = self.client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config,
+            )
+            duration = time.time() - start_time
+
+            # Track cost for vague expansion phase
+            cost_result = calculate_cost_from_response(
+                model=model_name, response=response, phase="vague_expansion"
+            )
+            record_ai_cost(
+                model=cost_result.model,
+                phase=cost_result.phase,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+                input_cost=cost_result.input_cost,
+                output_cost=cost_result.output_cost,
+                total_cost=cost_result.total_cost,
+                cached_tokens=cost_result.token_usage.cached_tokens,
+            )
+            self._add_phase_cost(
+                phase=cost_result.phase,
+                model=cost_result.model,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+                cached_tokens=cost_result.token_usage.cached_tokens,
+                input_cost=cost_result.input_cost,
+                output_cost=cost_result.output_cost,
+                total_cost=cost_result.total_cost,
+            )
+            record_ai_request(
+                model=model_name,
+                duration=duration,
+                success=True,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+            )
+
+            expanded = response.text.strip() if response.text else query
+            # Remove quotes if the model wrapped the output
+            if expanded.startswith('"') and expanded.endswith('"'):
+                expanded = expanded[1:-1]
+            if expanded.startswith("'") and expanded.endswith("'"):
+                expanded = expanded[1:-1]
+
+            logger.info(f"Vague query expansion: '{query}' -> '{expanded}'")
+            return expanded
+
+        except Exception as e:
+            logger.warning(f"Vague query expansion failed: {e}, using original query")
+            return query
+
     async def _optimize_prompt(
         self,
         query: str,
@@ -621,49 +844,47 @@ Examples:
         """
         Optimize the user prompt with full context resolution and ambiguity detection.
 
-        This method:
-        1. Extracts context from conversation history
-        2. Detects critical ambiguities that require clarification
-        3. Applies sensible defaults for minor gaps
-        4. Resolves pronouns using LLM if needed
+        This method uses a UNIFIED LLM call that handles:
+        1. Clarification detection (ambiguity, missing entities, unresolved pronouns)
+        2. Pronoun resolution (if proceeding)
+        3. Tool routing (FINANCIAL, WEB, or BOTH)
+
+        This reduces latency significantly by consolidating 3 concerns into 1 LLM call.
 
         Args:
             query: User's current query
             conversation_history: Previous conversation messages
 
         Returns:
-            PromptOptimizationResult with optimized query and metadata
+            PromptOptimizationResult with optimized query, routing, and metadata
         """
-        # Step 1: Extract context from history
+        # Step 1: Extract context from history (for defaults application)
         extracted_context = self._extract_context_from_history(conversation_history)
         logger.info(f"Extracted context: {extracted_context}")
 
-        # Step 2: Check for critical ambiguities
-        ambiguity = self._detect_ambiguity(query, extracted_context, conversation_history)
-        if ambiguity:
-            reason, question = ambiguity
-            logger.info(f"Ambiguity detected: {reason.value}")
+        # Step 2: UNIFIED LLM call - handles clarification + pronoun resolution + routing
+        clarification_reason, clarification_question, optimized_query, llm_routing = (
+            await self._unified_prompt_optimization(query, conversation_history)
+        )
+
+        # If clarification needed, return early
+        if clarification_reason:
+            logger.info(f"Ambiguity detected: {clarification_reason.value}")
             return PromptOptimizationResult(
                 optimized_query=query,
                 needs_clarification=True,
-                clarification_question=question,
-                clarification_reason=reason,
+                clarification_question=clarification_question,
+                clarification_reason=clarification_reason,
                 resolved_context=extracted_context,
                 defaults_applied=[],
                 confidence="low",
+                llm_routing=None,
             )
 
-        # Step 3: Apply defaults for minor gaps
+        # Step 3: Apply defaults for minor gaps (only if proceeding)
         enriched_context, defaults_applied = self._apply_defaults(query, extracted_context)
         if defaults_applied:
             logger.info(f"Defaults applied: {defaults_applied}")
-
-        # Step 4: Resolve pronouns with LLM if needed
-        optimized_query = query
-        needs_resolution = any(word in query.lower() for word in PRONOUNS_NEEDING_RESOLUTION)
-
-        if needs_resolution and conversation_history:
-            optimized_query = await self._resolve_pronouns_with_llm(query, conversation_history)
 
         return PromptOptimizationResult(
             optimized_query=optimized_query,
@@ -673,6 +894,7 @@ Examples:
             resolved_context=enriched_context,
             defaults_applied=defaults_applied,
             confidence="high" if not defaults_applied else "medium",
+            llm_routing=llm_routing,
         )
 
     async def _resolve_pronouns_with_llm(
@@ -735,10 +957,45 @@ Output: How did GraceKennedy perform in 2023?"""
         )
 
         try:
+            model_name = "gemini-2.5-flash"
+            start_time = time.time()
             response = self.client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=model_name,
                 contents=contents,
                 config=config,
+            )
+            duration = time.time() - start_time
+
+            # Track cost for pronoun resolution phase
+            cost_result = calculate_cost_from_response(
+                model=model_name, response=response, phase="pronoun_resolution"
+            )
+            record_ai_cost(
+                model=cost_result.model,
+                phase=cost_result.phase,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+                input_cost=cost_result.input_cost,
+                output_cost=cost_result.output_cost,
+                total_cost=cost_result.total_cost,
+                cached_tokens=cost_result.token_usage.cached_tokens,
+            )
+            self._add_phase_cost(
+                phase=cost_result.phase,
+                model=cost_result.model,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+                cached_tokens=cost_result.token_usage.cached_tokens,
+                input_cost=cost_result.input_cost,
+                output_cost=cost_result.output_cost,
+                total_cost=cost_result.total_cost,
+            )
+            record_ai_request(
+                model=model_name,
+                duration=duration,
+                success=True,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
             )
 
             optimized = response.text.strip() if response.text else query
@@ -812,18 +1069,37 @@ Output: How did GraceKennedy perform in 2023?"""
             valid_years = set(self.financial_manager.metadata.get("years", []))
             valid_metrics = set(self.financial_manager.metadata.get("standard_items", []))
 
+        # Common abbreviations that map to full symbols (for prefix matching)
+        # e.g., "NCB" in conversation should match "NCBFG" symbol
+        common_abbreviations = {"NCB", "GK", "CPJ", "JBG", "MDS", "SJ", "JSE", "JMMB"}
+
         # Scan last 6 messages (3 exchanges)
         recent_history = conversation_history[-6:]
         for msg in recent_history:
             content = msg.get("content", "")
             content_upper = content.upper()
 
-            # Extract symbols
+            # Extract symbols - check exact matches first
             for symbol in valid_symbols:
                 if symbol in content_upper:
                     if symbol not in entities:
                         entities.append(symbol)
                     last_focus = symbol
+
+            # Also check common abbreviations that might map to full symbols
+            # e.g., "NCB" in text should match "NCBFG" in symbols
+            for abbrev in common_abbreviations:
+                if abbrev in content_upper:
+                    # Find matching symbol by prefix
+                    for symbol in valid_symbols:
+                        if symbol.startswith(abbrev) and symbol not in entities:
+                            entities.append(symbol)
+                            last_focus = symbol
+                            break
+                    # Also add the abbreviation itself if not already matched
+                    if abbrev not in entities and not any(s.startswith(abbrev) for s in entities):
+                        entities.append(abbrev)
+                        last_focus = abbrev
 
             # Extract years
             year_matches = YEAR_PATTERN.findall(content)
@@ -859,6 +1135,400 @@ Output: How did GraceKennedy perform in 2023?"""
                 return CLARIFICATION_MARKER in content
         return False
 
+    async def _detect_ambiguity_with_llm(
+        self,
+        query: str,
+        extracted_context: Dict[str, Any],
+        conversation_history: Optional[List[Dict[str, str]]],
+    ) -> Optional[Tuple[ClarificationReason, str]]:
+        """
+        Use LLM to determine if the query needs clarification.
+
+        This replaces the brittle keyword-based approach with semantic understanding.
+        The LLM can identify:
+        - Whether a query references a specific company (even with nicknames/abbreviations)
+        - Whether pronouns can be resolved from conversation context
+        - Whether it's a general market question that doesn't need a specific entity
+        - Whether a comparison has enough entities specified
+
+        Args:
+            query: The user's query
+            extracted_context: Context extracted from history
+            conversation_history: Previous conversation
+
+        Returns:
+            None if no clarification needed, or (reason, question) tuple
+        """
+        import time
+
+        start_time = time.time()
+
+        # Fast path: Skip clarification if we already asked (1-round max)
+        if self._has_previous_clarification(conversation_history):
+            logger.info("Skipping clarification (1-round max reached)")
+            return None
+
+        # Build conversation context for the LLM
+        context_str = ""
+        if conversation_history:
+            recent = conversation_history[-6:]  # Last 3 exchanges
+            context_str = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in recent])
+
+        # Get available symbols for context
+        symbols_context = ""
+        if self.financial_manager and self.financial_manager.metadata:
+            symbols = self.financial_manager.metadata.get("symbols", [])[:30]
+            symbols_context = f"Available stock symbols include: {', '.join(symbols)}, and more."
+
+        prompt = f"""You are a STRICT query analyzer for Jamaica Stock Exchange (JSE) queries.
+
+{symbols_context}
+
+CONVERSATION HISTORY:
+{context_str if context_str else "(No previous conversation)"}
+
+CURRENT QUERY: "{query}"
+
+CRITICAL RULES:
+1. FINANCIAL METRICS (revenue, profit, EPS, income, earnings, dividends, assets, liabilities, performance, etc.) ALWAYS require a SPECIFIC company. These are NEVER general market questions.
+2. Pronouns (they, their, them, it, its) can be resolved from EITHER:
+   - The conversation history above, OR
+   - A company mentioned EARLIER in the SAME query (e.g., "GK revenue and news about them" - "them" = GK)
+3. Generic categories ("the banks", "the companies", "the stocks") are NOT specific enough.
+4. ONLY these are valid general market questions: market trends, JSE index, overall market performance, trading volume, sector overviews.
+
+DECISION:
+- If the query asks about financial metrics WITHOUT naming a specific company → CLARIFY:NO_ENTITY
+- If the query uses pronouns that cannot be resolved from history OR same query → CLARIFY:UNRESOLVED_PRONOUN
+- If comparing entities but fewer than 2 are specifically named → CLARIFY:AMBIGUOUS_COMPARISON
+- If the query is answerable (has specific company OR is truly general market) → PROCEED
+
+EXAMPLES:
+- "What is NCB revenue?" → PROCEED (NCB is specified)
+- "What is the revenue?" → CLARIFY:NO_ENTITY (revenue is a financial metric, no company)
+- "How did it perform?" (no prior context) → CLARIFY:UNRESOLVED_PRONOUN (no referent for "it")
+- "What is their profit?" (no prior context) → CLARIFY:UNRESOLVED_PRONOUN (no referent for "their")
+- "What is their profit?" (after "Tell me about NCB") → PROCEED (their = NCB from history)
+- "GK revenue and latest news about them" → PROCEED (them = GK from same query)
+- "Tell me about NCB and their announcements" → PROCEED (their = NCB from same query)
+- "How is the stock market doing?" → PROCEED (general market, no metric)
+- "Compare the banks" → CLARIFY:AMBIGUOUS_COMPARISON (which specific banks?)
+- "Compare NCB and GK" → PROCEED (two companies named)
+- "What is the performance?" → CLARIFY:NO_ENTITY (performance is a metric, no company)
+- "Tell me about GK performance" → PROCEED (GK is specified, performance will be interpreted)
+
+OUTPUT ONLY ONE OF THESE EXACT STRINGS (nothing else, no explanation):
+PROCEED
+CLARIFY:NO_ENTITY
+CLARIFY:UNRESOLVED_PRONOUN
+CLARIFY:AMBIGUOUS_COMPARISON"""
+
+        try:
+            logger.info(f">>> LLM CLARIFICATION CHECK STARTING for query: '{query}'")
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.0,  # Deterministic
+                    max_output_tokens=1024,  # Gemini 2.5 uses thinking tokens that count towards limit
+                ),
+            )
+            logger.info(f">>> LLM CLARIFICATION RAW RESPONSE: {response}")
+
+            # Track cost (simplified - main cost tracking happens in other phases)
+            if response.usage_metadata:
+                cost_result = calculate_cost_from_response(
+                    self.model_name, response, "clarification_check"
+                )
+                self._add_phase_cost(
+                    phase="clarification_check",
+                    model=self.model_name,
+                    input_tokens=cost_result.token_usage.input_tokens,
+                    output_tokens=cost_result.token_usage.output_tokens,
+                    cached_tokens=cost_result.token_usage.cached_tokens,
+                    input_cost=cost_result.input_cost,
+                    output_cost=cost_result.output_cost,
+                    total_cost=cost_result.total_cost,
+                )
+
+            raw_text = response.text if response.text else "(empty)"
+            result_text = raw_text.strip().upper()
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                f">>> LLM clarification PARSED: '{result_text}' (raw: '{raw_text[:100]}') in {duration_ms:.1f}ms"
+            )
+
+            # Check for CLARIFY responses FIRST (more specific)
+            if "CLARIFY:NO_ENTITY" in result_text or "NO_ENTITY" in result_text:
+                logger.info(">>> RETURNING CLARIFY:NO_ENTITY")
+                return (ClarificationReason.NO_ENTITY, CLARIFICATION_TEMPLATES["no_entity"])
+            elif "CLARIFY:UNRESOLVED_PRONOUN" in result_text or "UNRESOLVED_PRONOUN" in result_text:
+                logger.info(">>> RETURNING CLARIFY:UNRESOLVED_PRONOUN")
+                return (
+                    ClarificationReason.UNRESOLVED_PRONOUN,
+                    CLARIFICATION_TEMPLATES["unresolved_pronoun"],
+                )
+            elif (
+                "CLARIFY:AMBIGUOUS_COMPARISON" in result_text
+                or "AMBIGUOUS_COMPARISON" in result_text
+            ):
+                logger.info(">>> RETURNING CLARIFY:AMBIGUOUS_COMPARISON")
+                return (
+                    ClarificationReason.AMBIGUOUS_COMPARISON,
+                    CLARIFICATION_TEMPLATES["ambiguous_comparison"],
+                )
+            elif "PROCEED" in result_text:
+                logger.info(">>> RETURNING PROCEED (None)")
+                return None
+            else:
+                # Default to proceeding if response is unclear
+                logger.warning(
+                    f">>> Unclear LLM clarification response: '{result_text}', defaulting to PROCEED"
+                )
+                return None
+
+        except Exception as e:
+            logger.error(f"LLM clarification check failed: {e}, defaulting to PROCEED")
+            return None
+
+    async def _unified_prompt_optimization(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+    ) -> Tuple[Optional[ClarificationReason], Optional[str], str, Optional[Dict[str, Any]]]:
+        """
+        Unified LLM call for clarification, pronoun resolution, AND tool routing.
+
+        This combines THREE concerns into ONE LLM call:
+        1. Clarification check (does query need user clarification?)
+        2. Pronoun resolution (resolve they/their/them to specific entities)
+        3. Tool routing (which tools: FINANCIAL, WEB, or BOTH?)
+
+        Args:
+            query: The user's query
+            conversation_history: Previous conversation for context
+
+        Returns:
+            Tuple of (clarification_reason, clarification_question, optimized_query, routing)
+            - If clarification needed: (reason, question, original_query, None)
+            - If proceeding: (None, None, optimized_query, routing_dict)
+        """
+        import time
+
+        start_time = time.time()
+
+        # Fast path: Skip if we already asked for clarification
+        if self._has_previous_clarification(conversation_history):
+            logger.info("Skipping clarification (1-round max reached)")
+            return (None, None, query, None)
+
+        # Build conversation context
+        context_str = ""
+        if conversation_history:
+            recent = conversation_history[-6:]  # Last 3 exchanges
+            context_str = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in recent])
+
+        # Get available symbols for context
+        symbols_context = ""
+        if self.financial_manager and self.financial_manager.metadata:
+            symbols = self.financial_manager.metadata.get("symbols", [])[:30]
+            symbols_context = f"Available stock symbols include: {', '.join(symbols)}, and more."
+
+        prompt = f"""You are an expert query optimizer for Jamaica Stock Exchange (JSE) queries.
+
+{symbols_context}
+
+CONVERSATION HISTORY:
+{context_str if context_str else "(No previous conversation)"}
+
+CURRENT QUERY: "{query}"
+
+YOUR JOB: Analyze the query, check if clarification is needed, resolve pronouns, and determine which tools to use.
+
+=== STEP 1: CHECK IF CLARIFICATION IS NEEDED ===
+
+CRITICAL RULES:
+1. FINANCIAL METRICS (revenue, profit, EPS, income, earnings, dividends, assets, liabilities, performance, etc.) ALWAYS require a SPECIFIC company.
+2. Pronouns (they, their, them, it, its) can be resolved from conversation history OR from the same query.
+3. Generic categories ("the banks", "the companies") are NOT specific enough.
+4. General market questions (market trends, JSE index, overall performance) are valid without a company.
+
+=== STEP 2: IF PROCEEDING, RESOLVE PRONOUNS ===
+Replace pronouns with the specific company they refer to.
+
+=== STEP 3: DETERMINE WHICH TOOLS TO USE ===
+
+TOOL SELECTION RULES:
+- FINANCIAL: Use for queries about financial metrics (revenue, profit, EPS, margins, ratios, etc.) from our database
+- WEB: Use for news, announcements, current events, founding dates, history, background, leadership, recent developments
+- BOTH: Use when the query asks for both financial data AND contextual/news information
+
+EXAMPLES:
+- "What is NCB revenue for 2023?" → FINANCIAL (specific metric from database)
+- "When was GK founded?" → WEB (historical info, not in financial database)
+- "Latest news about NCB" → WEB (current events)
+- "GK revenue and latest news about them" → BOTH (financial data + news)
+- "How did NCB perform in 2023?" → BOTH (vague "performance" needs both data sources)
+- "Tell me about GK" → BOTH (general info needs both sources)
+- "What is happening on the JSE market?" → WEB (market news/events)
+- "Compare NCB and GK revenue" → FINANCIAL (specific metric comparison)
+
+=== OUTPUT FORMAT ===
+
+If clarification needed (output ONE of these exactly):
+CLARIFY:NO_ENTITY
+CLARIFY:UNRESOLVED_PRONOUN
+CLARIFY:AMBIGUOUS_COMPARISON
+
+If proceeding (output in this exact format):
+PROCEED|<TOOL>: <optimized query>
+
+Where <TOOL> is one of: FINANCIAL, WEB, BOTH
+
+EXAMPLES:
+- "What is their profit?" (no context) → CLARIFY:NO_ENTITY
+- "What is NCB revenue?" → PROCEED|FINANCIAL: What is NCB revenue?
+- "When was GK founded?" → PROCEED|WEB: When was GK founded?
+- "GK revenue and news about them" → PROCEED|BOTH: GK revenue and news about GK"""
+
+        try:
+            logger.info(f">>> UNIFIED PROMPT OPTIMIZATION for query: '{query}'")
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    max_output_tokens=1024,
+                ),
+            )
+
+            # Track cost
+            if response.usage_metadata:
+                cost_result = calculate_cost_from_response(
+                    self.model_name, response, "unified_prompt_optimization"
+                )
+                self._add_phase_cost(
+                    phase="unified_prompt_optimization",
+                    model=self.model_name,
+                    input_tokens=cost_result.token_usage.input_tokens,
+                    output_tokens=cost_result.token_usage.output_tokens,
+                    cached_tokens=cost_result.token_usage.cached_tokens,
+                    input_cost=cost_result.input_cost,
+                    output_cost=cost_result.output_cost,
+                    total_cost=cost_result.total_cost,
+                )
+
+            raw_text = response.text if response.text else ""
+            result_text = raw_text.strip()
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                f">>> UNIFIED optimization result: '{result_text[:100]}' in {duration_ms:.1f}ms"
+            )
+
+            result_upper = result_text.upper()
+
+            # Check for CLARIFY responses
+            if "CLARIFY:NO_ENTITY" in result_upper or "NO_ENTITY" in result_upper:
+                logger.info(">>> RETURNING CLARIFY:NO_ENTITY")
+                return (
+                    ClarificationReason.NO_ENTITY,
+                    CLARIFICATION_TEMPLATES["no_entity"],
+                    query,
+                    None,
+                )
+            elif (
+                "CLARIFY:UNRESOLVED_PRONOUN" in result_upper or "UNRESOLVED_PRONOUN" in result_upper
+            ):
+                logger.info(">>> RETURNING CLARIFY:UNRESOLVED_PRONOUN")
+                return (
+                    ClarificationReason.UNRESOLVED_PRONOUN,
+                    CLARIFICATION_TEMPLATES["unresolved_pronoun"],
+                    query,
+                    None,
+                )
+            elif (
+                "CLARIFY:AMBIGUOUS_COMPARISON" in result_upper
+                or "AMBIGUOUS_COMPARISON" in result_upper
+            ):
+                logger.info(">>> RETURNING CLARIFY:AMBIGUOUS_COMPARISON")
+                return (
+                    ClarificationReason.AMBIGUOUS_COMPARISON,
+                    CLARIFICATION_TEMPLATES["ambiguous_comparison"],
+                    query,
+                    None,
+                )
+            elif "PROCEED|" in result_upper:
+                # Parse PROCEED|TOOL: query format
+                # Find the tool and query
+                proceed_idx = result_text.upper().find("PROCEED|")
+                after_proceed = result_text[proceed_idx + 8 :]  # After "PROCEED|"
+
+                # Extract tool type
+                tool_type = "BOTH"  # Default
+                optimized_query = query
+
+                if after_proceed.upper().startswith("FINANCIAL:"):
+                    tool_type = "FINANCIAL"
+                    optimized_query = after_proceed[10:].strip()
+                elif after_proceed.upper().startswith("WEB:"):
+                    tool_type = "WEB"
+                    optimized_query = after_proceed[4:].strip()
+                elif after_proceed.upper().startswith("BOTH:"):
+                    tool_type = "BOTH"
+                    optimized_query = after_proceed[5:].strip()
+                elif ":" in after_proceed:
+                    # Handle unexpected format like PROCEED|SOMETHING: query
+                    colon_idx = after_proceed.find(":")
+                    tool_part = after_proceed[:colon_idx].strip().upper()
+                    optimized_query = after_proceed[colon_idx + 1 :].strip()
+                    if "FINANCIAL" in tool_part:
+                        tool_type = "FINANCIAL"
+                    elif "WEB" in tool_part:
+                        tool_type = "WEB"
+                    else:
+                        tool_type = "BOTH"
+
+                # Clean up quotes if present
+                if optimized_query.startswith('"') and optimized_query.endswith('"'):
+                    optimized_query = optimized_query[1:-1]
+                if optimized_query.startswith("'") and optimized_query.endswith("'"):
+                    optimized_query = optimized_query[1:-1]
+                # If empty, use original query
+                if not optimized_query:
+                    optimized_query = query
+
+                # Build routing dict
+                routing = {
+                    "use_financial": tool_type in ("FINANCIAL", "BOTH"),
+                    "use_web_search": tool_type in ("WEB", "BOTH"),
+                    "routing_method": "llm_unified",
+                    "confidence": "high",
+                    "tool_decision": tool_type,
+                }
+
+                logger.info(f">>> PROCEED with '{optimized_query}' using {tool_type}")
+                return (None, None, optimized_query, routing)
+            elif "PROCEED:" in result_upper:
+                # Fallback for old format without tool specification
+                proceed_idx = result_text.upper().find("PROCEED:")
+                optimized_query = result_text[proceed_idx + 8 :].strip()
+                if optimized_query.startswith('"') and optimized_query.endswith('"'):
+                    optimized_query = optimized_query[1:-1]
+                if optimized_query.startswith("'") and optimized_query.endswith("'"):
+                    optimized_query = optimized_query[1:-1]
+                if not optimized_query:
+                    optimized_query = query
+                logger.info(f">>> PROCEED (no tool specified) with: '{optimized_query}'")
+                return (None, None, optimized_query, None)
+            else:
+                # Default: proceed with original query, no routing info
+                logger.warning(f">>> Unclear response: '{result_text[:50]}', defaulting to PROCEED")
+                return (None, None, query, None)
+
+        except Exception as e:
+            logger.error(f"Unified prompt optimization failed: {e}, using original query")
+            return (None, None, query, None)
+
     def _detect_ambiguity(
         self,
         query: str,
@@ -886,51 +1556,223 @@ Output: How did GraceKennedy perform in 2023?"""
 
         # Check if query has entity
         has_entity_in_query = False
-        if self.financial_manager and self.financial_manager.metadata:
+        detected_symbols = []
+
+        # Enhanced logging for debugging entity detection
+        has_manager = bool(self.financial_manager)
+        has_metadata = bool(has_manager and self.financial_manager.metadata)
+        symbols = []
+
+        if has_metadata:
             symbols = self.financial_manager.metadata.get("symbols", [])
+
+            # Method 1: Check for exact symbol matches (e.g., "GK" in query)
             for symbol in symbols:
                 if symbol in query_upper:
                     has_entity_in_query = True
-                    break
+                    detected_symbols.append(symbol)
+
+            # Method 2: Check for partial matches - query word is prefix of symbol
+            # This handles cases like "NCB" matching "NCBFG"
+            # Always run this to find ALL matches (important for comparisons)
+            # Common English words that should NOT be treated as stock symbol prefixes
+            common_words = {
+                "IS",
+                "IT",
+                "IN",
+                "ON",
+                "OR",
+                "AN",
+                "AS",
+                "AT",
+                "BE",
+                "BY",
+                "DO",
+                "GO",
+                "HE",
+                "IF",
+                "ME",
+                "MY",
+                "NO",
+                "OF",
+                "SO",
+                "TO",
+                "UP",
+                "US",
+                "WE",
+                "AM",
+                "ARE",
+                "WAS",
+                "HAS",
+                "HAD",
+                "THE",
+                "FOR",
+                "AND",
+                "BUT",
+                "NOT",
+                "YOU",
+                "ALL",
+                "CAN",
+                "HER",
+                "HIS",
+                "HOW",
+                "ITS",
+                "MAY",
+                "NEW",
+                "NOW",
+                "OLD",
+                "OUR",
+                "OUT",
+                "OWN",
+                "SAY",
+                "SHE",
+                "TOO",
+                "USE",
+                "WAY",
+                "WHO",
+                "BOY",
+                "DID",
+                "GET",
+                "LET",
+                "PUT",
+                "SAW",
+                "TOP",
+                "WHAT",
+                "WHEN",
+                "WHERE",
+                "WHICH",
+                "THAT",
+                "THIS",
+                "THEY",
+                "THEM",
+                "THAN",
+                "THEN",
+                "WILL",
+                "WITH",
+                "FROM",
+                "HAVE",
+                "BEEN",
+                "WERE",
+                "ABOUT",
+                "THEIR",
+                "WOULD",
+                "COULD",
+                "REVENUE",
+                "PROFIT",
+                "LOSS",
+                "YEAR",
+                "LAST",
+                "FIRST",
+                "TOTAL",
+            }
+            query_words = set(re.findall(r"\b[A-Z0-9]+\b", query_upper))
+            for word in query_words:
+                if len(word) >= 2:  # Only consider words with 2+ chars
+                    # Skip common English words
+                    if word in common_words:
+                        continue
+                    # Skip if word is already a detected symbol
+                    if word in detected_symbols:
+                        continue
+                    for symbol in symbols:
+                        # Check if query word is a prefix of a symbol
+                        if symbol.startswith(word) and symbol != word:
+                            has_entity_in_query = True
+                            detected_symbols.append(f"{word}→{symbol}")
+                            break  # Found a match for this word, move to next word
+
+            # Method 3: Check for company name mentions using associations
+            if not has_entity_in_query:
+                associations = self.financial_manager.metadata.get("associations", {})
+                company_to_symbol = associations.get("company_to_symbol", {})
+                for company_name, company_symbols in company_to_symbol.items():
+                    # Check if any significant part of the company name is in the query
+                    # Split company name and check key words (ignore common words)
+                    company_words = company_name.upper().split()
+                    ignore_words = {"LIMITED", "THE", "AND", "OF", "JAMAICA", "GROUP", "COMPANY"}
+                    key_words = [w for w in company_words if w not in ignore_words and len(w) > 2]
+                    for word in key_words:
+                        if word in query_upper:
+                            has_entity_in_query = True
+                            detected_symbols.extend(company_symbols)
+                            break
+                    if has_entity_in_query:
+                        break
+
+        logger.info(
+            f"Entity detection: has_manager={has_manager}, has_metadata={has_metadata}, "
+            f"symbols_count={len(symbols)}, detected={detected_symbols}, "
+            f"has_entity_in_query={has_entity_in_query}"
+        )
 
         has_entity_in_context = bool(extracted_context.get("entities"))
+
+        logger.info(
+            f"Clarification check: has_entity_in_query={has_entity_in_query}, "
+            f"has_entity_in_context={has_entity_in_context}, "
+            f"context_entities={extracted_context.get('entities')}"
+        )
 
         # Check 1: No entity anywhere - clarify
         if not has_entity_in_query and not has_entity_in_context:
             # Exception: General market questions don't need entity
-            general_patterns = ["market", "jse", "stock exchange", "index", "sector"]
+            general_patterns = [
+                "market",
+                "jse",
+                "stock exchange",
+                "index",
+                "sector",
+                "trading",
+                "stocks",
+                "jamaica stock",
+                "the exchange",
+            ]
             is_general = any(p in query_lower for p in general_patterns)
+            logger.info(f"No entity found - is_general={is_general}, query='{query_lower}'")
             if not is_general:
+                logger.info("RETURNING NO_ENTITY clarification")
                 return (
                     ClarificationReason.NO_ENTITY,
                     CLARIFICATION_TEMPLATES["no_entity"],
                 )
+            else:
+                logger.info("Skipping clarification - query is general market query")
+        else:
+            logger.info(
+                f"Skipping NO_ENTITY check - entity found. "
+                f"has_entity_in_query={has_entity_in_query}, has_entity_in_context={has_entity_in_context}"
+            )
 
         # Check 2: Unresolved pronouns
-        has_pronoun = any(p in query_lower for p in PRONOUNS_NEEDING_RESOLUTION)
-        if has_pronoun and not has_entity_in_context:
-            return (
-                ClarificationReason.UNRESOLVED_PRONOUN,
-                CLARIFICATION_TEMPLATES["unresolved_pronoun"],
-            )
+        # First, skip if query contains general market terms (e.g., "stock market" != pronoun)
+        is_general_market = any(term in query_lower for term in GENERAL_MARKET_TERMS)
+        if not is_general_market:
+            has_pronoun = any(p in query_lower for p in PRONOUNS_NEEDING_RESOLUTION)
+            # Pronouns need resolution if there's no entity in query OR context
+            # (if entity is in query like "GK... them", "them" can resolve to "GK")
+            if has_pronoun and not has_entity_in_query and not has_entity_in_context:
+                return (
+                    ClarificationReason.UNRESOLVED_PRONOUN,
+                    CLARIFICATION_TEMPLATES["unresolved_pronoun"],
+                )
 
         # Check 3: Ambiguous comparison
         if "compare" in query_lower:
-            # Count entities in query
-            entity_count = 0
-            if self.financial_manager and self.financial_manager.metadata:
-                symbols = self.financial_manager.metadata.get("symbols", [])
-                for symbol in symbols:
-                    if symbol in query_upper:
-                        entity_count += 1
+            # Use the count from our enhanced entity detection above
+            # detected_symbols already contains all matched entities
+            entity_count = len(detected_symbols)
             # Also count entities from context
             entity_count += len(extracted_context.get("entities", []))
             if entity_count < 2:
+                logger.info(
+                    f"Ambiguity detected: comparison with {entity_count} entities (detected: {detected_symbols})"
+                )
                 return (
                     ClarificationReason.AMBIGUOUS_COMPARISON,
                     CLARIFICATION_TEMPLATES["ambiguous_comparison"],
                 )
 
+        logger.info("No ambiguity detected - proceeding with query")
         return None
 
     def _resolve_relative_time(self, query: str) -> Tuple[str, List[str]]:
@@ -1147,6 +1989,9 @@ You can use both tools together for comprehensive answers."""
         start_time = time.time()
         logger.info(f"Agent run starting for query: {query[:100]}...")
 
+        # Reset cost tracking for this request
+        self._reset_cost_tracking()
+
         if not enable_web_search and not enable_financial_data:
             return self._build_no_tools_response(query, conversation_history)
 
@@ -1166,16 +2011,30 @@ You can use both tools together for comprehensive answers."""
             logger.info(f"Defaults applied: {optimization_result.defaults_applied}")
 
         # Step 2: Route query to determine which tools to use
-        routing = await self._route_query(
-            query,  # Use original query for routing (not optimized)
-            enable_web_search,
-            enable_financial_data,
-        )
-        logger.info(
-            f"Query routing result: use_financial={routing['use_financial']}, "
-            f"use_web_search={routing['use_web_search']}, "
-            f"method={routing['routing_method']}, confidence={routing['confidence']}"
-        )
+        # PREFER LLM routing from unified optimization if available
+        if optimization_result.llm_routing:
+            routing = optimization_result.llm_routing
+            # Apply enable flags to LLM routing
+            if not enable_web_search:
+                routing["use_web_search"] = False
+            if not enable_financial_data:
+                routing["use_financial"] = False
+            logger.info(
+                f"Using LLM unified routing: use_financial={routing['use_financial']}, "
+                f"use_web_search={routing['use_web_search']}, tool_decision={routing.get('tool_decision')}"
+            )
+        else:
+            # Fallback to rule-based routing
+            routing = await self._route_query(
+                query,  # Use original query for routing (not optimized)
+                enable_web_search,
+                enable_financial_data,
+            )
+            logger.info(
+                f"Using rule-based routing: use_financial={routing['use_financial']}, "
+                f"use_web_search={routing['use_web_search']}, "
+                f"method={routing['routing_method']}, confidence={routing['confidence']}"
+            )
 
         # Initialize results
         tools_executed = []
@@ -1194,7 +2053,16 @@ You can use both tools together for comprehensive answers."""
             # ================================================================
             if routing["use_financial"] and self.financial_manager:
                 logger.info("Phase 1: Querying financial database...")
-                financial_result = await self._run_financial_phase(optimized_query)
+
+                # For vague performance queries, use LLM to expand to specific metrics
+                query_for_financial = optimized_query
+                if routing.get("reason") == "vague_performance_query":
+                    expanded_query = await self._expand_vague_query_with_llm(optimized_query)
+                    if expanded_query and expanded_query != optimized_query:
+                        query_for_financial = expanded_query
+                        logger.info(f"LLM expanded vague query: {query_for_financial}")
+
+                financial_result = await self._run_financial_phase(query_for_financial)
 
                 if financial_result:
                     tools_executed.append("query_financial_data")
@@ -1245,6 +2113,9 @@ You can use both tools together for comprehensive answers."""
             data_preview = financial_records[:10] if financial_records else None
             record_count = len(financial_records)
 
+            # Build cost summary for this request
+            cost_summary = self._build_cost_summary()
+
             return {
                 "response": clean_response,
                 "data_found": record_count > 0 or bool(web_context),
@@ -1257,6 +2128,7 @@ You can use both tools together for comprehensive answers."""
                 "web_search_results": web_search_results,
                 "suggestions": follow_up_questions,
                 "conversation_history": conversation_history,
+                "cost_summary": cost_summary,
             }
 
         except Exception as e:
@@ -1296,22 +2168,64 @@ Call the query_financial_data function with these parameters."""
                 )
             ]
 
+            # Force the model to call the function by using tool_config with mode=ANY
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 tools=[tool],
+                tool_config=types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode="ANY",  # Force the model to call one of the provided functions
+                        allowed_function_names=["query_financial_data"],
+                    )
+                ),
                 temperature=0.3,
                 max_output_tokens=1024,
             )
 
+            start_time = time.time()
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=contents,
                 config=config,
             )
+            duration = time.time() - start_time
+
+            # Track cost for financial extraction phase
+            cost_result = calculate_cost_from_response(
+                model=self.model_name, response=response, phase="financial_extraction"
+            )
+            record_ai_cost(
+                model=cost_result.model,
+                phase=cost_result.phase,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+                input_cost=cost_result.input_cost,
+                output_cost=cost_result.output_cost,
+                total_cost=cost_result.total_cost,
+                cached_tokens=cost_result.token_usage.cached_tokens,
+            )
+            self._add_phase_cost(
+                phase=cost_result.phase,
+                model=cost_result.model,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+                cached_tokens=cost_result.token_usage.cached_tokens,
+                input_cost=cost_result.input_cost,
+                output_cost=cost_result.output_cost,
+                total_cost=cost_result.total_cost,
+            )
+            record_ai_request(
+                model=self.model_name,
+                duration=duration,
+                success=True,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+            )
 
             # Check for function call and execute
             if response.candidates and response.candidates[0].content:
-                for part in response.candidates[0].content.parts:
+                parts = response.candidates[0].content.parts or []
+                for part in parts:
                     if hasattr(part, "function_call") and part.function_call:
                         fc = part.function_call
                         if fc.name == "query_financial_data":
@@ -1333,6 +2247,17 @@ Call the query_financial_data function with these parameters."""
                                 "context": context,
                             }
 
+            # Log what we received if no function call was found
+            if response.candidates and response.candidates[0].content:
+                parts = response.candidates[0].content.parts or []
+                part_types = [type(p).__name__ for p in parts]
+                text_parts = [p.text for p in parts if hasattr(p, "text") and p.text]
+                logger.warning(
+                    f"Financial phase: No function call received. Part types: {part_types}. "
+                    f"Text response: {text_parts[:200] if text_parts else 'None'}"
+                )
+            else:
+                logger.warning("Financial phase: No content in response")
             return None
 
         except Exception as e:
@@ -1412,10 +2337,44 @@ Cite your sources."""
                 max_output_tokens=2048,
             )
 
+            start_time = time.time()
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=contents,
                 config=config,
+            )
+            duration = time.time() - start_time
+
+            # Track cost for web search phase
+            cost_result = calculate_cost_from_response(
+                model=self.model_name, response=response, phase="web_search"
+            )
+            record_ai_cost(
+                model=cost_result.model,
+                phase=cost_result.phase,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+                input_cost=cost_result.input_cost,
+                output_cost=cost_result.output_cost,
+                total_cost=cost_result.total_cost,
+                cached_tokens=cost_result.token_usage.cached_tokens,
+            )
+            self._add_phase_cost(
+                phase=cost_result.phase,
+                model=cost_result.model,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+                cached_tokens=cost_result.token_usage.cached_tokens,
+                input_cost=cost_result.input_cost,
+                output_cost=cost_result.output_cost,
+                total_cost=cost_result.total_cost,
+            )
+            record_ai_request(
+                model=self.model_name,
+                duration=duration,
+                success=True,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
             )
 
             sources = []
@@ -1572,10 +2531,44 @@ Provide a clear, well-cited response with follow-up suggestions."""
             max_output_tokens=4096,
         )
 
+        start_time = time.time()
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=contents,
             config=config,
+        )
+        duration = time.time() - start_time
+
+        # Track cost for synthesis phase
+        cost_result = calculate_cost_from_response(
+            model=self.model_name, response=response, phase="synthesis"
+        )
+        record_ai_cost(
+            model=cost_result.model,
+            phase=cost_result.phase,
+            input_tokens=cost_result.token_usage.input_tokens,
+            output_tokens=cost_result.token_usage.output_tokens,
+            input_cost=cost_result.input_cost,
+            output_cost=cost_result.output_cost,
+            total_cost=cost_result.total_cost,
+            cached_tokens=cost_result.token_usage.cached_tokens,
+        )
+        self._add_phase_cost(
+            phase=cost_result.phase,
+            model=cost_result.model,
+            input_tokens=cost_result.token_usage.input_tokens,
+            output_tokens=cost_result.token_usage.output_tokens,
+            cached_tokens=cost_result.token_usage.cached_tokens,
+            input_cost=cost_result.input_cost,
+            output_cost=cost_result.output_cost,
+            total_cost=cost_result.total_cost,
+        )
+        record_ai_request(
+            model=self.model_name,
+            duration=duration,
+            success=True,
+            input_tokens=cost_result.token_usage.input_tokens,
+            output_tokens=cost_result.token_usage.output_tokens,
         )
 
         return response.text if response.text else ""
@@ -1610,7 +2603,8 @@ Provide a clear, well-cited response with follow-up suggestions."""
 
         # Check for function calls in the response
         if response.candidates and response.candidates[0].content:
-            for part in response.candidates[0].content.parts:
+            parts = response.candidates[0].content.parts or []
+            for part in parts:
                 if hasattr(part, "function_call") and part.function_call:
                     fc = part.function_call
                     if fc.name == "query_financial_data":

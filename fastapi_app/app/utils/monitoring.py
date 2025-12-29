@@ -12,6 +12,7 @@ from typing import Callable, Optional
 
 from app.logging_config import get_logger
 from app.middleware.metrics import (
+    ai_cost_dollars_total,
     ai_request_duration_seconds,
     ai_requests_total,
     ai_tokens_total,
@@ -244,6 +245,48 @@ def record_ai_request(
         success=success,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+    )
+
+
+def record_ai_cost(
+    model: str,
+    phase: str,
+    input_tokens: int,
+    output_tokens: int,
+    input_cost: float,
+    output_cost: float,
+    total_cost: float,
+    cached_tokens: int = 0,
+):
+    """
+    Record AI cost metrics and structured log.
+
+    Internal-only tracking for developer/ops monitoring.
+
+    Args:
+        model: Model name (e.g., "gemini-2.5-flash")
+        phase: Agent phase (e.g., "classification", "synthesis")
+        input_tokens: Number of input tokens
+        output_tokens: Number of output tokens
+        input_cost: Cost for input tokens in USD
+        output_cost: Cost for output tokens in USD
+        total_cost: Total cost in USD
+        cached_tokens: Number of cached tokens (optional)
+    """
+    # Record Prometheus metric
+    ai_cost_dollars_total.labels(model=model, phase=phase).inc(total_cost)
+
+    # Structured logging for cost analysis
+    logger.info(
+        "ai_cost_recorded",
+        model=model,
+        phase=phase,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_tokens=cached_tokens,
+        input_cost_usd=input_cost,
+        output_cost_usd=output_cost,
+        total_cost_usd=total_cost,
     )
 
 
