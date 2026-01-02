@@ -566,8 +566,8 @@ async def chat(
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
 
 
-@app.post("/chat/stream")
-async def chat_stream(
+@app.post("/chat/stream/v0")
+async def chat_stream_v0(
     request: StreamingChatRequest,
     s3_client: Any = Depends(get_s3_client),
     metadata: Dict = Depends(get_metadata),
@@ -575,6 +575,8 @@ async def chat_stream(
     financial_manager: Any = Depends(get_financial_manager),
 ):
     """
+    [DEPRECATED] Legacy streaming chat endpoint - use /chat/stream instead.
+
     Stream chat responses with real-time progress updates using Server-Sent Events
 
     This endpoint provides the same functionality as /chat but streams progress updates
@@ -587,7 +589,7 @@ async def chat_stream(
     event with the complete response.
     """
     logger.info(
-        f"/chat/stream called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
+        f"/chat/stream/v0 called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
     )
 
     # Log conversation history for debugging
@@ -939,12 +941,13 @@ async def refresh_cache_endpoint():
 
 
 # ==============================================================================
-# AGENT CHAT ENDPOINT
+# AGENT CHAT ENDPOINT (Primary: /chat/stream, Legacy alias: /agent/chat)
 # ==============================================================================
 
 
-@app.post("/agent/chat", response_model=AgentChatResponse)
-async def agent_chat(
+@app.post("/chat/stream", response_model=AgentChatResponse)
+@app.post("/agent/chat", response_model=AgentChatResponse, include_in_schema=False)
+async def chat_stream(
     request: AgentChatRequest,
     financial_manager: Any = Depends(get_financial_manager),
 ):
@@ -965,12 +968,20 @@ async def agent_chat(
     - Google Search: For web grounding and recent news
     - SQL Query: For financial data from JSE database
 
-    Response is backward compatible with FinancialDataResponse.
+    Response is backward compatible with FinancialDataResponse and StreamingChatRequest.
+
+    Note: For backward compatibility with legacy /chat/stream, this endpoint accepts
+    auto_load_documents which maps to enable_financial_data.
     """
+    # Backward compatibility: map auto_load_documents to enable_financial_data
+    enable_financial = request.enable_financial_data
+    if request.auto_load_documents is not None:
+        enable_financial = request.auto_load_documents
+
     logger.info(
-        f"/agent/chat called. query='{request.query[:200]}', "
+        f"/chat/stream called. query='{request.query[:200]}', "
         f"web_search={request.enable_web_search}, "
-        f"financial={request.enable_financial_data}, "
+        f"financial={enable_financial}, "
         f"memory_enabled={request.memory_enabled}"
     )
 
@@ -985,7 +996,7 @@ async def agent_chat(
 
     try:
         # Check if financial manager is available (required for SQL queries)
-        if request.enable_financial_data and not financial_manager:
+        if enable_financial and not financial_manager:
             logger.warning("Financial data requested but manager not available")
 
         # Create orchestrator
@@ -998,7 +1009,7 @@ async def agent_chat(
             query=request.query,
             conversation_history=request.conversation_history,
             enable_web_search=request.enable_web_search,
-            enable_financial_data=request.enable_financial_data,
+            enable_financial_data=enable_financial,
         )
 
         # Build response (backward compatible with FinancialDataResponse)
@@ -1021,7 +1032,7 @@ async def agent_chat(
         )
 
         logger.info(
-            f"/agent/chat completed. response_chars={len(response.response)}, "
+            f"/chat/stream completed. response_chars={len(response.response)}, "
             f"data_found={response.data_found}, "
             f"record_count={response.record_count}, "
             f"tools_executed={response.tools_executed}"
@@ -1030,10 +1041,10 @@ async def agent_chat(
         return response
 
     except Exception as e:
-        logger.error(f"Error in agent chat endpoint: {str(e)}", exc_info=True)
+        logger.error(f"Error in chat stream endpoint: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing agent chat: {str(e)}",
+            detail=f"Error processing chat stream: {str(e)}",
         )
 
 

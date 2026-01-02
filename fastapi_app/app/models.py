@@ -301,6 +301,9 @@ class AgentChatRequest(BaseModel):
     """
     Request model for agent chat endpoint.
     Similar to FinancialDataRequest but with tool toggles.
+
+    Backward compatible with StreamingChatRequest - accepts auto_load_documents
+    which maps to enable_financial_data for seamless endpoint migration.
     """
 
     query: str = Field(..., description="Natural language query about financial data or companies")
@@ -313,6 +316,11 @@ class AgentChatRequest(BaseModel):
     )
     enable_financial_data: bool = Field(
         default=True, description="Whether to enable SQL financial data queries"
+    )
+    # Backward compatibility: StreamingChatRequest used auto_load_documents
+    auto_load_documents: Optional[bool] = Field(
+        default=None,
+        description="Deprecated: Use enable_financial_data. Maps to enable_financial_data for backward compatibility.",
     )
 
 
