@@ -351,17 +351,14 @@ class AgentOrchestrator:
     def __init__(
         self,
         financial_manager: Any,
-        associations: Optional[Dict] = None,
     ):
         """
         Initialize the agent orchestrator.
 
         Args:
             financial_manager: FinancialDataManager instance for SQL queries
-            associations: Symbol-to-company associations from metadata
         """
         self.financial_manager = financial_manager
-        self.associations = associations
         self.client = get_genai_client()
         self.model_name = "gemini-2.5-flash"
         # Cost tracking for current request (reset per run)
@@ -897,121 +894,6 @@ Examples:
             llm_routing=llm_routing,
         )
 
-    async def _resolve_pronouns_with_llm(
-        self,
-        query: str,
-        conversation_history: List[Dict[str, str]],
-    ) -> str:
-        """
-        Use Gemini 2.5 Flash to resolve pronouns in the query.
-
-        Args:
-            query: The query with pronouns
-            conversation_history: Previous conversation for context
-
-        Returns:
-            Query with resolved pronouns
-        """
-        # Build context from recent history (last 3 exchanges = 6 messages)
-        recent_history = conversation_history[-6:]
-        context_parts = []
-        for msg in recent_history:
-            role = msg.get("role", "unknown")
-            content = msg.get("content", "")[:500]  # Truncate long messages
-            context_parts.append(f"{role}: {content}")
-
-        context = "\n".join(context_parts)
-
-        # Use Gemini 2.5 Flash for fast pronoun resolution
-        system_instruction = """You are a query rewriter. Your ONLY job is to resolve pronouns and references.
-
-Given conversation context and a query, rewrite the query by replacing all pronouns and references
-(like "their", "they", "it", "the company", "this", "that") with the specific entities they refer to.
-
-IMPORTANT:
-- Output ONLY the rewritten query, nothing else
-- Keep the same intent and meaning
-- If you can't determine what a pronoun refers to, keep the original query
-- Do not add explanations or commentary
-
-Examples:
-Context: "user: What is NCB's revenue?  assistant: NCB's revenue was $5M."
-Query: "What about their profit?"
-Output: What is NCB's profit?
-
-Context: "user: Tell me about GraceKennedy  assistant: GK is a conglomerate..."
-Query: "How did they perform in 2023?"
-Output: How did GraceKennedy perform in 2023?"""
-
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=f"Context:\n{context}\n\nQuery: {query}")],
-            )
-        ]
-
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.1,  # Low for deterministic output
-            max_output_tokens=256,  # Short output - just the rewritten query
-        )
-
-        try:
-            model_name = "gemini-2.5-flash"
-            start_time = time.time()
-            response = self.client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=config,
-            )
-            duration = time.time() - start_time
-
-            # Track cost for pronoun resolution phase
-            cost_result = calculate_cost_from_response(
-                model=model_name, response=response, phase="pronoun_resolution"
-            )
-            record_ai_cost(
-                model=cost_result.model,
-                phase=cost_result.phase,
-                input_tokens=cost_result.token_usage.input_tokens,
-                output_tokens=cost_result.token_usage.output_tokens,
-                input_cost=cost_result.input_cost,
-                output_cost=cost_result.output_cost,
-                total_cost=cost_result.total_cost,
-                cached_tokens=cost_result.token_usage.cached_tokens,
-            )
-            self._add_phase_cost(
-                phase=cost_result.phase,
-                model=cost_result.model,
-                input_tokens=cost_result.token_usage.input_tokens,
-                output_tokens=cost_result.token_usage.output_tokens,
-                cached_tokens=cost_result.token_usage.cached_tokens,
-                input_cost=cost_result.input_cost,
-                output_cost=cost_result.output_cost,
-                total_cost=cost_result.total_cost,
-            )
-            record_ai_request(
-                model=model_name,
-                duration=duration,
-                success=True,
-                input_tokens=cost_result.token_usage.input_tokens,
-                output_tokens=cost_result.token_usage.output_tokens,
-            )
-
-            optimized = response.text.strip() if response.text else query
-            # Remove quotes if the model wrapped the output
-            if optimized.startswith('"') and optimized.endswith('"'):
-                optimized = optimized[1:-1]
-            if optimized.startswith("'") and optimized.endswith("'"):
-                optimized = optimized[1:-1]
-
-            logger.info(f"Pronoun resolution: '{query}' -> '{optimized}'")
-            return optimized
-
-        except Exception as e:
-            logger.warning(f"Pronoun resolution failed: {e}, using original query")
-            return query
-
     def _get_available_metadata_context(self) -> str:
         """
         Get available metadata for context in the prompt.
@@ -1038,6 +920,37 @@ Output: How did GraceKennedy perform in 2023?"""
             context_parts.append(f"Available metrics: {', '.join(items)}")
 
         return "\n".join(context_parts)
+
+    def _build_enhanced_metadata_context(self) -> str:
+        """
+        Build enhanced metadata context with symbol-company mappings.
+
+        This provides the LLM with the information needed to recognize entities
+        mentioned by either symbol (e.g., "NCBFG") or company name
+        (e.g., "National Commercial Bank").
+
+        Returns:
+            String containing symbols list and symbol-to-company mappings
+        """
+        if not self.financial_manager or not self.financial_manager.metadata:
+            return ""
+
+        metadata = self.financial_manager.metadata
+        parts = []
+
+        # Symbols list
+        symbols = metadata.get("symbols", [])
+        if symbols:
+            parts.append(f"Available stock symbols: {', '.join(symbols)}")
+
+        # Symbol-to-Company mappings (critical for entity recognition)
+        associations = metadata.get("associations", {})
+        s2c = associations.get("symbol_to_company", {})
+        if s2c:
+            mappings = [f"  {sym}: {', '.join(cos)}" for sym, cos in sorted(s2c.items())]
+            parts.append("Symbol-Company Mappings:\n" + "\n".join(mappings))
+
+        return "\n\n".join(parts)
 
     def _extract_context_from_history(
         self,
@@ -1135,162 +1048,6 @@ Output: How did GraceKennedy perform in 2023?"""
                 return CLARIFICATION_MARKER in content
         return False
 
-    async def _detect_ambiguity_with_llm(
-        self,
-        query: str,
-        extracted_context: Dict[str, Any],
-        conversation_history: Optional[List[Dict[str, str]]],
-    ) -> Optional[Tuple[ClarificationReason, str]]:
-        """
-        Use LLM to determine if the query needs clarification.
-
-        This replaces the brittle keyword-based approach with semantic understanding.
-        The LLM can identify:
-        - Whether a query references a specific company (even with nicknames/abbreviations)
-        - Whether pronouns can be resolved from conversation context
-        - Whether it's a general market question that doesn't need a specific entity
-        - Whether a comparison has enough entities specified
-
-        Args:
-            query: The user's query
-            extracted_context: Context extracted from history
-            conversation_history: Previous conversation
-
-        Returns:
-            None if no clarification needed, or (reason, question) tuple
-        """
-        import time
-
-        start_time = time.time()
-
-        # Fast path: Skip clarification if we already asked (1-round max)
-        if self._has_previous_clarification(conversation_history):
-            logger.info("Skipping clarification (1-round max reached)")
-            return None
-
-        # Build conversation context for the LLM
-        context_str = ""
-        if conversation_history:
-            recent = conversation_history[-6:]  # Last 3 exchanges
-            context_str = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in recent])
-
-        # Get available symbols for context
-        symbols_context = ""
-        if self.financial_manager and self.financial_manager.metadata:
-            symbols = self.financial_manager.metadata.get("symbols", [])[:30]
-            symbols_context = f"Available stock symbols include: {', '.join(symbols)}, and more."
-
-        prompt = f"""You are a STRICT query analyzer for Jamaica Stock Exchange (JSE) queries.
-
-{symbols_context}
-
-CONVERSATION HISTORY:
-{context_str if context_str else "(No previous conversation)"}
-
-CURRENT QUERY: "{query}"
-
-CRITICAL RULES:
-1. FINANCIAL METRICS (revenue, profit, EPS, income, earnings, dividends, assets, liabilities, performance, etc.) ALWAYS require a SPECIFIC company. These are NEVER general market questions.
-2. Pronouns (they, their, them, it, its) can be resolved from EITHER:
-   - The conversation history above, OR
-   - A company mentioned EARLIER in the SAME query (e.g., "GK revenue and news about them" - "them" = GK)
-3. Generic categories ("the banks", "the companies", "the stocks") are NOT specific enough.
-4. ONLY these are valid general market questions: market trends, JSE index, overall market performance, trading volume, sector overviews.
-
-DECISION:
-- If the query asks about financial metrics WITHOUT naming a specific company → CLARIFY:NO_ENTITY
-- If the query uses pronouns that cannot be resolved from history OR same query → CLARIFY:UNRESOLVED_PRONOUN
-- If comparing entities but fewer than 2 are specifically named → CLARIFY:AMBIGUOUS_COMPARISON
-- If the query is answerable (has specific company OR is truly general market) → PROCEED
-
-EXAMPLES:
-- "What is NCB revenue?" → PROCEED (NCB is specified)
-- "What is the revenue?" → CLARIFY:NO_ENTITY (revenue is a financial metric, no company)
-- "How did it perform?" (no prior context) → CLARIFY:UNRESOLVED_PRONOUN (no referent for "it")
-- "What is their profit?" (no prior context) → CLARIFY:UNRESOLVED_PRONOUN (no referent for "their")
-- "What is their profit?" (after "Tell me about NCB") → PROCEED (their = NCB from history)
-- "GK revenue and latest news about them" → PROCEED (them = GK from same query)
-- "Tell me about NCB and their announcements" → PROCEED (their = NCB from same query)
-- "How is the stock market doing?" → PROCEED (general market, no metric)
-- "Compare the banks" → CLARIFY:AMBIGUOUS_COMPARISON (which specific banks?)
-- "Compare NCB and GK" → PROCEED (two companies named)
-- "What is the performance?" → CLARIFY:NO_ENTITY (performance is a metric, no company)
-- "Tell me about GK performance" → PROCEED (GK is specified, performance will be interpreted)
-
-OUTPUT ONLY ONE OF THESE EXACT STRINGS (nothing else, no explanation):
-PROCEED
-CLARIFY:NO_ENTITY
-CLARIFY:UNRESOLVED_PRONOUN
-CLARIFY:AMBIGUOUS_COMPARISON"""
-
-        try:
-            logger.info(f">>> LLM CLARIFICATION CHECK STARTING for query: '{query}'")
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.0,  # Deterministic
-                    max_output_tokens=1024,  # Gemini 2.5 uses thinking tokens that count towards limit
-                ),
-            )
-            logger.info(f">>> LLM CLARIFICATION RAW RESPONSE: {response}")
-
-            # Track cost (simplified - main cost tracking happens in other phases)
-            if response.usage_metadata:
-                cost_result = calculate_cost_from_response(
-                    self.model_name, response, "clarification_check"
-                )
-                self._add_phase_cost(
-                    phase="clarification_check",
-                    model=self.model_name,
-                    input_tokens=cost_result.token_usage.input_tokens,
-                    output_tokens=cost_result.token_usage.output_tokens,
-                    cached_tokens=cost_result.token_usage.cached_tokens,
-                    input_cost=cost_result.input_cost,
-                    output_cost=cost_result.output_cost,
-                    total_cost=cost_result.total_cost,
-                )
-
-            raw_text = response.text if response.text else "(empty)"
-            result_text = raw_text.strip().upper()
-            duration_ms = (time.time() - start_time) * 1000
-            logger.info(
-                f">>> LLM clarification PARSED: '{result_text}' (raw: '{raw_text[:100]}') in {duration_ms:.1f}ms"
-            )
-
-            # Check for CLARIFY responses FIRST (more specific)
-            if "CLARIFY:NO_ENTITY" in result_text or "NO_ENTITY" in result_text:
-                logger.info(">>> RETURNING CLARIFY:NO_ENTITY")
-                return (ClarificationReason.NO_ENTITY, CLARIFICATION_TEMPLATES["no_entity"])
-            elif "CLARIFY:UNRESOLVED_PRONOUN" in result_text or "UNRESOLVED_PRONOUN" in result_text:
-                logger.info(">>> RETURNING CLARIFY:UNRESOLVED_PRONOUN")
-                return (
-                    ClarificationReason.UNRESOLVED_PRONOUN,
-                    CLARIFICATION_TEMPLATES["unresolved_pronoun"],
-                )
-            elif (
-                "CLARIFY:AMBIGUOUS_COMPARISON" in result_text
-                or "AMBIGUOUS_COMPARISON" in result_text
-            ):
-                logger.info(">>> RETURNING CLARIFY:AMBIGUOUS_COMPARISON")
-                return (
-                    ClarificationReason.AMBIGUOUS_COMPARISON,
-                    CLARIFICATION_TEMPLATES["ambiguous_comparison"],
-                )
-            elif "PROCEED" in result_text:
-                logger.info(">>> RETURNING PROCEED (None)")
-                return None
-            else:
-                # Default to proceeding if response is unclear
-                logger.warning(
-                    f">>> Unclear LLM clarification response: '{result_text}', defaulting to PROCEED"
-                )
-                return None
-
-        except Exception as e:
-            logger.error(f"LLM clarification check failed: {e}, defaulting to PROCEED")
-            return None
-
     async def _unified_prompt_optimization(
         self,
         query: str,
@@ -1328,15 +1085,16 @@ CLARIFY:AMBIGUOUS_COMPARISON"""
             recent = conversation_history[-6:]  # Last 3 exchanges
             context_str = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in recent])
 
-        # Get available symbols for context
-        symbols_context = ""
-        if self.financial_manager and self.financial_manager.metadata:
-            symbols = self.financial_manager.metadata.get("symbols", [])[:30]
-            symbols_context = f"Available stock symbols include: {', '.join(symbols)}, and more."
+        # Get enhanced metadata context with symbol-company mappings
+        metadata_context = self._build_enhanced_metadata_context()
 
         prompt = f"""You are an expert query optimizer for Jamaica Stock Exchange (JSE) queries.
 
-{symbols_context}
+{metadata_context}
+
+IMPORTANT: Use the Symbol-Company Mappings above to recognize entities.
+- Match symbols OR company names to identify valid entities
+- Common abbreviations like "NCB" may refer to symbols like "NCBFG"
 
 CONVERSATION HISTORY:
 {context_str if context_str else "(No previous conversation)"}
@@ -1528,252 +1286,6 @@ EXAMPLES:
         except Exception as e:
             logger.error(f"Unified prompt optimization failed: {e}, using original query")
             return (None, None, query, None)
-
-    def _detect_ambiguity(
-        self,
-        query: str,
-        extracted_context: Dict[str, Any],
-        conversation_history: Optional[List[Dict[str, str]]],
-    ) -> Optional[Tuple[ClarificationReason, str]]:
-        """
-        Detect if the query has critical ambiguities requiring clarification.
-
-        Args:
-            query: The user's query
-            extracted_context: Context extracted from history
-            conversation_history: Previous conversation
-
-        Returns:
-            None if no clarification needed, or (reason, question) tuple
-        """
-        # Skip clarification if we already asked (1-round max)
-        if self._has_previous_clarification(conversation_history):
-            logger.info("Skipping clarification (1-round max reached)")
-            return None
-
-        query_lower = query.lower()
-        query_upper = query.upper()
-
-        # Check if query has entity
-        has_entity_in_query = False
-        detected_symbols = []
-
-        # Enhanced logging for debugging entity detection
-        has_manager = bool(self.financial_manager)
-        has_metadata = bool(has_manager and self.financial_manager.metadata)
-        symbols = []
-
-        if has_metadata:
-            symbols = self.financial_manager.metadata.get("symbols", [])
-
-            # Method 1: Check for exact symbol matches (e.g., "GK" in query)
-            for symbol in symbols:
-                if symbol in query_upper:
-                    has_entity_in_query = True
-                    detected_symbols.append(symbol)
-
-            # Method 2: Check for partial matches - query word is prefix of symbol
-            # This handles cases like "NCB" matching "NCBFG"
-            # Always run this to find ALL matches (important for comparisons)
-            # Common English words that should NOT be treated as stock symbol prefixes
-            common_words = {
-                "IS",
-                "IT",
-                "IN",
-                "ON",
-                "OR",
-                "AN",
-                "AS",
-                "AT",
-                "BE",
-                "BY",
-                "DO",
-                "GO",
-                "HE",
-                "IF",
-                "ME",
-                "MY",
-                "NO",
-                "OF",
-                "SO",
-                "TO",
-                "UP",
-                "US",
-                "WE",
-                "AM",
-                "ARE",
-                "WAS",
-                "HAS",
-                "HAD",
-                "THE",
-                "FOR",
-                "AND",
-                "BUT",
-                "NOT",
-                "YOU",
-                "ALL",
-                "CAN",
-                "HER",
-                "HIS",
-                "HOW",
-                "ITS",
-                "MAY",
-                "NEW",
-                "NOW",
-                "OLD",
-                "OUR",
-                "OUT",
-                "OWN",
-                "SAY",
-                "SHE",
-                "TOO",
-                "USE",
-                "WAY",
-                "WHO",
-                "BOY",
-                "DID",
-                "GET",
-                "LET",
-                "PUT",
-                "SAW",
-                "TOP",
-                "WHAT",
-                "WHEN",
-                "WHERE",
-                "WHICH",
-                "THAT",
-                "THIS",
-                "THEY",
-                "THEM",
-                "THAN",
-                "THEN",
-                "WILL",
-                "WITH",
-                "FROM",
-                "HAVE",
-                "BEEN",
-                "WERE",
-                "ABOUT",
-                "THEIR",
-                "WOULD",
-                "COULD",
-                "REVENUE",
-                "PROFIT",
-                "LOSS",
-                "YEAR",
-                "LAST",
-                "FIRST",
-                "TOTAL",
-            }
-            query_words = set(re.findall(r"\b[A-Z0-9]+\b", query_upper))
-            for word in query_words:
-                if len(word) >= 2:  # Only consider words with 2+ chars
-                    # Skip common English words
-                    if word in common_words:
-                        continue
-                    # Skip if word is already a detected symbol
-                    if word in detected_symbols:
-                        continue
-                    for symbol in symbols:
-                        # Check if query word is a prefix of a symbol
-                        if symbol.startswith(word) and symbol != word:
-                            has_entity_in_query = True
-                            detected_symbols.append(f"{word}→{symbol}")
-                            break  # Found a match for this word, move to next word
-
-            # Method 3: Check for company name mentions using associations
-            if not has_entity_in_query:
-                associations = self.financial_manager.metadata.get("associations", {})
-                company_to_symbol = associations.get("company_to_symbol", {})
-                for company_name, company_symbols in company_to_symbol.items():
-                    # Check if any significant part of the company name is in the query
-                    # Split company name and check key words (ignore common words)
-                    company_words = company_name.upper().split()
-                    ignore_words = {"LIMITED", "THE", "AND", "OF", "JAMAICA", "GROUP", "COMPANY"}
-                    key_words = [w for w in company_words if w not in ignore_words and len(w) > 2]
-                    for word in key_words:
-                        if word in query_upper:
-                            has_entity_in_query = True
-                            detected_symbols.extend(company_symbols)
-                            break
-                    if has_entity_in_query:
-                        break
-
-        logger.info(
-            f"Entity detection: has_manager={has_manager}, has_metadata={has_metadata}, "
-            f"symbols_count={len(symbols)}, detected={detected_symbols}, "
-            f"has_entity_in_query={has_entity_in_query}"
-        )
-
-        has_entity_in_context = bool(extracted_context.get("entities"))
-
-        logger.info(
-            f"Clarification check: has_entity_in_query={has_entity_in_query}, "
-            f"has_entity_in_context={has_entity_in_context}, "
-            f"context_entities={extracted_context.get('entities')}"
-        )
-
-        # Check 1: No entity anywhere - clarify
-        if not has_entity_in_query and not has_entity_in_context:
-            # Exception: General market questions don't need entity
-            general_patterns = [
-                "market",
-                "jse",
-                "stock exchange",
-                "index",
-                "sector",
-                "trading",
-                "stocks",
-                "jamaica stock",
-                "the exchange",
-            ]
-            is_general = any(p in query_lower for p in general_patterns)
-            logger.info(f"No entity found - is_general={is_general}, query='{query_lower}'")
-            if not is_general:
-                logger.info("RETURNING NO_ENTITY clarification")
-                return (
-                    ClarificationReason.NO_ENTITY,
-                    CLARIFICATION_TEMPLATES["no_entity"],
-                )
-            else:
-                logger.info("Skipping clarification - query is general market query")
-        else:
-            logger.info(
-                f"Skipping NO_ENTITY check - entity found. "
-                f"has_entity_in_query={has_entity_in_query}, has_entity_in_context={has_entity_in_context}"
-            )
-
-        # Check 2: Unresolved pronouns
-        # First, skip if query contains general market terms (e.g., "stock market" != pronoun)
-        is_general_market = any(term in query_lower for term in GENERAL_MARKET_TERMS)
-        if not is_general_market:
-            has_pronoun = any(p in query_lower for p in PRONOUNS_NEEDING_RESOLUTION)
-            # Pronouns need resolution if there's no entity in query OR context
-            # (if entity is in query like "GK... them", "them" can resolve to "GK")
-            if has_pronoun and not has_entity_in_query and not has_entity_in_context:
-                return (
-                    ClarificationReason.UNRESOLVED_PRONOUN,
-                    CLARIFICATION_TEMPLATES["unresolved_pronoun"],
-                )
-
-        # Check 3: Ambiguous comparison
-        if "compare" in query_lower:
-            # Use the count from our enhanced entity detection above
-            # detected_symbols already contains all matched entities
-            entity_count = len(detected_symbols)
-            # Also count entities from context
-            entity_count += len(extracted_context.get("entities", []))
-            if entity_count < 2:
-                logger.info(
-                    f"Ambiguity detected: comparison with {entity_count} entities (detected: {detected_symbols})"
-                )
-                return (
-                    ClarificationReason.AMBIGUOUS_COMPARISON,
-                    CLARIFICATION_TEMPLATES["ambiguous_comparison"],
-                )
-
-        logger.info("No ambiguity detected - proceeding with query")
-        return None
 
     def _resolve_relative_time(self, query: str) -> Tuple[str, List[str]]:
         """

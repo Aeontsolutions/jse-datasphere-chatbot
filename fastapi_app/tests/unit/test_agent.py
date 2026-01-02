@@ -31,7 +31,6 @@ def orchestrator(mock_financial_manager):
         mock_client.return_value = MagicMock()
         return AgentOrchestrator(
             financial_manager=mock_financial_manager,
-            associations=None,
         )
 
 

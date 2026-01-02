@@ -118,7 +118,6 @@ def orchestrator_realistic(mock_financial_manager_realistic):
         mock_client.return_value = MagicMock()
         return AgentOrchestrator(
             financial_manager=mock_financial_manager_realistic,
-            associations=None,
         )
 
 
@@ -129,7 +128,6 @@ def orchestrator_with_metadata(mock_financial_manager_with_metadata):
         mock_client.return_value = MagicMock()
         return AgentOrchestrator(
             financial_manager=mock_financial_manager_with_metadata,
-            associations=None,
         )
 
 
@@ -140,7 +138,6 @@ def orchestrator_no_metadata(mock_financial_manager_empty_metadata):
         mock_client.return_value = MagicMock()
         return AgentOrchestrator(
             financial_manager=mock_financial_manager_empty_metadata,
-            associations=None,
         )
 
 
@@ -151,7 +148,6 @@ def orchestrator_empty_symbols(mock_financial_manager_empty_symbols):
         mock_client.return_value = MagicMock()
         return AgentOrchestrator(
             financial_manager=mock_financial_manager_empty_symbols,
-            associations=None,
         )
 
 
@@ -865,6 +861,55 @@ class TestVagueQueryExpansion:
         )
 
         assert result == "What is NCB's revenue for 2023?"
+
+
+# =============================================================================
+# TESTS: Enhanced Metadata Context Builder
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestEnhancedMetadataContext:
+    """Tests for the _build_enhanced_metadata_context helper method."""
+
+    def test_includes_symbol_company_mappings(self, orchestrator_with_metadata):
+        """Enhanced context should include symbol-to-company mappings."""
+        context = orchestrator_with_metadata._build_enhanced_metadata_context()
+
+        assert "Symbol-Company Mappings" in context
+        # Should contain at least one of the symbols from the mock metadata
+        assert "NCBFG:" in context or "GK:" in context or "JBG:" in context
+
+    def test_includes_symbols_list(self, orchestrator_with_metadata):
+        """Enhanced context should include a list of available symbols."""
+        context = orchestrator_with_metadata._build_enhanced_metadata_context()
+
+        assert "Available stock symbols:" in context
+
+    def test_handles_none_metadata(self, orchestrator_no_metadata):
+        """Should return empty string when metadata is None."""
+        context = orchestrator_no_metadata._build_enhanced_metadata_context()
+
+        assert context == ""
+
+    def test_handles_empty_associations(self, orchestrator_empty_symbols):
+        """Should handle missing or empty associations gracefully."""
+        context = orchestrator_empty_symbols._build_enhanced_metadata_context()
+
+        # Should not crash, result should be a string
+        assert isinstance(context, str)
+
+    def test_mappings_are_sorted(self, orchestrator_with_metadata):
+        """Symbol-company mappings should be sorted alphabetically."""
+        context = orchestrator_with_metadata._build_enhanced_metadata_context()
+
+        # Extract mappings section
+        if "Symbol-Company Mappings:" in context:
+            mappings_section = context.split("Symbol-Company Mappings:")[1]
+            lines = [line.strip() for line in mappings_section.strip().split("\n") if line.strip()]
+            # Check that lines are sorted (each line starts with symbol)
+            symbols = [line.split(":")[0].strip() for line in lines if ":" in line]
+            assert symbols == sorted(symbols), "Mappings should be sorted by symbol"
 
 
 # =============================================================================

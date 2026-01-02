@@ -988,15 +988,9 @@ async def agent_chat(
         if request.enable_financial_data and not financial_manager:
             logger.warning("Financial data requested but manager not available")
 
-        # Get associations from financial manager for better resolution
-        associations = None
-        if financial_manager and financial_manager.metadata:
-            associations = financial_manager.metadata.get("associations")
-
         # Create orchestrator
         orchestrator = AgentOrchestrator(
             financial_manager=financial_manager,
-            associations=associations,
         )
 
         # Run the agent
