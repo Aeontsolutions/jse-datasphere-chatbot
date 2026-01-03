@@ -248,7 +248,7 @@ def generate_chat_response(
     query, document_texts, conversation_history=None, auto_load_message=None
 ):
     """Generate chat response using Gemini model"""
-    model_name = "gemini-3-pro-preview"
+    model_name = "gemini-2.5-flash"
     start_time = time.time()
 
     try:
