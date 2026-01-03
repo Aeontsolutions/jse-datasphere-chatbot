@@ -1095,6 +1095,7 @@ Examples:
 IMPORTANT: Use the Symbol-Company Mappings above to recognize entities.
 - Match symbols OR company names to identify valid entities
 - Common abbreviations like "NCB" may refer to symbols like "NCBFG"
+- If a query mentions an UPPERCASE symbol-like string (e.g., "XYZ", "ABC"), treat it as a potential stock symbol and PROCEED - let the database determine if it's valid. Do NOT return NO_ENTITY for unknown symbols.
 
 CONVERSATION HISTORY:
 {context_str if context_str else "(No previous conversation)"}
@@ -1114,15 +1115,31 @@ CRITICAL RULES:
 === STEP 2: IF PROCEEDING, RESOLVE PRONOUNS ===
 Replace pronouns with the specific company they refer to.
 
+PRONOUN RESOLUTION RULES:
+1. PRESERVE the entire query - only replace the pronoun, keep everything else (time ranges, metrics, etc.)
+   Example: "What was their revenue for the last 5 years?" → "What was GK's revenue for the last 5 years?"
+2. When multiple entities appear in history, use the MOST RECENTLY discussed entity
+   Example: History has NCB then GK → "their" resolves to "GK" (most recent)
+3. For comparison pronouns like "them" or "compare them", resolve to ALL relevant entities from history
+   Example: History discusses NCB then GK → "Compare them" → "Compare NCB and GK"
+
 === STEP 3: DETERMINE WHICH TOOLS TO USE ===
 
+IMPORTANT: Our financial database contains ONLY numerical metrics (revenue amounts, profit figures, ratios, etc.).
+It does NOT contain explanations, reasons, analysis, or narrative information about WHY metrics changed.
+
 TOOL SELECTION RULES:
-- FINANCIAL: Use for queries about financial metrics (revenue, profit, EPS, margins, ratios, etc.) from our database
+- FINANCIAL: Use ONLY when the user wants specific numbers/metrics (e.g., "What is the revenue?", "Show me EPS")
 - WEB: Use for news, announcements, current events, founding dates, history, background, leadership, recent developments
-- BOTH: Use when the query asks for both financial data AND contextual/news information
+- BOTH: Use when the query needs BOTH numbers AND context/explanation, OR when asking about drivers/reasons/factors behind financial performance
+
+KEY INSIGHT: Questions asking WHY, WHAT DROVE, FACTORS, REASONS, or ANALYSIS of financial data need WEB (or BOTH) because explanations are not in the database.
 
 EXAMPLES:
-- "What is NCB revenue for 2023?" → FINANCIAL (specific metric from database)
+- "What is NCB revenue for 2023?" → FINANCIAL (asking for the number)
+- "What drove NCB's revenue growth?" → BOTH (asking for explanation - not in database)
+- "Why did MDS profit increase in 2024?" → BOTH (asking for reasons - needs web/reports)
+- "What were the main drivers of their revenue?" → BOTH (drivers/factors need qualitative info)
 - "When was GK founded?" → WEB (historical info, not in financial database)
 - "Latest news about NCB" → WEB (current events)
 - "GK revenue and latest news about them" → BOTH (financial data + news)
@@ -1130,13 +1147,14 @@ EXAMPLES:
 - "Tell me about GK" → BOTH (general info needs both sources)
 - "What is happening on the JSE market?" → WEB (market news/events)
 - "Compare NCB and GK revenue" → FINANCIAL (specific metric comparison)
+- "What factors contributed to MDS's earnings?" → BOTH (factors/analysis need web)
 
 === OUTPUT FORMAT ===
 
 If clarification needed (output ONE of these exactly):
-CLARIFY:NO_ENTITY
-CLARIFY:UNRESOLVED_PRONOUN
-CLARIFY:AMBIGUOUS_COMPARISON
+- CLARIFY:NO_ENTITY - Use when query asks about financial metrics but NO company/symbol is mentioned or resolvable
+- CLARIFY:UNRESOLVED_PRONOUN - Use when query has pronouns (they/their/them/it) that cannot be resolved from conversation history
+- CLARIFY:AMBIGUOUS_COMPARISON - Use when query asks to COMPARE but doesn't specify which entities to compare (e.g., "compare the banks", "compare them")
 
 If proceeding (output in this exact format):
 PROCEED|<TOOL>: <optimized query>
@@ -1144,10 +1162,14 @@ PROCEED|<TOOL>: <optimized query>
 Where <TOOL> is one of: FINANCIAL, WEB, BOTH
 
 EXAMPLES:
-- "What is their profit?" (no context) → CLARIFY:NO_ENTITY
+- "What is the revenue?" (no context) → CLARIFY:NO_ENTITY (no company specified)
+- "What is their profit?" (no context) → CLARIFY:UNRESOLVED_PRONOUN (pronoun with no referent)
+- "Compare the banks" → CLARIFY:AMBIGUOUS_COMPARISON (comparison without specific entities)
+- "Compare them" (no context) → CLARIFY:AMBIGUOUS_COMPARISON (comparison with unresolved pronoun)
 - "What is NCB revenue?" → PROCEED|FINANCIAL: What is NCB revenue?
 - "When was GK founded?" → PROCEED|WEB: When was GK founded?
-- "GK revenue and news about them" → PROCEED|BOTH: GK revenue and news about GK"""
+- "GK revenue and news about them" → PROCEED|BOTH: GK revenue and news about GK
+- "Compare NCB with the other company" (GK in history) → PROCEED|FINANCIAL: Compare NCB with GK (resolve "the other company" from context)"""
 
         try:
             logger.info(f">>> UNIFIED PROMPT OPTIMIZATION for query: '{query}'")
@@ -1577,7 +1599,10 @@ Use the financial database for metrics and numbers. Use web search for news and 
                         query_for_financial = expanded_query
                         logger.info(f"LLM expanded vague query: {query_for_financial}")
 
-                financial_result = await self._run_financial_phase(query_for_financial)
+                financial_result = await self._run_financial_phase(
+                    query_for_financial,
+                    default_context=optimization_result.resolved_context,
+                )
 
                 if financial_result:
                     tools_executed.append("query_financial_data")
@@ -1650,12 +1675,18 @@ Use the financial database for metrics and numbers. Use web search for news and 
             logger.error(f"Agent run failed: {e}", exc_info=True)
             return self._build_error_response(query, str(e), conversation_history)
 
-    async def _run_financial_phase(self, query: str) -> Optional[Dict[str, Any]]:
+    async def _run_financial_phase(
+        self,
+        query: str,
+        default_context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Phase 1: Run financial database query using function calling.
 
         Args:
             query: Optimized query
+            default_context: Optional context with default values (years, metrics) to apply
+                            if LLM doesn't extract them from the query
 
         Returns:
             Dictionary with records, filters, chart, sources, and context
@@ -1745,7 +1776,22 @@ Call the query_financial_data function with these parameters."""
                         fc = part.function_call
                         if fc.name == "query_financial_data":
                             args = dict(fc.args) if fc.args else {}
-                            logger.info(f"Financial query args: {args}")
+                            logger.info(f"Financial query args (from LLM): {args}")
+
+                            # Merge in default years if LLM didn't extract any
+                            if default_context:
+                                if not args.get("years") and default_context.get("years"):
+                                    args["years"] = default_context["years"]
+                                    logger.info(f"Applied default years: {args['years']}")
+                                if not args.get("standard_items") and default_context.get(
+                                    "metrics"
+                                ):
+                                    args["standard_items"] = default_context["metrics"]
+                                    logger.info(
+                                        f"Applied default metrics: {args['standard_items']}"
+                                    )
+
+                            logger.info(f"Financial query args (final): {args}")
 
                             records, filters, chart, db_sources = await execute_financial_query(
                                 self.financial_manager, args
@@ -2027,6 +2073,7 @@ RESPONSE GUIDELINES:
 3. For web sources, casually mention where you found it (e.g., "According to recent reports..." or "The Jamaica Observer reported...")
 4. If information is incomplete, be upfront about what you found and what's missing
 5. When helpful, suggest 1-2 natural follow-up questions
+6. DO NOT start every response with greetings like "Hi there!", "Certainly!", "Of course!", etc. - just answer naturally. Save greetings for the very first message only.
 
 Keep your response conversational and easy to read."""
 
