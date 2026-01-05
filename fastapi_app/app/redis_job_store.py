@@ -1,15 +1,16 @@
-import json
 import asyncio
-import logging
-from dataclasses import asdict
+import json
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 import redis.asyncio as redis
-from app.job_store import JobStore, JobRecord
+
+from app.job_store import JobRecord, JobStore
+from app.logging_config import get_logger
 from app.models import JobStatus, JobStatusResponse, ProgressUpdate
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
 
 class RedisJobStore(JobStore):
     """
@@ -75,11 +76,11 @@ class RedisJobStore(JobStore):
         # We generate ID and save directly to Redis
         import uuid
         from datetime import timedelta
-        
+
         job_id = uuid.uuid4().hex
         now = datetime.utcnow()
         expires_at = now + timedelta(seconds=self._ttl)
-        
+
         record = JobRecord(
             job_id=job_id,
             job_type=job_type,
@@ -89,7 +90,7 @@ class RedisJobStore(JobStore):
             expires_at=expires_at,
             request_payload=request_payload,
         )
-        
+
         await self._save_record(record)
         return job_id
 
@@ -154,4 +155,3 @@ class RedisJobStore(JobStore):
     async def prune_job(self, job_id: str) -> None:
         key = f"job:{job_id}"
         await self._redis.delete(key)
-

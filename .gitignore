@@ -24,9 +24,29 @@ lib64/
 parts/
 sdist/
 var/
+wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
+
+# Testing and Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+.tox/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
 
 # Virtual Environment
 venv/
@@ -52,7 +72,7 @@ Thumbs.db
 *.txt
 !requirements.txt
 
-# Chroma DB 
+# Chroma DB
 ./chroma_db/*
 ./chroma/*
 **/chroma_db/
@@ -74,5 +94,19 @@ fastapi_app/fastapi_app/*
 # Jupyter notebooks
 *.ipynb
 
-#AWS
-ecs-deployer_accessKeys.csv
+# AWS and credentials
+credentials/
+*.pem
+*.key
+
+# Data files (large metadata files)
+data/
+!data/README.md  # Allow README in data directory
+*.csv
+!tools/*.csv  # Allow CSV files in tools if needed
+
+# SonarQube
+.scannerwork/
+
+# Claude Code
+.claude/

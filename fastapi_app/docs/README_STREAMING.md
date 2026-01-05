@@ -87,7 +87,7 @@ fetch('/chat/stream', { /* ... */ })
 ```
 
 ### Progress Steps
-**Traditional Chat**: Document loading → AI generation → Complete  
+**Traditional Chat**: Document loading → AI generation → Complete
 **Fast Chat**: Query prep → Document selection → Vector search → AI generation → Complete
 
 ## 🚀 Next Steps
@@ -116,16 +116,16 @@ fetch('/chat/stream', { /* ... */ })
 
 ## 🛠 Troubleshooting
 
-**Issue**: Stream doesn't start  
+**Issue**: Stream doesn't start
 **Solution**: Check CORS settings and ensure Content-Type is correct
 
-**Issue**: Progress updates not received  
+**Issue**: Progress updates not received
 **Solution**: Verify browser supports EventSource or use fetch with ReadableStream
 
-**Issue**: Connection drops  
+**Issue**: Connection drops
 **Solution**: Implement heartbeat monitoring and reconnection logic
 
-**Issue**: Buffering problems  
+**Issue**: Buffering problems
 **Solution**: Configure proxy/load balancer to disable buffering for streaming endpoints
 
 ## 📖 Documentation
@@ -134,4 +134,4 @@ fetch('/chat/stream', { /* ... */ })
 - **`streaming_test_client.html`** - Working frontend example
 - **`test_streaming.py`** - Python integration example
 
-The streaming implementation is backward-compatible - all existing endpoints continue to work unchanged. 
+The streaming implementation is backward-compatible - all existing endpoints continue to work unchanged.

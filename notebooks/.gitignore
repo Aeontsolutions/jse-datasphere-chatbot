@@ -1,0 +1,14 @@
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Output files
+*.html
+
+# Downloaded documents
+downloads/
+
+# Large data files (if any)
+*.csv
+*.parquet
+*.json
+!sample_*.json

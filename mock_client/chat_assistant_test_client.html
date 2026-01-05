@@ -4,6 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>JSE Chat Assistant Test Client</title>
+  <!-- Vega-Lite for chart rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -14,6 +18,7 @@
       --subtle: #61758a;
       --fast: #ff7846;
       --deep: #4f46e5;
+      --agent: #10b981;
       --success: #16a34a;
       --error: #dc2626;
     }
@@ -52,10 +57,10 @@
     }
     .mode-toggle {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       background: rgba(148, 163, 184, 0.12);
       padding: 4px;
-      border-radius: 999px;
+      border-radius: 12px;
       gap: 4px;
     }
     .mode-btn {
@@ -75,6 +80,10 @@
     .mode-btn.active.deep {
       background: rgba(79, 70, 229, 0.35);
       color: #eef2ff;
+    }
+    .mode-btn.active.agent {
+      background: rgba(16, 185, 129, 0.3);
+      color: #ecfdf5;
     }
     .environment {
       display: flex;
@@ -188,6 +197,29 @@
       font-size: 0.75rem;
       color: var(--subtle);
     }
+    .chart-container {
+      align-self: flex-start;
+      max-width: 90%;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin: 8px 0;
+    }
+    .chart-container .chart-title {
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+    .chart-container .chart-description {
+      font-size: 0.8rem;
+      color: var(--subtle);
+      margin-bottom: 12px;
+    }
+    .chart-container .vega-embed {
+      width: 100%;
+    }
     .streaming-panel {
       background: var(--panel);
       border-radius: 16px;
@@ -214,6 +246,10 @@
     .badge.deep {
       background: rgba(79, 70, 229, 0.15);
       color: #4338ca;
+    }
+    .badge.agent {
+      background: rgba(16, 185, 129, 0.15);
+      color: #059669;
     }
     .progress-shell {
       background: rgba(15, 23, 42, 0.05);
@@ -311,10 +347,11 @@
     <aside>
       <div class="sidebar-header">
         <h1>Jacie Assistant</h1>
-        <p>Standalone test client for Fast & Deep chat flows.</p>
+        <p>Test client for Fast, Agent & Deep chat flows.</p>
       </div>
       <div class="mode-toggle">
         <button class="mode-btn active fast" data-mode="fast">🔥 Fast Financial</button>
+        <button class="mode-btn agent" data-mode="agent">🤖 Agent</button>
         <button class="mode-btn deep" data-mode="deep">📚 Deep Sync</button>
         <button class="mode-btn deep" data-mode="deep-stream">🌊 Deep Stream</button>
       </div>
@@ -354,6 +391,8 @@
         <div class="checkbox-group">
           <label><input type="checkbox" id="autoLoadToggle" checked /> Auto-load documents</label>
           <label><input type="checkbox" id="memoryToggle" checked /> Conversation memory</label>
+          <label id="webSearchLabel" style="display: none;"><input type="checkbox" id="webSearchToggle" checked /> Web Search</label>
+          <label id="financialDataLabel" style="display: none;"><input type="checkbox" id="financialDataToggle" checked /> Financial Data</label>
         </div>
         <textarea id="composerInput" placeholder="Ask anything about JSE Datasphere documents…"></textarea>
         <div class="composer-actions">
@@ -409,6 +448,10 @@
       composerInput: document.getElementById("composerInput"),
       autoLoadToggle: document.getElementById("autoLoadToggle"),
       memoryToggle: document.getElementById("memoryToggle"),
+      webSearchToggle: document.getElementById("webSearchToggle"),
+      financialDataToggle: document.getElementById("financialDataToggle"),
+      webSearchLabel: document.getElementById("webSearchLabel"),
+      financialDataLabel: document.getElementById("financialDataLabel"),
       sendBtn: document.getElementById("sendBtn"),
       resetSessionBtn: document.getElementById("resetSessionBtn"),
       newSessionBtn: document.getElementById("newSessionBtn"),
@@ -474,7 +517,7 @@
       renderTranscript();
     }
 
-    function appendMessage(sessionId, role, content) {
+    function appendMessage(sessionId, role, content, chartSpec = null) {
       if (!state.messagesBySession[sessionId]) {
         state.messagesBySession[sessionId] = [];
       }
@@ -482,6 +525,7 @@
         role,
         content,
         timestamp: new Date().toISOString(),
+        chart: chartSpec,  // Store chart spec with the message
       });
       persistState();
       renderTranscript();
@@ -525,7 +569,7 @@
         dom.transcript.appendChild(placeholder);
         return;
       }
-      messages.forEach((msg) => {
+      messages.forEach((msg, index) => {
         const bubble = document.createElement("div");
         bubble.className = `message ${msg.role}`;
         bubble.innerHTML = `
@@ -533,6 +577,11 @@
           <small>${new Date(msg.timestamp).toLocaleTimeString()}</small>
         `;
         dom.transcript.appendChild(bubble);
+
+        // Render chart if present in this message
+        if (msg.chart && msg.chart.vega_lite) {
+          renderChartInTranscript(msg.chart, index);
+        }
       });
       dom.transcript.scrollTop = dom.transcript.scrollHeight;
     }
@@ -547,11 +596,25 @@
         ?.classList.add("active");
       const badgeText = {
         fast: "Fast Financial",
+        agent: "Agent Mode",
         deep: "Deep Sync",
         "deep-stream": "Deep Stream"
       };
       dom.modeBadge.textContent = badgeText[mode] || mode;
-      dom.modeBadge.className = `badge ${mode.includes('deep') ? 'deep' : 'fast'}`;
+
+      // Set badge class based on mode
+      let badgeClass = 'fast';
+      if (mode === 'agent') badgeClass = 'agent';
+      else if (mode.includes('deep')) badgeClass = 'deep';
+      dom.modeBadge.className = `badge ${badgeClass}`;
+
+      // Show/hide agent-specific toggles
+      const isAgent = mode === 'agent';
+      dom.webSearchLabel.style.display = isAgent ? 'flex' : 'none';
+      dom.financialDataLabel.style.display = isAgent ? 'flex' : 'none';
+
+      // Show/hide non-agent toggles (auto-load docs only for fast/deep)
+      dom.autoLoadToggle.parentElement.style.display = isAgent ? 'none' : 'flex';
     }
 
     function updateStreamingUI(patch = {}) {
@@ -623,6 +686,41 @@
           handleAssistantReply(data, "fast");
           updateStreamingUI({
             message: "Fast chat complete",
+            step: "Response ready",
+            progress: 100,
+            response: "Response captured in transcript.",
+          });
+        } else if (state.mode === "agent") {
+          // Agent mode - uses /agent/chat endpoint with web search + SQL tools
+          const agentPayload = {
+            query: prompt,
+            memory_enabled: dom.memoryToggle.checked,
+            enable_web_search: dom.webSearchToggle.checked,
+            enable_financial_data: dom.financialDataToggle.checked,
+          };
+          if (agentPayload.memory_enabled) {
+            agentPayload.conversation_history = buildConversationHistory(state.selectedSessionId);
+          }
+
+          resetStreaming();
+          updateStreamingUI({
+            message: "Agent request in-flight…",
+            step: "Calling /agent/chat",
+            progress: 35,
+          });
+          const response = await fetch(`${baseUrl}/agent/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify(agentPayload),
+          });
+          if (!response.ok) {
+            throw new Error(`Agent chat failed (${response.status})`);
+          }
+          const data = await response.json();
+          handleAssistantReply(data, "agent");
+          updateStreamingUI({
+            message: "Agent chat complete",
             step: "Response ready",
             progress: 100,
             response: "Response captured in transcript.",
@@ -818,7 +916,11 @@
         data.answer ||
         data.result ||
         "No assistant response returned.";
-      appendMessage(state.selectedSessionId, "assistant", responseText);
+
+      // Pass chart spec with the message so it persists across re-renders
+      const chartSpec = (data.chart && data.chart.vega_lite) ? data.chart : null;
+      appendMessage(state.selectedSessionId, "assistant", responseText, chartSpec);
+
       const docs = data.documents_loaded;
       const extraDetails = [];
       if (docs?.length) {
@@ -830,15 +932,81 @@
       if (data.record_count) {
         extraDetails.push(`${data.record_count} financial records analyzed`);
       }
+      if (data.chart) {
+        extraDetails.push(`Chart: ${data.chart.chart_type} - ${data.chart.description}`);
+      }
+
+      // Agent-specific metadata
+      if (data.tools_executed?.length) {
+        extraDetails.push(`Tools used: ${data.tools_executed.join(', ')}`);
+      }
+      if (data.sources?.length) {
+        const sourcesList = data.sources.map(s => s.description || s.type).join(', ');
+        extraDetails.push(`Sources: ${sourcesList}`);
+      }
+      if (data.suggestions?.length) {
+        extraDetails.push(`Follow-up suggestions:\n  • ${data.suggestions.join('\n  • ')}`);
+      }
+
       if (extraDetails.length) {
+        const modeLabel = mode === "agent" ? "Agent" : (mode === "deep" ? "Deep" : "Fast");
         appendMessage(
           state.selectedSessionId,
           "system",
-          `${mode === "deep" ? "Deep" : "Fast"} mode insight:\n- ${extraDetails.join(
-            "\n- "
-          )}`
+          `${modeLabel} mode insight:\n- ${extraDetails.join("\n- ")}`
         );
       }
+    }
+
+    function renderChartInTranscript(chartSpec, messageIndex) {
+      if (!chartSpec || !chartSpec.vega_lite) return;
+
+      // Create chart container
+      const container = document.createElement("div");
+      container.className = "chart-container";
+
+      // Add title and description
+      if (chartSpec.title) {
+        const title = document.createElement("div");
+        title.className = "chart-title";
+        title.textContent = chartSpec.title;
+        container.appendChild(title);
+      }
+
+      if (chartSpec.description) {
+        const desc = document.createElement("div");
+        desc.className = "chart-description";
+        desc.textContent = chartSpec.description;
+        container.appendChild(desc);
+      }
+
+      // Create chart div with unique ID based on message index
+      const chartId = `chart-${state.selectedSessionId}-${messageIndex}`;
+      const chartDiv = document.createElement("div");
+      chartDiv.id = chartId;
+      container.appendChild(chartDiv);
+
+      // Append to transcript
+      dom.transcript.appendChild(container);
+
+      // Render with Vega-Embed (use setTimeout to ensure DOM is ready)
+      setTimeout(() => {
+        vegaEmbed(`#${chartId}`, chartSpec.vega_lite, {
+          actions: {
+            export: true,
+            source: false,
+            compiled: false,
+            editor: false,
+          },
+          theme: "default",
+          renderer: "canvas",
+        }).then((result) => {
+          console.log("Chart rendered successfully:", chartSpec.chart_type);
+        }).catch((err) => {
+          console.error("Chart rendering error:", err);
+          chartDiv.innerHTML = `<p style="color: var(--error);">Failed to render chart: ${err.message}</p>`;
+        });
+      }, 0);
     }
 
     function resetSessionMessages() {
@@ -881,4 +1049,3 @@
   </script>
 </body>
 </html>
-

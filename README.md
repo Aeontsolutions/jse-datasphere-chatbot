@@ -6,7 +6,7 @@ A sophisticated AI-powered chatbot for querying and analyzing Jamaica Stock Exch
 
 ### Core Capabilities
 - **Natural Language Queries**: Ask questions about JSE documents using conversational language
-- **Vector-Based Semantic Search**: Powered by ChromaDB for intelligent document retrieval
+- **Direct Document Loading**: Intelligent document retrieval from S3 storage
 - **Financial Data Analytics**: BigQuery integration for structured financial data queries
 - **AI-Powered Analysis**: Google Gemini models for document analysis and recommendations
 - **Conversation Memory**: Contextual understanding across multiple interactions
@@ -23,10 +23,10 @@ A sophisticated AI-powered chatbot for querying and analyzing Jamaica Stock Exch
 
 ### System Components
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   FastAPI       │    │   ChromaDB      │
-│   (Streamlit)   │◄──►│   Backend       │◄──►│   Vector Store  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌─────────────────┐    ┌─────────────────┐
+│   Frontend      │    │   FastAPI       │
+│   (Streamlit)   │◄──►│   Backend       │
+└─────────────────┘    └─────────────────┘
                               │
                               ▼
                        ┌─────────────────┐    ┌─────────────────┐
@@ -38,7 +38,6 @@ A sophisticated AI-powered chatbot for querying and analyzing Jamaica Stock Exch
 
 ### Key Technologies
 - **Backend**: FastAPI (Python 3.11)
-- **Vector Database**: ChromaDB with Google Generative AI embeddings
 - **AI Models**: Google Gemini 2.0 Flash
 - **Data Storage**: AWS S3 (documents), Google BigQuery (financial data)
 - **Deployment**: Docker + AWS Copilot
@@ -72,9 +71,6 @@ GCP_SERVICE_ACCOUNT_INFO={"type":"service_account",...}
 GCP_PROJECT_ID=your-project-id
 BIGQUERY_DATASET=your_dataset
 BIGQUERY_TABLE=your_table
-
-# ChromaDB Configuration
-CHROMA_HOST=http://localhost:8001
 ```
 
 ## 🛠️ Installation & Setup
@@ -161,15 +157,8 @@ streamlit run frontend.py
 
 ### Core Chat Endpoints
 - `POST /chat` - Traditional chat with full document loading
-- `POST /fast_chat` - Optimized chat with vector-based document selection
-- `POST /fast_chat_v2` - Financial data queries with BigQuery integration
 - `POST /chat/stream` - Streaming chat with real-time progress updates
-
-### Document Management
-- `POST /chroma/update` - Add documents to vector database
-- `POST /chroma/query` - Query documents using semantic search
-- `POST /chroma/meta/update` - Update document metadata collection
-- `POST /chroma/meta/query` - Query document metadata
+- `POST /fast_chat_v2` - Financial data queries with BigQuery integration
 
 ### Financial Data
 - `POST /fast_chat_v2` - Natural language financial data queries
@@ -191,7 +180,6 @@ python -m pytest tests/ -v
 ### Key Test Categories
 - **API Integration**: `test_api_integration.py`
 - **Financial Data**: `test_financial_utils.py`
-- **Vector Search**: `test_chroma_utils.py`
 - **Caching**: `test_cache_optimization.py`
 - **Streaming**: `test_streaming.py`
 
@@ -254,19 +242,34 @@ curl http://localhost:8000/cache/status
 
 ### Project Structure
 ```
-fastapi_app/
-├── app/                    # Core application code
-│   ├── main.py            # FastAPI application and endpoints
-│   ├── models.py          # Pydantic data models
-│   ├── utils.py           # Core utilities and AI integration
-│   ├── chroma_utils.py    # Vector database operations
-│   ├── financial_utils.py # BigQuery financial data manager
-│   ├── streaming_chat.py  # Streaming response handling
-│   └── progress_tracker.py # Progress tracking utilities
-├── tests/                 # Test suite
-├── copilot/              # AWS Copilot deployment configs
+jse-datasphere-chatbot/
+├── fastapi_app/           # Main FastAPI application
+│   ├── app/              # Application code
+│   │   ├── main.py       # FastAPI app and endpoints
+│   │   ├── config.py     # Centralized configuration
+│   │   ├── models.py     # Pydantic data models
+│   │   ├── s3_client.py  # S3 operations
+│   │   ├── gemini_client.py # AI client
+│   │   ├── document_selector.py # Document selection
+│   │   ├── metadata_loader.py # Metadata management
+│   │   ├── financial_utils.py # BigQuery integration
+│   │   └── streaming_chat.py # Streaming responses
+│   ├── tests/            # Test suite
+│   │   ├── unit/        # Unit tests
+│   │   └── integration/ # Integration tests
+│   ├── copilot/         # AWS Copilot configs
+│   └── pyproject.toml   # Python packaging
 ├── docs/                 # Documentation
-└── requirements.txt      # Python dependencies
+│   ├── DEVELOPMENT.md   # Developer guide
+│   ├── SECRETS_MANAGEMENT.md # Security guide
+│   ├── REFACTOR_PLAN.md # Architecture plan
+│   └── archive/         # Historical docs
+├── scripts/             # Utility scripts
+│   ├── rebuild_metadata.py
+│   └── test_client.py
+├── data/                # Local data files (gitignored)
+├── mock_client/         # Test client
+└── .github/workflows/   # CI/CD pipelines
 ```
 
 ### Development Workflow
@@ -286,15 +289,6 @@ fastapi_app/
 ## 🐛 Troubleshooting
 
 ### Common Issues
-
-#### ChromaDB Connection Issues
-```bash
-# Check ChromaDB status
-curl http://localhost:8001/api/v1/heartbeat
-
-# Restart ChromaDB service
-docker-compose restart chroma
-```
 
 #### BigQuery Connection Issues
 ```bash
@@ -316,13 +310,22 @@ aws sts get-caller-identity
 ```
 
 ### Performance Optimization
-- **Document Selection**: Use `/fast_chat` for better performance
+- **Document Selection**: Use `/fast_chat_v2` for financial data queries
 - **Caching**: Monitor cache hit rates and refresh when needed
-- **Vector Database**: Ensure ChromaDB has adequate resources
 - **BigQuery**: Use appropriate query filters to reduce data transfer
 
 ## 📖 Documentation
 
+### Getting Started
+- **[QUICK_START.md](docs/QUICK_START.md)** - Quick start guide for new developers
+- **[DEVELOPMENT.md](docs/DEVELOPMENT.md)** - Comprehensive development guide
+- **[SECRETS_MANAGEMENT.md](docs/SECRETS_MANAGEMENT.md)** - Security and secrets management
+
+### Architecture & Planning
+- **[REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md)** - System architecture and refactoring plan
+- **[MIGRATION_SUMMARY.md](docs/MIGRATION_SUMMARY.md)** - Migration guide to new architecture
+
+### API & Deployment
 - **[API Documentation](fastapi_app/docs/API_DOCUMENTATION.md)** - Complete API reference
 - **[Deployment Guide](fastapi_app/docs/DEPLOYMENT_GUIDE_FAST_CHAT_V2.md)** - Deployment instructions
 - **[Streaming Guide](fastapi_app/docs/STREAMING_API_GUIDE.md)** - Streaming API usage

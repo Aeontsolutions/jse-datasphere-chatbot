@@ -84,7 +84,7 @@ The JSE DataSphere Chatbot is built as a microservices architecture with the fol
    ```bash
    # Install Python 3.11+
    python --version  # Should be 3.11 or higher
-   
+
    # Create virtual environment
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
@@ -102,7 +102,7 @@ The JSE DataSphere Chatbot is built as a microservices architecture with the fol
    # AWS CLI
    aws --version
    aws configure  # Set up credentials
-   
+
    # Google Cloud CLI (optional)
    gcloud --version
    gcloud auth login
@@ -114,7 +114,7 @@ The JSE DataSphere Chatbot is built as a microservices architecture with the fol
    ```bash
    git clone <repository-url>
    cd jse-datasphere-chatbot
-   
+
    # Install dependencies
    cd fastapi_app
    pip install -r requirements.txt
@@ -124,7 +124,7 @@ The JSE DataSphere Chatbot is built as a microservices architecture with the fol
    ```bash
    # Copy environment template
    cp .env.example .env
-   
+
    # Configure required variables
    nano .env
    ```
@@ -133,7 +133,7 @@ The JSE DataSphere Chatbot is built as a microservices architecture with the fol
    ```bash
    # Start ChromaDB (Docker)
    docker-compose up -d chroma
-   
+
    # Or local ChromaDB
    pip install chromadb[server]
    chroma run --host localhost --port 8000
@@ -143,7 +143,7 @@ The JSE DataSphere Chatbot is built as a microservices architecture with the fol
    ```bash
    # Test API
    uvicorn main:app --reload --host 0.0.0.0 --port 8000
-   
+
    # Check health
    curl http://localhost:8000/health
    ```
@@ -248,7 +248,7 @@ Pydantic models define the API contract and ensure data validation.
 class ChatRequest(BaseModel):
     query: str = Field(..., description="User query/question")
     conversation_history: Optional[List[Dict[str, str]]] = Field(
-        default=None, 
+        default=None,
         description="Previous conversation history"
     )
     auto_load_documents: bool = Field(default=True)
@@ -294,11 +294,11 @@ class FinancialDataManager:
         self._initialize_bigquery_client()
         self._initialize_ai_model()
         self.load_metadata_from_bigquery()
-    
+
     def parse_user_query(self, query: str, conversation_history=None):
         # LLM-based query parsing
         pass
-    
+
     def query_data(self, filters: FinancialDataFilters):
         # BigQuery data retrieval
         pass
@@ -431,14 +431,14 @@ class TestFinancialDataManager:
     def setup_method(self):
         """Setup test fixtures"""
         self.manager = FinancialDataManager()
-    
+
     def test_parse_user_query(self):
         """Test natural language query parsing"""
         query = "Show me NCB revenue for 2023"
         filters = self.manager.parse_user_query(query)
         assert filters.companies == ["NCB"]
         assert filters.years == ["2023"]
-    
+
     def test_bigquery_integration(self):
         """Test BigQuery data retrieval"""
         # Mock BigQuery client
@@ -473,19 +473,15 @@ def test_bigquery_connection(mock_client):
 
 ## Performance Optimization
 
-### Document Selection Optimization
+### Document Selection
 
-**Before**: LLM-based selection (~20s)
-**After**: Embedding-based selection (~300ms)
+Document selection uses LLM-based semantic analysis to identify relevant documents based on user queries and conversation context.
 
 ```python
-def semantic_document_selection(query, metadata, conversation_history=None, meta_collection=None):
-    if meta_collection:
-        # Fast embedding-based selection
-        return query_meta_collection(meta_collection, query)
-    else:
-        # Fallback to LLM-based selection
-        return semantic_document_selection_llm_fallback(query, metadata, conversation_history)
+def semantic_document_selection(query, metadata, conversation_history=None):
+    # LLM-based document selection
+    # Returns dict with companies_mentioned and documents_to_load
+    ...
 ```
 
 ### Caching Optimization
@@ -495,13 +491,13 @@ def semantic_document_selection(query, metadata, conversation_history=None, meta
 ```python
 def get_cached_model(metadata):
     global _metadata_cache, _cache_expiry, _cache_hash
-    
+
     current_hash = get_metadata_hash(metadata)
-    if (_metadata_cache and _cache_expiry and 
-        datetime.utcnow() < _cache_expiry and 
+    if (_metadata_cache and _cache_expiry and
+        datetime.utcnow() < _cache_expiry and
         _cache_hash == current_hash):
         return _metadata_cache
-    
+
     return create_metadata_cache(metadata)
 ```
 
@@ -521,11 +517,11 @@ def query_data(self, filters: FinancialDataFilters) -> List[FinancialDataRecord]
         FROM `{self.project_id}.{self.dataset}.{self.table}`
         WHERE 1=1
     """
-    
+
     # Add filters dynamically
     if filters.companies:
         query += f" AND Company IN UNNEST(@companies)"
-    
+
     # Execute with parameters
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
@@ -622,7 +618,7 @@ type: Load Balanced Web Service
 
 http:
   path: '/'
-  healthcheck: 
+  healthcheck:
     path: '/health'
     interval: 30s
     timeout: 10s
@@ -841,10 +837,10 @@ def log_memory_usage():
    ```bash
    # Run test suite
    python -m pytest tests/ -v
-   
+
    # Check code coverage
    python -m pytest tests/ --cov=app --cov-report=html
-   
+
    # Run linting
    flake8 app/ tests/
    black app/ tests/
@@ -875,13 +871,13 @@ def log_memory_usage():
 def process_chat_request(request: ChatRequest) -> ChatResponse:
     """
     Process a chat request and generate a response.
-    
+
     Args:
         request: The chat request containing query and context
-        
+
     Returns:
         ChatResponse: The generated response with documents and metadata
-        
+
     Raises:
         ValueError: If request validation fails
         ConnectionError: If external services are unavailable
@@ -948,4 +944,4 @@ chore: maintenance tasks
 
 ---
 
-This developer guide provides comprehensive information for contributing to the JSE DataSphere Chatbot project. For additional questions or clarifications, please refer to the project documentation or create an issue in the repository. 
+This developer guide provides comprehensive information for contributing to the JSE DataSphere Chatbot project. For additional questions or clarifications, please refer to the project documentation or create an issue in the repository.
