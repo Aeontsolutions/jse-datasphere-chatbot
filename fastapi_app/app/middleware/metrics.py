@@ -87,6 +87,12 @@ ai_tokens_total = Counter(
     labelnames=["model", "token_type"],  # token_type: input, output
 )
 
+ai_cost_dollars_total = Counter(
+    "ai_cost_dollars_total",
+    "Total AI API costs in USD",
+    labelnames=["model", "phase"],  # phase: classification, synthesis, etc.
+)
+
 
 # =============================================================================
 # BIGQUERY METRICS

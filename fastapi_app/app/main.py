@@ -17,6 +17,8 @@ from app.models import (
     JobCreateResponse,
     JobStatusResponse,
     JobStatus,
+    AgentChatRequest,
+    AgentChatResponse,
 )
 from app.charting import generate_chart
 from app.s3_client import init_s3_client
@@ -30,6 +32,7 @@ from app.metadata_loader import load_metadata_from_s3
 from app.document_selector import auto_load_relevant_documents
 from app.streaming_chat import process_streaming_chat
 from app.financial_utils import FinancialDataManager
+from app.agent import AgentOrchestrator
 from app.job_store import JobStore, JobProgressSink
 from app.redis_job_store import RedisJobStore
 from app.progress_tracker import ProgressTracker
@@ -563,8 +566,8 @@ async def chat(
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
 
 
-@app.post("/chat/stream")
-async def chat_stream(
+@app.post("/chat/stream/v0")
+async def chat_stream_v0(
     request: StreamingChatRequest,
     s3_client: Any = Depends(get_s3_client),
     metadata: Dict = Depends(get_metadata),
@@ -572,6 +575,8 @@ async def chat_stream(
     financial_manager: Any = Depends(get_financial_manager),
 ):
     """
+    [DEPRECATED] Legacy streaming chat endpoint - use /chat/stream instead.
+
     Stream chat responses with real-time progress updates using Server-Sent Events
 
     This endpoint provides the same functionality as /chat but streams progress updates
@@ -584,7 +589,7 @@ async def chat_stream(
     event with the complete response.
     """
     logger.info(
-        f"/chat/stream called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
+        f"/chat/stream/v0 called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
     )
 
     # Log conversation history for debugging
@@ -933,6 +938,114 @@ async def refresh_cache_endpoint():
     except Exception as e:
         logger.error(f"Error refreshing cache: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error refreshing cache: {str(e)}")
+
+
+# ==============================================================================
+# AGENT CHAT ENDPOINT (Primary: /chat/stream, Legacy alias: /agent/chat)
+# ==============================================================================
+
+
+@app.post("/chat/stream", response_model=AgentChatResponse)
+@app.post("/agent/chat", response_model=AgentChatResponse, include_in_schema=False)
+async def chat_stream(
+    request: AgentChatRequest,
+    financial_manager: Any = Depends(get_financial_manager),
+):
+    """
+    Agentic research endpoint that combines multiple data sources with source citations.
+
+    This endpoint uses Gemini 3 with tool calling to intelligently:
+    1. Analyze the user's query and optimize it (resolve pronouns, references)
+    2. Determine which tools to use (Google Search, SQL financial data)
+    3. Execute tools to gather context
+    4. Synthesize a comprehensive response based ONLY on gathered context
+    5. Cite all sources explicitly
+    6. Suggest follow-up questions
+
+    The agent will NOT hallucinate - it only responds based on data retrieved from tools.
+
+    Tools available:
+    - Google Search: For web grounding and recent news
+    - SQL Query: For financial data from JSE database
+
+    Response is backward compatible with FinancialDataResponse and StreamingChatRequest.
+
+    Note: For backward compatibility with legacy /chat/stream, this endpoint accepts
+    auto_load_documents which maps to enable_financial_data.
+    """
+    # Backward compatibility: map auto_load_documents to enable_financial_data
+    enable_financial = request.enable_financial_data
+    if request.auto_load_documents is not None:
+        enable_financial = request.auto_load_documents
+
+    logger.info(
+        f"/chat/stream called. query='{request.query[:200]}', "
+        f"web_search={request.enable_web_search}, "
+        f"financial={enable_financial}, "
+        f"memory_enabled={request.memory_enabled}"
+    )
+
+    # Log conversation history for debugging
+    if request.conversation_history:
+        logger.info(f"Conversation history: {len(request.conversation_history)} messages")
+        for idx, msg in enumerate(request.conversation_history[-3:]):
+            content_preview = msg.get("content", "")[:100]
+            logger.info(f"  [{idx}] {msg.get('role', 'unknown')}: {content_preview}...")
+    else:
+        logger.info("No conversation history received")
+
+    try:
+        # Check if financial manager is available (required for SQL queries)
+        if enable_financial and not financial_manager:
+            logger.warning("Financial data requested but manager not available")
+
+        # Create orchestrator
+        orchestrator = AgentOrchestrator(
+            financial_manager=financial_manager,
+        )
+
+        # Run the agent
+        result = await orchestrator.run(
+            query=request.query,
+            conversation_history=request.conversation_history,
+            enable_web_search=request.enable_web_search,
+            enable_financial_data=enable_financial,
+        )
+
+        # Build response (backward compatible with FinancialDataResponse)
+        response = AgentChatResponse(
+            response=result["response"],
+            data_found=result["data_found"],
+            record_count=result["record_count"],
+            filters_used=result.get("filters_used"),
+            data_preview=result.get("data_preview"),
+            conversation_history=result["conversation_history"] if request.memory_enabled else None,
+            warnings=result.get("warnings"),
+            suggestions=result.get("suggestions"),
+            chart=result.get("chart"),
+            sources=result.get("sources"),
+            web_search_results=result.get("web_search_results"),
+            tools_executed=result.get("tools_executed"),
+            # Clarification fields
+            needs_clarification=result.get("needs_clarification", False),
+            clarification_question=result.get("clarification_question"),
+        )
+
+        logger.info(
+            f"/chat/stream completed. response_chars={len(response.response)}, "
+            f"data_found={response.data_found}, "
+            f"record_count={response.record_count}, "
+            f"tools_executed={response.tools_executed}"
+        )
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error in chat stream endpoint: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing chat stream: {str(e)}",
+        )
 
 
 # ==============================================================================
