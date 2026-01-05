@@ -861,7 +861,7 @@ Examples:
 
         # Step 2: UNIFIED LLM call - handles clarification + pronoun resolution + routing
         clarification_reason, clarification_question, optimized_query, llm_routing = (
-            await self._unified_prompt_optimization(query, conversation_history)
+            await self._unified_prompt_optimization(query, conversation_history, extracted_context)
         )
 
         # If clarification needed, return early
@@ -963,12 +963,19 @@ Examples:
             conversation_history: Previous conversation messages
 
         Returns:
-            Dict with keys: entities, years, metrics, last_focus
+            Dict with keys: entities, years, metrics, last_focus, mentioned_entities
         """
         if not conversation_history:
-            return {"entities": [], "years": [], "metrics": [], "last_focus": None}
+            return {
+                "entities": [],
+                "years": [],
+                "metrics": [],
+                "last_focus": None,
+                "mentioned_entities": [],
+            }
 
-        entities = []
+        entities = []  # Validated symbols from metadata
+        mentioned_entities = []  # Company names mentioned but not in metadata
         years = []
         metrics = []
         last_focus = None
@@ -986,9 +993,24 @@ Examples:
         # e.g., "NCB" in conversation should match "NCBFG" symbol
         common_abbreviations = {"NCB", "GK", "CPJ", "JBG", "MDS", "SJ", "JSE", "JMMB"}
 
-        # Scan last 6 messages (3 exchanges)
-        recent_history = conversation_history[-6:]
-        for msg in recent_history:
+        # Patterns for company-like names not in metadata
+        # These capture entities like "Evolve Loan Company", "Supreme Ventures Limited", etc.
+        company_suffixes = [
+            " Limited",
+            " Ltd",
+            " Company",
+            " Co.",
+            " Corp",
+            " Corporation",
+            " Inc",
+            " Financial",
+            " Services",
+            " Holdings",
+            " Group",
+        ]
+
+        # Scan FULL conversation history for better context retention
+        for msg in conversation_history:
             content = msg.get("content", "")
             content_upper = content.upper()
 
@@ -1014,6 +1036,41 @@ Examples:
                         entities.append(abbrev)
                         last_focus = abbrev
 
+            # Extract company-like names not in metadata
+            # Look for patterns like "X Limited", "X Company", etc.
+            for suffix in company_suffixes:
+                if suffix.lower() in content.lower():
+                    # Find the company name by looking for the suffix
+                    lower_content = content.lower()
+                    suffix_lower = suffix.lower()
+                    idx = lower_content.find(suffix_lower)
+                    while idx != -1:
+                        # Look backwards to find the start of the company name
+                        # (capital letter or start of sentence after punctuation/newline)
+                        start = idx
+                        while start > 0 and content[start - 1] not in ".!?\n(":
+                            start -= 1
+                        # Extract the company name
+                        company_name = content[start : idx + len(suffix)].strip()
+                        # Clean up - remove leading articles and punctuation
+                        for prefix in ["the ", "a ", "an ", "- ", "• "]:
+                            if company_name.lower().startswith(prefix):
+                                company_name = company_name[len(prefix) :]
+                        # Only add if it looks like a proper name (has capital letters)
+                        if (
+                            company_name
+                            and any(c.isupper() for c in company_name)
+                            and company_name not in mentioned_entities
+                            and len(company_name) > 3
+                        ):
+                            mentioned_entities.append(company_name)
+                            # Update last_focus if this is a non-metadata entity
+                            # (but prefer metadata entities)
+                            if not last_focus or last_focus not in entities:
+                                last_focus = company_name
+                        # Look for next occurrence
+                        idx = lower_content.find(suffix_lower, idx + 1)
+
             # Extract years
             year_matches = YEAR_PATTERN.findall(content)
             for year in year_matches:
@@ -1031,6 +1088,7 @@ Examples:
             "years": years,
             "metrics": metrics,
             "last_focus": last_focus,
+            "mentioned_entities": mentioned_entities,
         }
 
     def _has_previous_clarification(
@@ -1052,6 +1110,7 @@ Examples:
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        extracted_context: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Optional[ClarificationReason], Optional[str], str, Optional[Dict[str, Any]]]:
         """
         Unified LLM call for clarification, pronoun resolution, AND tool routing.
@@ -1064,6 +1123,7 @@ Examples:
         Args:
             query: The user's query
             conversation_history: Previous conversation for context
+            extracted_context: Pre-extracted context with entities, years, metrics, last_focus
 
         Returns:
             Tuple of (clarification_reason, clarification_question, optimized_query, routing)
@@ -1079,11 +1139,24 @@ Examples:
             logger.info("Skipping clarification (1-round max reached)")
             return (None, None, query, None)
 
-        # Build conversation context
+        # Build conversation context - use FULL history for better context retention
         context_str = ""
         if conversation_history:
-            recent = conversation_history[-6:]  # Last 3 exchanges
-            context_str = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in recent])
+            context_str = "\n".join(
+                [f"{msg['role'].upper()}: {msg['content']}" for msg in conversation_history]
+            )
+
+        # Build extracted context summary for the prompt
+        extracted_context = extracted_context or {}
+        last_focus = extracted_context.get("last_focus")
+        entities = extracted_context.get("entities", [])
+        mentioned_entities = extracted_context.get("mentioned_entities", [])
+        years = extracted_context.get("years", [])
+
+        extracted_context_str = f"""- Primary entity being discussed: {last_focus if last_focus else 'None'}
+- JSE-listed symbols mentioned: {', '.join(entities) if entities else 'None'}
+- Other companies/entities mentioned (not in database): {', '.join(mentioned_entities) if mentioned_entities else 'None'}
+- Years mentioned: {', '.join(years) if years else 'None'}"""
 
         # Get enhanced metadata context with symbol-company mappings
         metadata_context = self._build_enhanced_metadata_context()
@@ -1100,9 +1173,21 @@ IMPORTANT: Use the Symbol-Company Mappings above to recognize entities.
 CONVERSATION HISTORY:
 {context_str if context_str else "(No previous conversation)"}
 
+EXTRACTED CONTEXT FROM CONVERSATION:
+{extracted_context_str}
+
 CURRENT QUERY: "{query}"
 
 YOUR JOB: Analyze the query, check if clarification is needed, resolve pronouns, and determine which tools to use.
+
+=== CRITICAL: FOLLOW-UP QUERY HANDLING ===
+
+**IMPORTANT**: If 'Primary entity being discussed' above is NOT None, and the current query appears to be a follow-up question about that entity (e.g., uses phrases like "the bond offer", "their revenue", "more about", "further information", "this company", "the stock"), you MUST:
+1. ASSUME the query refers to the Primary entity being discussed
+2. PROCEED with that entity - do NOT ask for clarification
+3. Only ask for clarification if the query is GENUINELY ambiguous with NO conversational context
+
+Example: If Primary entity = "DOLLA" and user asks "is there any further information about the bond offer?" → This is clearly about DOLLA's bond offer. PROCEED, do not clarify.
 
 === STEP 1: CHECK IF CLARIFICATION IS NEEDED ===
 
@@ -1111,6 +1196,7 @@ CRITICAL RULES:
 2. Pronouns (they, their, them, it, its) can be resolved from conversation history OR from the same query.
 3. Generic categories ("the banks", "the companies") are NOT specific enough.
 4. General market questions (market trends, JSE index, overall performance) are valid without a company.
+5. **NEW**: If there is a Primary entity from conversation context, use it for follow-up questions rather than asking for clarification.
 
 === STEP 2: IF PROCEEDING, RESOLVE PRONOUNS ===
 Replace pronouns with the specific company they refer to.
@@ -1152,24 +1238,33 @@ EXAMPLES:
 === OUTPUT FORMAT ===
 
 If clarification needed (output ONE of these exactly):
-- CLARIFY:NO_ENTITY - Use when query asks about financial metrics but NO company/symbol is mentioned or resolvable
-- CLARIFY:UNRESOLVED_PRONOUN - Use when query has pronouns (they/their/them/it) that cannot be resolved from conversation history
-- CLARIFY:AMBIGUOUS_COMPARISON - Use when query asks to COMPARE but doesn't specify which entities to compare (e.g., "compare the banks", "compare them")
+- CLARIFY:NO_ENTITY - Use ONLY when query asks about financial metrics AND there is NO company/symbol mentioned AND NO Primary entity in context
+- CLARIFY:UNRESOLVED_PRONOUN - Use ONLY when query has pronouns that cannot be resolved from conversation history AND no Primary entity exists
+- CLARIFY:AMBIGUOUS_COMPARISON - Use when query asks to COMPARE but doesn't specify which entities to compare (e.g., "compare the banks", "compare them" with no context)
+
+**REMEMBER**: If Primary entity exists in the extracted context, you almost certainly should PROCEED, not CLARIFY.
 
 If proceeding (output in this exact format):
 PROCEED|<TOOL>: <optimized query>
 
 Where <TOOL> is one of: FINANCIAL, WEB, BOTH
 
-EXAMPLES:
+EXAMPLES (with context):
+- Primary entity = DOLLA, query = "is there any further information about the bond offer?" → PROCEED|WEB: is there any further information about DOLLA's bond offer? (follow-up about DOLLA)
+- Primary entity = NCB, query = "what about their revenue?" → PROCEED|FINANCIAL: what is NCB's revenue? (resolve pronoun from context)
+- Primary entity = GK, query = "tell me more" → PROCEED|BOTH: tell me more about GK (vague follow-up uses context)
+- Primary entity = None, query = "What is the revenue?" → CLARIFY:NO_ENTITY (no context available)
+
+EXAMPLES (no context):
 - "What is the revenue?" (no context) → CLARIFY:NO_ENTITY (no company specified)
 - "What is their profit?" (no context) → CLARIFY:UNRESOLVED_PRONOUN (pronoun with no referent)
 - "Compare the banks" → CLARIFY:AMBIGUOUS_COMPARISON (comparison without specific entities)
-- "Compare them" (no context) → CLARIFY:AMBIGUOUS_COMPARISON (comparison with unresolved pronoun)
+
+EXAMPLES (explicit entity in query):
 - "What is NCB revenue?" → PROCEED|FINANCIAL: What is NCB revenue?
 - "When was GK founded?" → PROCEED|WEB: When was GK founded?
 - "GK revenue and news about them" → PROCEED|BOTH: GK revenue and news about GK
-- "Compare NCB with the other company" (GK in history) → PROCEED|FINANCIAL: Compare NCB with GK (resolve "the other company" from context)"""
+- "Compare NCB with the other company" (GK in history) → PROCEED|FINANCIAL: Compare NCB with GK"""
 
         try:
             logger.info(f">>> UNIFIED PROMPT OPTIMIZATION for query: '{query}'")

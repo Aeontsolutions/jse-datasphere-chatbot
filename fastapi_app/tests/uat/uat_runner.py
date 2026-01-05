@@ -241,6 +241,7 @@ class UATTestRunner:
             "clarification": data.get("clarification_test_cases", []),
             "defaults": data.get("defaults_test_cases", []),
             "edge_cases": data.get("edge_cases", []),
+            "conversation_memory": data.get("conversation_memory_test_cases", []),
         }
 
         total = sum(len(cases) for cases in self.test_cases.values())
@@ -590,6 +591,95 @@ class UATTestRunner:
                     actual="(check server logs)",
                     passed=True,  # Can't validate without log access
                     message="Confidence level should be checked in server logs",
+                )
+            )
+
+        # Validate expected_not_clarify (conversation memory tests)
+        # This checks that the agent did NOT ask for clarification when context was available
+        if test_case.get("expected_not_clarify"):
+            needs_clarification = response.get("needs_clarification", False)
+            passed = not needs_clarification
+            validations.append(
+                ValidationDetail(
+                    field="should_not_clarify",
+                    expected="No clarification (context should be used)",
+                    actual=(
+                        "Asked for clarification"
+                        if needs_clarification
+                        else "Proceeded without clarification"
+                    ),
+                    passed=passed,
+                    message=(
+                        "Correctly used context without asking for clarification"
+                        if passed
+                        else "FAILED: Asked for clarification when context was available"
+                    ),
+                )
+            )
+
+        # Validate expected_response_contains (conversation memory tests)
+        # Checks that the response contains expected entity names/terms
+        if "expected_response_contains" in test_case:
+            expected_terms = test_case["expected_response_contains"]
+            response_text = response.get("response", "").lower()
+            missing_terms = [term for term in expected_terms if term.lower() not in response_text]
+            all_found = len(missing_terms) == 0
+            validations.append(
+                ValidationDetail(
+                    field="response_contains_expected_terms",
+                    expected=expected_terms,
+                    actual=f"Missing: {missing_terms}" if missing_terms else "All terms found",
+                    passed=all_found,
+                    message=(
+                        "Response contains all expected terms"
+                        if all_found
+                        else f"Response missing expected terms: {missing_terms}"
+                    ),
+                )
+            )
+
+        # Validate expected_response_not_contains (conversation memory tests)
+        # Checks that the response does NOT contain clarification phrases
+        # This catches false positives where agent mentions entity but still asks for clarification
+        if "expected_response_not_contains" in test_case:
+            forbidden_phrases = test_case["expected_response_not_contains"]
+            response_text = response.get("response", "").lower()
+            found_forbidden = [
+                phrase for phrase in forbidden_phrases if phrase.lower() in response_text
+            ]
+            none_found = len(found_forbidden) == 0
+            validations.append(
+                ValidationDetail(
+                    field="response_not_contains_forbidden",
+                    expected=f"None of: {forbidden_phrases}",
+                    actual=f"Found: {found_forbidden}" if found_forbidden else "None found (good)",
+                    passed=none_found,
+                    message=(
+                        "Response correctly avoids clarification phrases"
+                        if none_found
+                        else f"FAILED: Response contains clarification phrases: {found_forbidden}"
+                    ),
+                )
+            )
+
+        # Validate expected_min_response_length (conversation memory tests)
+        # Ensures response is substantive, not just a short clarification question
+        if "expected_min_response_length" in test_case:
+            min_length = test_case["expected_min_response_length"]
+            response_text = response.get("response", "")
+            actual_length = len(response_text)
+            is_long_enough = actual_length >= min_length
+            validations.append(
+                ValidationDetail(
+                    field="response_min_length",
+                    expected=f">= {min_length} chars",
+                    actual=f"{actual_length} chars",
+                    passed=is_long_enough,
+                    message=(
+                        f"Response is substantive ({actual_length} chars)"
+                        if is_long_enough
+                        else f"FAILED: Response too short ({actual_length} chars) - likely a clarification question"
+                    ),
                 )
             )
 
