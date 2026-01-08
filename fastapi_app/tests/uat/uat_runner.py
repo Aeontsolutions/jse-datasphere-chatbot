@@ -42,6 +42,7 @@ import httpx
 
 # Constants
 DEFAULT_BASE_URL = "http://localhost:8000"
+DEFAULT_ENDPOINT = "/agent/chat"  # Can be overridden to "/chat/stream/v2"
 DEFAULT_TIMEOUT = 60.0  # seconds
 DEFAULT_RETRIES = 0
 DEFAULT_CONCURRENCY = 1
@@ -170,12 +171,14 @@ class UATTestRunner:
     def __init__(
         self,
         base_url: str = DEFAULT_BASE_URL,
+        endpoint: str = DEFAULT_ENDPOINT,
         timeout: float = DEFAULT_TIMEOUT,
         test_cases_path: Optional[Path] = None,
         max_retries: int = DEFAULT_RETRIES,
         concurrency: int = DEFAULT_CONCURRENCY,
     ):
         self.base_url = base_url.rstrip("/")
+        self.endpoint = endpoint
         self.timeout = timeout
         self.test_cases_path = test_cases_path or TEST_CASES_FILE
         self.max_retries = max_retries
@@ -265,7 +268,7 @@ class UATTestRunner:
 
         try:
             response = await client.post(
-                f"{self.base_url}/agent/chat",
+                f"{self.base_url}{self.endpoint}",
                 json=payload,
                 timeout=self.timeout,
             )
@@ -947,7 +950,7 @@ class UATTestRunner:
         print("UAT TEST REPORT - Agent Chat Endpoint")
         print("=" * 70)
         print(f"Generated: {report.generated_at.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Target:    {self.base_url}")
+        print(f"Target:    {self.base_url}{self.endpoint}")
         print("-" * 70)
         print(f"Total Tests: {report.total_tests}")
         print(f"Passed:      {report.passed} ({report.pass_rate:.1%})")
@@ -1059,6 +1062,7 @@ class UATTestRunner:
             "total_duration_ms": report.total_duration_ms,
             "generated_at": report.generated_at.isoformat(),
             "base_url": self.base_url,
+            "endpoint": self.endpoint,
             "config": {
                 "max_retries": self.max_retries,
                 "concurrency": self.concurrency,
@@ -1106,12 +1110,19 @@ Examples:
   python uat_runner.py --output report.json            # Save JSON report
   python uat_runner.py --parallel --concurrency 5      # Run in parallel for load testing
   python uat_runner.py --retries 3                     # Enable retry with 3 attempts
+  python uat_runner.py -e /chat/stream/v2              # Test AgentV2 endpoint
         """,
     )
     parser.add_argument(
         "--url",
         default=DEFAULT_BASE_URL,
         help=f"Base URL of the API (default: {DEFAULT_BASE_URL})",
+    )
+    parser.add_argument(
+        "--endpoint",
+        "-e",
+        default=DEFAULT_ENDPOINT,
+        help=f"API endpoint path (default: {DEFAULT_ENDPOINT}). Use '/chat/stream/v2' for AgentV2.",
     )
     parser.add_argument(
         "--category",
@@ -1160,6 +1171,7 @@ Examples:
 
     runner = UATTestRunner(
         base_url=args.url,
+        endpoint=args.endpoint,
         timeout=args.timeout,
         max_retries=args.retries,
         concurrency=args.concurrency,
