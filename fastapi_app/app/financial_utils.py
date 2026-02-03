@@ -123,10 +123,10 @@ class FinancialDataManager:
                     f"Found API key (length: {len(api_key)}), initializing Gemini AI model..."
                 )
                 genai.configure(api_key=api_key)
-                self.model = genai.GenerativeModel("gemini-2.0-flash-exp")
-                logger.info(
-                    "✅ Gemini AI model initialized successfully for financial data queries"
-                )
+                # Use configured model name or default
+                model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+                self.model = genai.GenerativeModel(model_name)
+                logger.info(f"✅ Gemini AI model initialized successfully: {model_name}")
             else:
                 logger.warning(
                     "❌ GOOGLE_API_KEY/GEMINI_API_KEY/CHATBOT_API_KEY not found, falling back to basic parsing"
@@ -443,7 +443,7 @@ class FinancialDataManager:
             return self._fallback_parse_query(query, last_query_data)
 
         start_time = time.time()
-        model_name = "gemini-2.0-flash-exp"
+        model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
 
         # Get conversation context
         conversation_context = self.get_conversation_context(conversation_history)

@@ -136,7 +136,7 @@ class S3DownloadConfig(BaseSettings):
 class GeminiAIConfig(BaseSettings):
     """Gemini AI model configuration."""
 
-    model_name: str = Field(default="gemini-2.0-flash-exp", description="Gemini model name")
+    model_name: str = Field(default="gemini-2.5-flash", description="Gemini model name")
     temperature: float = Field(default=0.7, description="Model temperature")
     max_output_tokens: int = Field(default=2048, description="Maximum output tokens")
     force_llm_fallback: bool = Field(
