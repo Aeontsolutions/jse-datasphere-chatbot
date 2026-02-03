@@ -33,6 +33,7 @@ from app.document_selector import auto_load_relevant_documents
 from app.streaming_chat import process_streaming_chat
 from app.financial_utils import FinancialDataManager
 from app.agent import AgentOrchestrator
+from app.agent_v2 import AgentV2
 from app.job_store import JobStore, JobProgressSink
 from app.redis_job_store import RedisJobStore
 from app.progress_tracker import ProgressTracker
@@ -949,39 +950,23 @@ async def refresh_cache_endpoint():
 @app.post("/agent/chat", response_model=AgentChatResponse, include_in_schema=False)
 async def chat_stream(
     request: AgentChatRequest,
-    financial_manager: Any = Depends(get_financial_manager),
 ):
     """
-    Agentic research endpoint that combines multiple data sources with source citations.
+    JSE Financial Analyst endpoint using Gemini 2.5 Pro with Google Search grounding.
 
-    This endpoint uses Gemini 3 with tool calling to intelligently:
-    1. Analyze the user's query and optimize it (resolve pronouns, references)
-    2. Determine which tools to use (Google Search, SQL financial data)
-    3. Execute tools to gather context
-    4. Synthesize a comprehensive response based ONLY on gathered context
-    5. Cite all sources explicitly
-    6. Suggest follow-up questions
+    This endpoint uses a simplified single-call architecture with native Google Search
+    grounding for JSE financial research and market information.
 
-    The agent will NOT hallucinate - it only responds based on data retrieved from tools.
+    Features:
+    - Gemini 2.5 Pro model for high-quality responses
+    - Native Google Search grounding for current market data and news
+    - Conversation history support for follow-up questions
+    - Source citations from web search results
 
-    Tools available:
-    - Google Search: For web grounding and recent news
-    - SQL Query: For financial data from JSE database
-
-    Response is backward compatible with FinancialDataResponse and StreamingChatRequest.
-
-    Note: For backward compatibility with legacy /chat/stream, this endpoint accepts
-    auto_load_documents which maps to enable_financial_data.
+    The response is backward compatible with AgentChatResponse.
     """
-    # Backward compatibility: map auto_load_documents to enable_financial_data
-    enable_financial = request.enable_financial_data
-    if request.auto_load_documents is not None:
-        enable_financial = request.auto_load_documents
-
     logger.info(
         f"/chat/stream called. query='{request.query[:200]}', "
-        f"web_search={request.enable_web_search}, "
-        f"financial={enable_financial}, "
         f"memory_enabled={request.memory_enabled}"
     )
 
@@ -995,24 +980,16 @@ async def chat_stream(
         logger.info("No conversation history received")
 
     try:
-        # Check if financial manager is available (required for SQL queries)
-        if enable_financial and not financial_manager:
-            logger.warning("Financial data requested but manager not available")
-
-        # Create orchestrator
-        orchestrator = AgentOrchestrator(
-            financial_manager=financial_manager,
-        )
+        # Create simplified agent (uses Gemini 2.5 Pro with Google Search grounding)
+        agent = AgentV2()
 
         # Run the agent
-        result = await orchestrator.run(
+        result = await agent.run(
             query=request.query,
             conversation_history=request.conversation_history,
-            enable_web_search=request.enable_web_search,
-            enable_financial_data=enable_financial,
         )
 
-        # Build response (backward compatible with FinancialDataResponse)
+        # Build response (compatible with AgentChatResponse)
         response = AgentChatResponse(
             response=result["response"],
             data_found=result["data_found"],
@@ -1026,15 +1003,12 @@ async def chat_stream(
             sources=result.get("sources"),
             web_search_results=result.get("web_search_results"),
             tools_executed=result.get("tools_executed"),
-            # Clarification fields
             needs_clarification=result.get("needs_clarification", False),
             clarification_question=result.get("clarification_question"),
         )
 
         logger.info(
             f"/chat/stream completed. response_chars={len(response.response)}, "
-            f"data_found={response.data_found}, "
-            f"record_count={response.record_count}, "
             f"tools_executed={response.tools_executed}"
         )
 
@@ -1045,6 +1019,90 @@ async def chat_stream(
         raise HTTPException(
             status_code=500,
             detail=f"Error processing chat stream: {str(e)}",
+        )
+
+
+# ==============================================================================
+# AGENT V2 ENDPOINT (Simplified Google Search Grounding)
+# ==============================================================================
+
+
+@app.post("/chat/stream/v2", response_model=AgentChatResponse)
+async def chat_stream_v2(
+    request: AgentChatRequest,
+):
+    """
+    Simplified agentic research endpoint using Google Search grounding.
+
+    This endpoint uses Gemini 2.5 Pro with native Google Search grounding
+    for JSE financial research. Unlike /chat/stream, this uses a simpler
+    single-call architecture without SQL financial data queries.
+
+    Key differences from /chat/stream:
+    - Uses gemini-2.5-pro (vs gemini-2.5-flash)
+    - Single generate_content call with GoogleSearch tool
+    - No SQL financial database queries
+    - No complex routing/clarification logic
+
+    Tools available:
+    - Google Search: For web grounding and current information
+
+    The response is backward compatible with AgentChatResponse.
+    """
+    logger.info(
+        f"/chat/stream/v2 called. query='{request.query[:200]}', "
+        f"memory_enabled={request.memory_enabled}"
+    )
+
+    # Log conversation history for debugging
+    if request.conversation_history:
+        logger.info(f"Conversation history: {len(request.conversation_history)} messages")
+        for idx, msg in enumerate(request.conversation_history[-3:]):
+            content_preview = msg.get("content", "")[:100]
+            logger.info(f"  [{idx}] {msg.get('role', 'unknown')}: {content_preview}...")
+    else:
+        logger.info("No conversation history received")
+
+    try:
+        # Create simplified agent
+        agent = AgentV2()
+
+        # Run the agent
+        result = await agent.run(
+            query=request.query,
+            conversation_history=request.conversation_history,
+        )
+
+        # Build response (compatible with AgentChatResponse)
+        response = AgentChatResponse(
+            response=result["response"],
+            data_found=result["data_found"],
+            record_count=result["record_count"],
+            filters_used=result.get("filters_used"),
+            data_preview=result.get("data_preview"),
+            conversation_history=result["conversation_history"] if request.memory_enabled else None,
+            warnings=result.get("warnings"),
+            suggestions=result.get("suggestions"),
+            chart=result.get("chart"),
+            sources=result.get("sources"),
+            web_search_results=result.get("web_search_results"),
+            tools_executed=result.get("tools_executed"),
+            needs_clarification=result.get("needs_clarification", False),
+            clarification_question=result.get("clarification_question"),
+        )
+
+        logger.info(
+            f"/chat/stream/v2 completed. response_chars={len(response.response)}, "
+            f"tools_executed={response.tools_executed}"
+        )
+
+        return response
+
+    except Exception as e:
+        logger.error(f"Error in chat stream v2 endpoint: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing chat stream v2: {str(e)}",
         )
 
 
