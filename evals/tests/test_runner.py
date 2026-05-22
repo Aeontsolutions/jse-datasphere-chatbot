@@ -132,3 +132,117 @@ async def test_run_conversation_respects_per_convo_cost_cap():
     # First turn already exceeds the cap; loop exits after capturing it.
     assert transcript.termination.reason == "error"
     assert "cost cap" in transcript.termination.error_message.lower()
+
+
+import asyncio  # noqa: E402
+
+from evals.runner import RunArtifacts, run_simulation  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_produces_one_transcript_per_replicate_per_persona():
+    persona_a = _persona(max_turns=1).model_copy(update={"id": "a"})
+    persona_b = _persona(max_turns=1).model_copy(update={"id": "b"})
+
+    from evals.persona_actor import PersonaTurn
+    actor = MagicMock()
+    actor.act = AsyncMock(return_value=PersonaTurn(utterance="q", done=True))
+
+    client = MagicMock()
+    client.send = AsyncMock(return_value=_client_result())
+
+    fake_judge = MagicMock()
+    from evals.judge import (
+        DimensionScore, FactfulnessScore, JudgeOutput, JudgeScores, ToolUseScore,
+    )
+    fake_judge.evaluate = AsyncMock(
+        return_value=JudgeOutput(
+            scores=JudgeScores(
+                groundedness=DimensionScore(score=4, justification="x"),
+                factfulness=FactfulnessScore(score=None, facts_satisfied=[], justification="n/a"),
+                goal_completion=DimensionScore(score=4, justification="x"),
+                tool_use_appropriateness=ToolUseScore(score=4, justification="x"),
+                coherence=DimensionScore(score=4, justification="x"),
+                persona_handling=DimensionScore(score=4, justification="x"),
+            ),
+            verdict="pass",
+            verdict_reason="ok",
+        )
+    )
+
+    def client_for(endpoint: str):
+        return client
+
+    artifacts = await run_simulation(
+        personas=[persona_a, persona_b],
+        replicates=2,
+        concurrency=2,
+        max_cost_usd_per_run=10.0,
+        max_cost_usd_per_conversation=1.0,
+        chat_client_factory=client_for,
+        persona_actor=actor,
+        judge=fake_judge,
+    )
+
+    assert isinstance(artifacts, RunArtifacts)
+    assert len(artifacts.conversations) == 4  # 2 personas × 2 replicates
+    ids = {c.transcript.conversation_id for c in artifacts.conversations}
+    assert ids == {"a__rep01", "a__rep02", "b__rep01", "b__rep02"}
+    assert all(c.judge_output is not None for c in artifacts.conversations)
+    assert artifacts.cost_capped is False
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_respects_concurrency_limit():
+    """No more than `concurrency` conversations should run simultaneously."""
+    persona = _persona(max_turns=1)
+    in_flight = 0
+    max_observed = 0
+    lock = asyncio.Lock()
+
+    async def slow_send(*args, **kwargs):
+        nonlocal in_flight, max_observed
+        async with lock:
+            in_flight += 1
+            max_observed = max(max_observed, in_flight)
+        await asyncio.sleep(0.05)
+        async with lock:
+            in_flight -= 1
+        return _client_result()
+
+    from evals.persona_actor import PersonaTurn
+    actor = MagicMock()
+    actor.act = AsyncMock(return_value=PersonaTurn(utterance="q", done=True))
+
+    client = MagicMock()
+    client.send = slow_send
+
+    fake_judge = MagicMock()
+    from evals.judge import JudgeOutput, JudgeScores, DimensionScore, FactfulnessScore, ToolUseScore
+    fake_judge.evaluate = AsyncMock(
+        return_value=JudgeOutput(
+            scores=JudgeScores(
+                groundedness=DimensionScore(score=4, justification="x"),
+                factfulness=FactfulnessScore(score=None, facts_satisfied=[], justification="n/a"),
+                goal_completion=DimensionScore(score=4, justification="x"),
+                tool_use_appropriateness=ToolUseScore(score=4, justification="x"),
+                coherence=DimensionScore(score=4, justification="x"),
+                persona_handling=DimensionScore(score=4, justification="x"),
+            ),
+            verdict="pass",
+            verdict_reason="ok",
+        )
+    )
+
+    await run_simulation(
+        personas=[persona],
+        replicates=8,
+        concurrency=3,
+        max_cost_usd_per_run=10.0,
+        max_cost_usd_per_conversation=1.0,
+        chat_client_factory=lambda _: client,
+        persona_actor=actor,
+        judge=fake_judge,
+    )
+
+    assert max_observed <= 3
