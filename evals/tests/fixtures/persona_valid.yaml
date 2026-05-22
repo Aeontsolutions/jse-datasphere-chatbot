@@ -1,0 +1,16 @@
+id: senior_analyst_test
+name: "Test persona — senior analyst"
+category: positive
+endpoint: fast_chat_v2
+character: |
+  You are a senior equity analyst at a regional brokerage.
+goal: |
+  Understand NCB's profitability over 3 years.
+max_turns: 4
+expected_facts:
+  - "NCB is mentioned by name or symbol"
+  - "Revenue figures for at least 2 fiscal years"
+api_options:
+  memory_enabled: true
+  enable_financial_data: true
+opening_style: cold_open
