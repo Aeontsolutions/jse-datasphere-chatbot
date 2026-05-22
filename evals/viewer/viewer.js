@@ -502,3 +502,35 @@ function renderCompare(roster) {
     </table>
   `;
 }
+
+// ---------- Auto-load from query string ----------
+
+async function autoLoadFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const single = params.get("run");
+  const many = params.get("runs");
+  const ids = single ? [single] : (many ? many.split(",") : []);
+  for (const id of ids) {
+    try {
+      const manifest = await (await fetch(`../runs/${id}/manifest.json`)).json();
+      const summary = await (await fetch(`../runs/${id}/summary.json`)).json();
+      // Fetch conversation index by listing — best effort using manifest.personas_run × replicates
+      const conversations = [];
+      for (const p of manifest.personas_run || []) {
+        for (let r = 1; r <= (manifest.replicates || 1); r++) {
+          const cid = `${p}__rep${String(r).padStart(2, "0")}`;
+          try {
+            const c = await (await fetch(`../runs/${id}/conversations/${cid}.json`)).json();
+            conversations.push(c);
+          } catch (_e) { /* missing — skip */ }
+        }
+      }
+      state.runs.push({ runId: manifest.run_id || id, manifest, summary, conversations });
+    } catch (e) {
+      setStatus(`Failed to load ${id}: ${e.message}`);
+    }
+  }
+  if (state.runs.length) renderApp();
+}
+
+autoLoadFromQuery();
