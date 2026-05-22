@@ -246,3 +246,47 @@ async def test_run_simulation_respects_concurrency_limit():
     )
 
     assert max_observed <= 3
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_cost_cap_marks_artifacts_and_skips_remaining():
+    persona = _persona(max_turns=1)
+    expensive = _client_result(cost=0.6)
+    client = MagicMock()
+    client.send = AsyncMock(return_value=expensive)
+
+    from evals.persona_actor import PersonaTurn
+    actor = MagicMock()
+    actor.act = AsyncMock(return_value=PersonaTurn(utterance="q", done=True))
+
+    from evals.judge import JudgeOutput, JudgeScores, DimensionScore, FactfulnessScore, ToolUseScore
+    fake_judge = MagicMock()
+    fake_judge.evaluate = AsyncMock(
+        return_value=JudgeOutput(
+            scores=JudgeScores(
+                groundedness=DimensionScore(score=4, justification="x"),
+                factfulness=FactfulnessScore(score=None, facts_satisfied=[], justification="n/a"),
+                goal_completion=DimensionScore(score=4, justification="x"),
+                tool_use_appropriateness=ToolUseScore(score=4, justification="x"),
+                coherence=DimensionScore(score=4, justification="x"),
+                persona_handling=DimensionScore(score=4, justification="x"),
+            ),
+            verdict="pass",
+            verdict_reason="ok",
+        )
+    )
+
+    artifacts = await run_simulation(
+        personas=[persona],
+        replicates=10,
+        concurrency=1,
+        max_cost_usd_per_run=1.0,                 # only ~1-2 convos fit
+        max_cost_usd_per_conversation=1.0,
+        chat_client_factory=lambda _: client,
+        persona_actor=actor,
+        judge=fake_judge,
+    )
+
+    assert artifacts.cost_capped is True
+    assert len(artifacts.conversations) < 10
+    assert len(artifacts.conversations) >= 1
