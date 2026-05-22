@@ -132,10 +132,14 @@ function renderActiveView() {
     viewRoot.innerHTML = "<p>No runs loaded yet.</p>";
     return;
   }
-  if (state.activeView === "overview") renderOverview();
-  else if (state.activeView === "list") renderList();
-  else if (state.activeView === "detail") renderDetail();
-  else viewRoot.innerHTML = `<p>(${state.activeView} view not implemented yet)</p>`;
+  const roster = state.runs.length > 1 ? renderRoster() : "";
+  if (state.activeView === "overview") { renderOverview(); }
+  else if (state.activeView === "list") { renderList(); }
+  else if (state.activeView === "detail") { renderDetail(); }
+  else if (state.activeView === "compare") { viewRoot.innerHTML = roster + "<p>(compare view coming in next task)</p>"; return; }
+  else if (state.activeView === "diff") { viewRoot.innerHTML = roster + "<p>(diff view coming in next task)</p>"; return; }
+  else { viewRoot.innerHTML = `<p>(${state.activeView} view not implemented yet)</p>`; return; }
+  if (roster) viewRoot.insertAdjacentHTML("afterbegin", roster);
 }
 
 const DIMENSIONS = [
@@ -311,4 +315,29 @@ function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, c => (
     {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]
   ));
+}
+
+// ---------- Run roster rendering (multi-run mode) ----------
+
+function renderRoster() {
+  if (state.runs.length < 2) return "";
+  const baselineId = state.diff.a || state.runs[0].runId;
+  const candidateId = state.diff.b || (state.runs[1] && state.runs[1].runId);
+  const rows = state.runs.map(r => {
+    const role = r.runId === baselineId ? "baseline" :
+                 r.runId === candidateId ? "candidate" : "loaded";
+    return `<tr>
+      <td>${r.runId}</td>
+      <td><code>${r.manifest.git_sha || "—"}</code></td>
+      <td>${r.manifest.started_at}</td>
+      <td>${r.summary.conversation_count}</td>
+      <td>$${(r.summary.overall.total_cost_usd || 0).toFixed(4)}</td>
+      <td>${role}</td>
+    </tr>`;
+  });
+  return `<h3>Loaded runs (${state.runs.length})</h3>
+    <table>
+      <thead><tr><th>run id</th><th>git</th><th>started</th><th>convos</th><th>cost</th><th>role</th></tr></thead>
+      <tbody>${rows.join("")}</tbody>
+    </table>`;
 }

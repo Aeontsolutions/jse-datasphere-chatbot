@@ -1,0 +1,41 @@
+{
+  "conversation_id": "synthetic__rep01",
+  "persona": {
+    "id": "synthetic",
+    "name": "Synthetic test persona",
+    "category": "positive",
+    "endpoint": "fast_chat_v2",
+    "character": "test character",
+    "goal": "test goal",
+    "max_turns": 3,
+    "expected_facts": ["fact one"]
+  },
+  "endpoint": "fast_chat_v2",
+  "turns": [{
+    "turn_index": 0,
+    "persona_utterance": "What's NCB revenue?",
+    "chatbot_text": "Revenue was something around J$50B in FY2023, I think.",
+    "chatbot_metadata": {"data_found": true, "record_count": 1, "tools_executed": ["financial_data_query"]},
+    "latency_ms": 1700,
+    "ttfb_ms": null,
+    "cost_usd": 0.004,
+    "input_tokens": 1100,
+    "output_tokens": 350
+  }],
+  "termination": {"reason": "done", "at_turn": 0, "persona_done_reason": "got it"},
+  "totals": {"turns": 1, "latency_ms": 1700, "cost_usd": 0.004},
+  "judge": {
+    "scores": {
+      "groundedness": {"score": 3, "justification": "Hedged wording weakens grounding."},
+      "factfulness": {"score": 4, "facts_satisfied": [true], "justification": "Fact present but uncertain."},
+      "goal_completion": {"score": 4, "justification": "Goal mostly met."},
+      "tool_use_appropriateness": {"score": 4, "observed_tools": ["financial_data_query"], "justification": "Correct tool."},
+      "coherence": {"score": 5, "justification": "Coherent."},
+      "persona_handling": {"score": 4, "justification": "Good match."}
+    },
+    "verdict": "partial",
+    "verdict_reason": "Groundedness weak due to hedging.",
+    "notable_moments": []
+  },
+  "errors": []
+}

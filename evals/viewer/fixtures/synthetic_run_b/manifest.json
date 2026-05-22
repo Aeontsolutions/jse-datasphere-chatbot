@@ -1,0 +1,10 @@
+{
+  "run_id": "synthetic_run_b",
+  "started_at": "2026-05-24T14:00:00Z",
+  "ended_at": "2026-05-24T14:02:00Z",
+  "git_sha": "def5678",
+  "config": {"base_url": "http://localhost:8000", "replicates": 1},
+  "personas_run": ["synthetic"],
+  "replicates": 1,
+  "cost_capped": false
+}
