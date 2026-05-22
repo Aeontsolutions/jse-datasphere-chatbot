@@ -25,11 +25,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["evals", "evals.client"]
-py-modules = ["evals"]
-
-[tool.setuptools.package-dir]
-evals = "."
-"evals.client" = "client"
 
 [tool.setuptools.package-data]
 "evals" = ["config/*.yaml", "personas/*.yaml"]
