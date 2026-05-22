@@ -133,15 +133,182 @@ function renderActiveView() {
     return;
   }
   if (state.activeView === "overview") renderOverview();
+  else if (state.activeView === "list") renderList();
+  else if (state.activeView === "detail") renderDetail();
   else viewRoot.innerHTML = `<p>(${state.activeView} view not implemented yet)</p>`;
 }
+
+const DIMENSIONS = [
+  "groundedness",
+  "factfulness",
+  "goal_completion",
+  "tool_use_appropriateness",
+  "coherence",
+  "persona_handling",
+];
 
 function renderOverview() {
   const run = state.runs[0];
   const s = run.summary;
+  const ov = s.overall;
   viewRoot.innerHTML = `
     <h2>${run.runId}</h2>
-    <p>git: <code>${run.manifest.git_sha || "(unknown)"}</code> · conversations: ${s.conversation_count} · total cost: $${(s.overall.total_cost_usd || 0).toFixed(4)}</p>
-    <p>(Overview table coming in next task)</p>
+    <p><strong>git:</strong> <code>${run.manifest.git_sha || "(unknown)"}</code>
+       · <strong>started:</strong> ${run.manifest.started_at}
+       · <strong>conversations:</strong> ${s.conversation_count}
+       · <strong>total cost:</strong> $${(ov.total_cost_usd || 0).toFixed(4)}
+       · <strong>mean latency:</strong> ${Math.round(ov.mean_latency_ms || 0)} ms</p>
+
+    <h3>Verdict mix</h3>
+    <p>
+      <span class="verdict-pass">pass: ${ov.verdict_counts?.pass || 0}</span> ·
+      <span class="verdict-partial">partial: ${ov.verdict_counts?.partial || 0}</span> ·
+      <span class="verdict-fail">fail: ${ov.verdict_counts?.fail || 0}</span>
+      ${ov.judge_failed_count ? `· <span class="verdict-judgefailed">judge_failed: ${ov.judge_failed_count}</span>` : ""}
+    </p>
+
+    <h3>Per-persona</h3>
+    ${renderPersonaTable(s.by_persona)}
   `;
+}
+
+function renderPersonaTable(byPersona) {
+  const personas = Object.keys(byPersona);
+  if (!personas.length) return "<p>(no personas)</p>";
+  const header = ["persona", "count", ...DIMENSIONS.map(d => d.replace(/_/g, " ")), "verdicts"];
+  const rows = personas.map(pid => {
+    const p = byPersona[pid];
+    return `<tr>
+      <td>${pid}</td>
+      <td>${p.count}</td>
+      ${DIMENSIONS.map(d => `<td>${fmtMeanStd(p[`mean_${d}`], p[`std_${d}`])}</td>`).join("")}
+      <td>${fmtVerdicts(p.verdict_counts)}</td>
+    </tr>`;
+  });
+  return `<table>
+    <thead><tr>${header.map(h => `<th>${h}</th>`).join("")}</tr></thead>
+    <tbody>${rows.join("")}</tbody>
+  </table>`;
+}
+
+function fmtMeanStd(mean, std) {
+  if (mean == null) return "—";
+  if (std == null) return mean.toFixed(2);
+  return `${mean.toFixed(2)} ± ${std.toFixed(2)}`;
+}
+
+function fmtVerdicts(counts) {
+  if (!counts) return "—";
+  return `<span class="verdict-pass">${counts.pass || 0}</span>/` +
+         `<span class="verdict-partial">${counts.partial || 0}</span>/` +
+         `<span class="verdict-fail">${counts.fail || 0}</span>`;
+}
+
+function renderList() {
+  const run = state.runs[0];
+  const rows = run.conversations.map(c => {
+    const verdict = c.judge?.verdict || (c.judge?.judge_failed ? "judge_failed" : "unknown");
+    return `<tr class="row-clickable" data-id="${c.conversation_id}">
+      <td>${c.conversation_id}</td>
+      <td>${c.persona?.id || ""}</td>
+      <td>${c.endpoint}</td>
+      <td class="verdict-${verdict.replace("_", "")}">${verdict}</td>
+      <td>${c.totals?.turns ?? "—"}</td>
+      <td>${Math.round(c.totals?.latency_ms || 0)} ms</td>
+      <td>$${(c.totals?.cost_usd || 0).toFixed(4)}</td>
+    </tr>`;
+  });
+  viewRoot.innerHTML = `<table>
+    <thead><tr><th>conversation</th><th>persona</th><th>endpoint</th>
+      <th>verdict</th><th>turns</th><th>latency</th><th>cost</th></tr></thead>
+    <tbody>${rows.join("")}</tbody>
+  </table>`;
+  viewRoot.querySelectorAll(".row-clickable").forEach(tr => {
+    tr.addEventListener("click", () => {
+      state.activeConvoId = tr.dataset.id;
+      state.activeView = "detail";
+      renderApp();
+    });
+  });
+}
+
+function renderDetail() {
+  const run = state.runs[0];
+  const c = state.activeConvoId
+    ? run.conversations.find(x => x.conversation_id === state.activeConvoId)
+    : run.conversations[0];
+  if (!c) { viewRoot.innerHTML = "<p>(no conversation selected)</p>"; return; }
+  const transcript = c.turns.map(renderTurn).join("");
+  const judge = c.judge?.judge_failed
+    ? `<p class="verdict-judgefailed">Judge failed: ${c.judge.error}</p>`
+    : renderJudge(c.judge);
+  viewRoot.innerHTML = `
+    <h2>${c.conversation_id}</h2>
+    <p>endpoint: ${c.endpoint} · termination: ${c.termination.reason} (turn ${c.termination.at_turn})</p>
+    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1rem;">
+      <div>${transcript}</div>
+      <div>${judge}</div>
+    </div>
+  `;
+  c.turns.forEach((t, i) => {
+    const chartSpec = t.chatbot_metadata?.chart?.vega_lite;
+    if (chartSpec) {
+      vegaEmbed(`#chart-turn-${i}`, chartSpec, { actions: false });
+    }
+  });
+}
+
+function renderTurn(t, i) {
+  const chartSlot = t.chatbot_metadata?.chart?.vega_lite
+    ? `<div id="chart-turn-${i}" style="margin-top: 0.5rem;"></div>` : "";
+  const tools = (t.chatbot_metadata?.tools_executed || []).join(", ");
+  const sources = t.chatbot_metadata?.sources || [];
+  const filters = t.chatbot_metadata?.filters_used;
+  const drawer = `
+    <details class="turn-drawer">
+      <summary>raw metadata</summary>
+      ${sources.length ? `<h5>sources</h5><ul>${sources.map(s =>
+        `<li>${escapeHtml(s.title || JSON.stringify(s))}</li>`
+      ).join("")}</ul>` : ""}
+      ${filters ? `<h5>filters_used</h5><pre>${escapeHtml(JSON.stringify(filters, null, 2))}</pre>` : ""}
+      <h5>full response</h5>
+      <pre>${escapeHtml(JSON.stringify(t.chatbot_metadata, null, 2))}</pre>
+    </details>
+  `;
+  return `
+    <div class="turn-row">
+      <div class="bubble user">${escapeHtml(t.persona_utterance)}</div>
+      <div class="bubble bot">${escapeHtml(t.chatbot_text)}${chartSlot}</div>
+      <div class="turn-meta">turn ${t.turn_index} · ${Math.round(t.latency_ms)} ms${t.cost_usd ? ` · $${t.cost_usd.toFixed(4)}` : ""}${tools ? ` · tools: ${tools}` : ""}</div>
+      ${drawer}
+    </div>
+  `;
+}
+
+function renderJudge(j) {
+  if (!j) return "<p>(not judged)</p>";
+  const scoreRows = DIMENSIONS.map(d => {
+    const s = j.scores?.[d];
+    if (!s) return "";
+    const score = s.score == null ? "—" : s.score;
+    return `<tr><td>${d.replace(/_/g, " ")}</td><td>${score}</td><td>${escapeHtml(s.justification || "")}</td></tr>`;
+  }).join("");
+  const notable = (j.notable_moments || []).map(m =>
+    `<li>turn ${m.turn} (${m.type}): ${escapeHtml(m.note)}</li>`
+  ).join("");
+  return `
+    <h3 class="verdict-${j.verdict}">verdict: ${j.verdict}</h3>
+    <p>${escapeHtml(j.verdict_reason || "")}</p>
+    <table>
+      <thead><tr><th>dimension</th><th>score</th><th>justification</th></tr></thead>
+      <tbody>${scoreRows}</tbody>
+    </table>
+    ${notable ? `<h4>Notable moments</h4><ul>${notable}</ul>` : ""}
+  `;
+}
+
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, c => (
+    {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]
+  ));
 }
