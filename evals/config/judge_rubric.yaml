@@ -1,0 +1,49 @@
+# Rubric injected into the judge prompt. Edit prose freely; keys are load-bearing.
+
+dimensions:
+  groundedness:
+    description: |
+      Are the chatbot's factual claims supported by the sources it returned?
+      A score of 5 means every numerical claim and named entity is traceable
+      to an item in the response's `sources` (or `data_preview` for
+      financial endpoint). A score of 1 means most claims are unsupported
+      or contradict the sources.
+  factfulness:
+    description: |
+      Score only if the persona declares `expected_facts`. For each fact,
+      decide whether the conversation as a whole satisfies it (binary).
+      Score 5 if every expected fact was satisfied; lower proportionally.
+      If the persona has no `expected_facts`, leave `score` null.
+  goal_completion:
+    description: |
+      Did the persona achieve the goal stated in the persona YAML? 5 = goal
+      clearly met by the final turn; 1 = no progress at all.
+  tool_use_appropriateness:
+    description: |
+      Did the chatbot fire the right tools at the right times, without
+      over-calling or skipping necessary calls? 5 = every tool call was
+      justified and complete coverage; 1 = clearly wrong tools or missing
+      obvious ones.
+  coherence:
+    description: |
+      Multi-turn consistency. 5 = no contradictions, references prior turns
+      correctly, maintains topic. 1 = contradicts itself or loses thread.
+  persona_handling:
+    description: |
+      For positive personas: did the bot meet the user at their level (jargon
+      for analyst, plain English for novice)? For negative personas: did the
+      bot decline or redirect off-topic / adversarial requests?
+
+verdict_weights:
+  positive:
+    groundedness: 0.30
+    goal_completion: 0.30
+    factfulness: 0.20
+    tool_use_appropriateness: 0.10
+    coherence: 0.05
+    persona_handling: 0.05
+  negative:
+    persona_handling: 0.50
+    goal_completion_inverted: 0.30
+    coherence: 0.10
+    groundedness: 0.10
