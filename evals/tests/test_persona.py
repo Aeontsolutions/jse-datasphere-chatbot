@@ -74,3 +74,32 @@ def test_optional_fields_default(tmp_path: Path):
     assert persona.api_options == {}
     assert persona.opening_style == "cold_open"
     assert persona.notes == ""
+
+
+def test_malformed_yaml_raises_persona_validation_error(tmp_path: Path):
+    bad = tmp_path / "broken.yaml"
+    bad.write_text("id: x\n  - not valid yaml: [\n", encoding="utf-8")
+    with pytest.raises(PersonaValidationError, match="YAML"):
+        load_persona(bad)
+
+
+def test_load_personas_loads_all_yaml_in_directory(tmp_path: Path):
+    from evals.persona import load_personas
+
+    (tmp_path / "p_b.yaml").write_text(
+        "id: b\nname: B\ncategory: positive\nendpoint: fast_chat_v2\n"
+        "character: c\ngoal: g\nmax_turns: 2\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "p_a.yaml").write_text(
+        "id: a\nname: A\ncategory: negative\nendpoint: chat_stream\n"
+        "character: c\ngoal: g\nmax_turns: 3\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "not_yaml.txt").write_text("ignored", encoding="utf-8")
+
+    personas = load_personas(tmp_path)
+    assert len(personas) == 2
+    # sorted by filename, so p_a.yaml comes before p_b.yaml
+    assert personas[0].id == "a"
+    assert personas[1].id == "b"

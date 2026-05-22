@@ -57,7 +57,10 @@ class PersonaSpec(BaseModel):
 def load_persona(path: Path | str) -> PersonaSpec:
     """Load and validate a persona from a YAML file."""
     p = Path(path)
-    raw = yaml.safe_load(p.read_text(encoding="utf-8"))
+    try:
+        raw = yaml.safe_load(p.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise PersonaValidationError(f"failed to parse {p} as YAML: {exc}") from exc
     if not isinstance(raw, dict):
         raise PersonaValidationError(
             f"persona file {p} must contain a YAML mapping at the top level"
