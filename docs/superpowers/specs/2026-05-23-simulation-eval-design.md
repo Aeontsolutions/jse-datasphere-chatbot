@@ -34,10 +34,25 @@ tool** for quickly evaluating qualitative changes during iteration.
 ### Non-goals (v1)
 
 - Pass/fail CI gating. Suite is snapshot-only; humans decide what regressed.
-- Baseline comparison / diffing two runs. View one run at a time.
 - Editing personas or launching runs from the viewer.
 - Auth, sharing, hosting. Viewer is local-only.
 - Per-turn judging. Judge runs once per conversation at the end.
+
+### Cross-run analysis (in scope for v1)
+
+The viewer must let the user load **two or more runs at once** and:
+
+- See per-persona and overall metric deltas across runs (is groundedness
+  improving? Are average turns dropping?).
+- Identify the personas with the biggest regressions and improvements
+  between any two selected runs.
+- Drill down to specific conversations (same persona, same replicate
+  index) and compare transcripts side-by-side.
+
+Comparison is **aggregate-first** (per-persona means across replicates),
+because individual conversations diverge even with matched persona seeds
+due to chatbot non-determinism. The mean-across-replicates is the
+load-bearing comparison; individual conversation diffs are exploratory.
 
 ## 3. Architecture overview
 
@@ -419,18 +434,23 @@ api_options:
 
 Static HTML + JS + CSS at `evals/viewer/`. No build step.
 
-**Data loading — two supported modes:**
+**Data loading — three supported modes:**
 
-1. **Drag-and-drop**: drop the `runs/<run_id>/` folder onto the page. File
-   API reads `manifest.json`, `summary.json`, and all
+1. **Drag-and-drop single run**: drop a `runs/<run_id>/` folder onto the
+   page → File API reads `manifest.json`, `summary.json`, and all
    `conversations/*.json`. Fully offline, no server.
-2. **Local server convenience**: `python -m evals.serve --port 8765` runs a
-   small `http.server` over `evals/`. Then
-   `http://localhost:8765/viewer/?run=<run_id>` auto-loads via `fetch`.
+2. **Drag-and-drop multiple runs**: drop two or more `runs/<run_id>/`
+   folders → viewer enters multi-run mode (see views below).
+3. **Local server convenience**: `python -m evals.serve --port 8765` runs
+   a small `http.server` over `evals/`. Then
+   `http://localhost:8765/viewer/?run=<id>` auto-loads one run, or
+   `?runs=<id1>,<id2>,<id3>` auto-loads several into multi-run mode.
 
-Both paths feed the same renderer.
+All paths feed the same renderer; multi-run mode is just the
+single-run views with one extra column/track per loaded run plus the
+two comparison views.
 
-**Three views, tab-switched:**
+### Single-run views (tab-switched)
 
 - **Overview** (reads `summary.json`)
   - Header: run ID, git SHA, started/ended, total cost, mean latency.
@@ -457,9 +477,58 @@ Both paths feed the same renderer.
     turn.
   - Banner: termination reason (`done` / `cap` / `error`).
 
+### Multi-run views (when 2+ runs are loaded)
+
+- **Run roster** (always visible in multi-run mode)
+  - Shows each loaded run's ID, git SHA, started_at, persona count, total
+    cost. User designates one run as **baseline** (defaults to oldest by
+    `started_at`); the others are **candidates**.
+  - "Add run" button = trigger drag-drop or fetch another run; "Remove"
+    drops one from the comparison.
+
+- **Comparison overview** (new tab, replaces "Overview" in multi-run mode)
+  - Top: side-by-side scorecards for each loaded run — verdict mix,
+    mean groundedness, mean factfulness, mean goal_completion,
+    mean turns, mean latency, total cost.
+  - Per-persona comparison table: rows = personas; for each persona a
+    block of columns shows the mean ± std for each judge dimension in
+    each run. Delta vs baseline is rendered next to each candidate
+    cell, green for improvement, red for regression, gray for "within
+    1σ of baseline" (treated as noise).
+  - Sort by "biggest regression vs baseline" or "biggest improvement vs
+    baseline" on any dimension to surface the personas worth
+    investigating first.
+
+- **Diff: two-run picker** (new tab, only when ≥2 runs loaded)
+  - User picks an "A" run and a "B" run (baseline and candidate by
+    default; either dropdown can pick any loaded run).
+  - **Per-persona delta table**: dimension-by-dimension `Δ = B - A`
+    with confidence indicator. A delta is flagged as "likely
+    meaningful" when `|Δ| > max(0.5, σ_A + σ_B)` — i.e., outside the
+    combined replicate noise — and "likely noise" otherwise. This is a
+    heuristic, not a statistical test, and is presented as such in the
+    UI.
+  - **Biggest movers list**: top 5 improvements + top 5 regressions
+    across all (persona × dimension) cells, with one-line judge
+    justifications excerpted from the underlying conversations.
+  - **Conversation pair view**: for any persona, pick a replicate index
+    (1..N) and view the A-run and B-run conversation transcripts
+    side-by-side, with judge scores stacked underneath. Same
+    persona_id + same replicate_index = matched seed for the persona
+    LLM, so the conversations *start* from comparable openings even
+    though they diverge.
+
 **Stack:** plain HTML/CSS/JS. CDN deps: **Vega-Lite + Vega-Embed** for
 chart specs returned by `/fast_chat_v2`. Optionally **Pico.css** (~4KB) for
 defaults; skip if fully custom styling is preferred.
+
+**Comparison invariants the viewer relies on:**
+- Conversation filenames are deterministic: `<persona_id>__rep<NN>.json`.
+- Persona LLM seed is `stable_hash(persona_id) + replicate_index`, so the
+  matched-replicate pairing is meaningful (same persona, same seed → same
+  opening utterance ± chatbot-driven divergence).
+- `summary.json` already aggregates by persona, so cross-run aggregation
+  is just zipping summaries by `persona_id`.
 
 ## 11. Operational details
 
@@ -492,13 +561,23 @@ defaults; skip if fully custom styling is preferred.
   scripts), the suite stops surfacing novel failures. Periodically the
   team should review whether personas still encode realistic intent rather
   than implementation knowledge.
+- **Cross-run noise.** With only 3 replicates per persona, judge variance
+  plus chatbot non-determinism can easily produce 0.3–0.5 point swings
+  on a 1–5 scale that don't reflect real changes. The diff view's
+  `|Δ| > σ_A + σ_B` heuristic mitigates this but doesn't eliminate it.
+  Users should treat single-dimension deltas with caution and look for
+  patterns across personas + dimensions before declaring a regression.
+  Raising replicates from 3 to 5 or running A/A (same git SHA twice)
+  to characterize baseline noise are mitigations worth keeping handy.
 
 ## 13. Out of scope (deferred)
 
-- Baseline comparison / two-run diffing.
 - CI gate with thresholds.
-- Multi-run dashboard.
 - Persona authoring UI.
 - Editing or kicking off runs from the viewer.
 - Sharing / hosted viewer.
 - Per-turn judging.
+- Statistical significance testing for cross-run deltas (the viewer uses
+  the `|Δ| > σ_A + σ_B` heuristic only; no t-tests or bootstrapping).
+- More than two-way diffs (the diff view picks a single A vs B; multi-run
+  comparison overview handles N≥3).
