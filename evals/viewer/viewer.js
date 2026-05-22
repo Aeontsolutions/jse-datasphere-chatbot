@@ -137,7 +137,7 @@ function renderActiveView() {
   else if (state.activeView === "list") { renderList(); }
   else if (state.activeView === "detail") { renderDetail(); }
   else if (state.activeView === "compare") { renderCompare(roster); return; }
-  else if (state.activeView === "diff") { viewRoot.innerHTML = roster + "<p>(diff view coming next task)</p>"; return; }
+  else if (state.activeView === "diff") { renderDiff(roster); return; }
   if (roster && state.activeView !== "compare" && state.activeView !== "diff") {
     viewRoot.insertAdjacentHTML("afterbegin", roster);
   }
@@ -310,6 +310,103 @@ function renderJudge(j) {
     </table>
     ${notable ? `<h4>Notable moments</h4><ul>${notable}</ul>` : ""}
   `;
+}
+
+function renderDiff(roster) {
+  const a = state.diff.a ? state.runs.find(r => r.runId === state.diff.a) : state.runs[0];
+  const b = state.diff.b ? state.runs.find(r => r.runId === state.diff.b) : state.runs[1];
+  if (!a || !b) { viewRoot.innerHTML = roster + "<p>Need two runs loaded.</p>"; return; }
+
+  const pickers = `
+    <p>
+      A (baseline): <select id="diff-a">${state.runs.map(r => `<option value="${r.runId}"${r.runId === a.runId ? " selected" : ""}>${r.runId}</option>`).join("")}</select>
+      &nbsp;B (candidate): <select id="diff-b">${state.runs.map(r => `<option value="${r.runId}"${r.runId === b.runId ? " selected" : ""}>${r.runId}</option>`).join("")}</select>
+    </p>
+  `;
+
+  const personas = new Set([
+    ...Object.keys(a.summary.by_persona || {}),
+    ...Object.keys(b.summary.by_persona || {}),
+  ]);
+
+  // Per-persona delta cells
+  const rows = [...personas].map(pid => {
+    const ap = a.summary.by_persona[pid];
+    const bp = b.summary.by_persona[pid];
+    const cells = [pid];
+    DIMENSIONS.forEach(d => {
+      const aMean = ap?.[`mean_${d}`];
+      const bMean = bp?.[`mean_${d}`];
+      const aStd = ap?.[`std_${d}`] || 0;
+      const bStd = bp?.[`std_${d}`] || 0;
+      if (aMean == null || bMean == null) { cells.push("—"); return; }
+      const delta = bMean - aMean;
+      const noise = Math.max(0.5, aStd + bStd);
+      const cls = Math.abs(delta) < noise ? "delta-noise" : (delta > 0 ? "delta-up" : "delta-down");
+      cells.push(`<span class="${cls}">${delta >= 0 ? "+" : ""}${delta.toFixed(2)}</span>`);
+    });
+    return `<tr><td>${pid}</td>${cells.slice(1).map(c => `<td>${c}</td>`).join("")}</tr>`;
+  });
+
+  // Top movers across all (persona × dimension) cells
+  const movers = [];
+  for (const pid of personas) {
+    for (const d of DIMENSIONS) {
+      const aMean = a.summary.by_persona[pid]?.[`mean_${d}`];
+      const bMean = b.summary.by_persona[pid]?.[`mean_${d}`];
+      if (aMean == null || bMean == null) continue;
+      movers.push({ pid, dim: d, delta: bMean - aMean });
+    }
+  }
+  movers.sort((x, y) => y.delta - x.delta);
+  const top = movers.slice(0, 5);
+  const bottom = movers.slice(-5).reverse();
+
+  const pairOptions = [...personas].map(p => `<option value="${p}">${p}</option>`).join("");
+
+  viewRoot.innerHTML = `
+    ${roster}
+    ${pickers}
+    <h3>Per-persona dimension deltas (B − A)</h3>
+    <table>
+      <thead><tr><th>persona</th>${DIMENSIONS.map(d => `<th>${d.replace(/_/g, " ")}</th>`).join("")}</tr></thead>
+      <tbody>${rows.join("")}</tbody>
+    </table>
+
+    <h3>Biggest improvements</h3>
+    <ol>${top.map(m => `<li><strong>${m.pid}</strong> · ${m.dim}: <span class="delta-up">+${m.delta.toFixed(2)}</span></li>`).join("")}</ol>
+
+    <h3>Biggest regressions</h3>
+    <ol>${bottom.map(m => `<li><strong>${m.pid}</strong> · ${m.dim}: <span class="delta-down">${m.delta.toFixed(2)}</span></li>`).join("")}</ol>
+
+    <h3>Conversation pair</h3>
+    <p>Persona: <select id="pair-persona">${pairOptions}</select>
+       Replicate: <input id="pair-rep" type="number" min="1" max="20" value="1" /></p>
+    <div id="pair-display"></div>
+  `;
+
+  document.getElementById("diff-a").onchange = e => { state.diff.a = e.target.value; renderApp(); };
+  document.getElementById("diff-b").onchange = e => { state.diff.b = e.target.value; renderApp(); };
+
+  function renderPair() {
+    const pid = document.getElementById("pair-persona").value;
+    const rep = parseInt(document.getElementById("pair-rep").value, 10) || 1;
+    const cid = `${pid}__rep${String(rep).padStart(2, "0")}`;
+    const aC = a.conversations.find(c => c.conversation_id === cid);
+    const bC = b.conversations.find(c => c.conversation_id === cid);
+    const pairEl = document.getElementById("pair-display");
+    pairEl.innerHTML = `
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div><h4>A: ${a.runId}</h4>${aC ? aC.turns.map(renderTurn).join("") : "<p>(not found)</p>"}
+          ${aC?.judge ? renderJudge(aC.judge) : ""}</div>
+        <div><h4>B: ${b.runId}</h4>${bC ? bC.turns.map(renderTurn).join("") : "<p>(not found)</p>"}
+          ${bC?.judge ? renderJudge(bC.judge) : ""}</div>
+      </div>
+    `;
+  }
+  document.getElementById("pair-persona").onchange = renderPair;
+  document.getElementById("pair-rep").onchange = renderPair;
+  renderPair();
 }
 
 function escapeHtml(s) {
