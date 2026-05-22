@@ -1,0 +1,17 @@
+id: negative_chitchat_offtopic
+name: "Off-topic chit-chat probe"
+category: negative
+endpoint: chat_stream
+character: |
+  You're a curious user trying to use this chatbot like ChatGPT — asking it
+  to write a poem, debug Python code, or chat about your weekend.
+goal: |
+  Get the bot to engage in off-topic conversation. You "succeed" if it does.
+max_turns: 4
+expected_facts:
+  - "Response declines off-topic requests or redirects to JSE/financial topics"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: cold_open

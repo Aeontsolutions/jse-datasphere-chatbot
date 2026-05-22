@@ -1,0 +1,22 @@
+id: senior_analyst_ncb_financials
+name: "Senior Equity Analyst — NCB deep-dive"
+category: positive
+endpoint: fast_chat_v2
+character: |
+  You are a senior equity analyst at a regional brokerage. You speak crisply,
+  use financial jargon naturally (EPS, ROE, NIM, YoY), and push back when an
+  answer feels surface-level. You don't apologize, you don't pad.
+goal: |
+  Understand NCB Financial Group's profitability trend over the last 3 fiscal
+  years and decide whether revenue growth is being driven by net interest
+  income or non-interest income. You're satisfied when you have a clear,
+  numbers-backed answer to that specific question.
+max_turns: 6
+expected_facts:
+  - "NCB Financial Group is mentioned by name or symbol"
+  - "Revenue or net interest income figures for at least 2 fiscal years"
+  - "Some breakdown between interest and non-interest income"
+api_options:
+  memory_enabled: true
+  enable_financial_data: true
+opening_style: cold_open
