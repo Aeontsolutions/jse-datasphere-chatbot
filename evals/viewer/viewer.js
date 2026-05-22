@@ -136,10 +136,11 @@ function renderActiveView() {
   if (state.activeView === "overview") { renderOverview(); }
   else if (state.activeView === "list") { renderList(); }
   else if (state.activeView === "detail") { renderDetail(); }
-  else if (state.activeView === "compare") { viewRoot.innerHTML = roster + "<p>(compare view coming in next task)</p>"; return; }
-  else if (state.activeView === "diff") { viewRoot.innerHTML = roster + "<p>(diff view coming in next task)</p>"; return; }
-  else { viewRoot.innerHTML = `<p>(${state.activeView} view not implemented yet)</p>`; return; }
-  if (roster) viewRoot.insertAdjacentHTML("afterbegin", roster);
+  else if (state.activeView === "compare") { renderCompare(roster); return; }
+  else if (state.activeView === "diff") { viewRoot.innerHTML = roster + "<p>(diff view coming next task)</p>"; return; }
+  if (roster && state.activeView !== "compare" && state.activeView !== "diff") {
+    viewRoot.insertAdjacentHTML("afterbegin", roster);
+  }
 }
 
 const DIMENSIONS = [
@@ -340,4 +341,67 @@ function renderRoster() {
       <thead><tr><th>run id</th><th>git</th><th>started</th><th>convos</th><th>cost</th><th>role</th></tr></thead>
       <tbody>${rows.join("")}</tbody>
     </table>`;
+}
+
+function renderCompare(roster) {
+  // Union of personas across all runs
+  const allPersonas = new Set();
+  state.runs.forEach(r => Object.keys(r.summary.by_persona || {}).forEach(p => allPersonas.add(p)));
+
+  const baseline = state.runs[0];
+  const scorecards = state.runs.map(r => {
+    const ov = r.summary.overall;
+    return `<div style="border: 1px solid var(--border); padding: 0.75rem; border-radius: 0.5rem;">
+      <h4>${r.runId} ${r.runId === baseline.runId ? "<small>(baseline)</small>" : ""}</h4>
+      <p>convos: ${r.summary.conversation_count} · cost: $${(ov.total_cost_usd || 0).toFixed(4)} · turns: ${(ov.mean_turns || 0).toFixed(1)}</p>
+      <p>
+        <span class="verdict-pass">${ov.verdict_counts?.pass || 0}</span>/
+        <span class="verdict-partial">${ov.verdict_counts?.partial || 0}</span>/
+        <span class="verdict-fail">${ov.verdict_counts?.fail || 0}</span>
+      </p>
+    </div>`;
+  });
+
+  // Per-persona table: rows = personas; columns grouped by run
+  const headerCells = ["persona"];
+  state.runs.forEach(r => DIMENSIONS.forEach(d => headerCells.push(`${r.runId.slice(0, 8)}<br><small>${d}</small>`)));
+  const rows = [...allPersonas].map(pid => {
+    const cells = [pid];
+    state.runs.forEach(r => {
+      const p = r.summary.by_persona?.[pid];
+      DIMENSIONS.forEach(d => {
+        const mean = p?.[`mean_${d}`];
+        const std = p?.[`std_${d}`];
+        const cell = mean == null ? "—" : fmtMeanStd(mean, std);
+        // delta vs baseline
+        if (r.runId !== baseline.runId) {
+          const bMean = baseline.summary.by_persona?.[pid]?.[`mean_${d}`];
+          const bStd = baseline.summary.by_persona?.[pid]?.[`std_${d}`];
+          if (mean != null && bMean != null) {
+            const delta = mean - bMean;
+            const noise = Math.max(0.5, (std || 0) + (bStd || 0));
+            const cls = Math.abs(delta) < noise ? "delta-noise"
+                       : (delta > 0 ? "delta-up" : "delta-down");
+            cells.push(`${cell}<br><span class="${cls}">Δ ${delta >= 0 ? "+" : ""}${delta.toFixed(2)}</span>`);
+            return;
+          }
+        }
+        cells.push(cell);
+      });
+    });
+    return `<tr>${cells.map(c => `<td>${c}</td>`).join("")}</tr>`;
+  });
+
+  viewRoot.innerHTML = `
+    ${roster}
+    <h3>Side-by-side scorecards</h3>
+    <div style="display: grid; grid-template-columns: repeat(${state.runs.length}, 1fr); gap: 1rem;">
+      ${scorecards.join("")}
+    </div>
+    <h3>Per-persona dimensions vs baseline (${baseline.runId})</h3>
+    <table>
+      <thead><tr>${headerCells.map(h => `<th>${h}</th>`).join("")}</tr></thead>
+      <tbody>${rows.join("")}</tbody>
+    </table>
+  `;
 }
