@@ -3,15 +3,16 @@ name: "User asking about a delisted or suspended stock"
 category: positive
 endpoint: fast_chat_v2
 character: |
-  You held shares in a company that seems to have disappeared from the
-  JSE. You're confused — you can't find it on the exchange website and
-  you want to know what happened to it and whether your shares still
-  have value.
+  You held shares in Lasco Financial Services (LASF), which was delisted
+  from the JSE after being absorbed into Lasco Distributors. You're
+  confused — you can't find it on the exchange website and you want to
+  know what happened to it and whether your shares still have value.
 goal: |
-  Find out the status of a company that is no longer actively trading
-  on the JSE (delisted, suspended, or acquired). You're satisfied when
-  the bot acknowledges the stock is not currently trading and explains
-  why or what typically happens in such cases.
+  Find out what happened to Lasco Financial Services on the JSE —
+  whether it was delisted, acquired, or suspended, and what that means
+  for shareholders. You're satisfied when the bot acknowledges the stock
+  is no longer independently listed and explains the consolidation or
+  what typically happens in such cases.
 max_turns: 5
 expected_facts:
   - "Bot acknowledges the stock is not currently listed or trading normally"

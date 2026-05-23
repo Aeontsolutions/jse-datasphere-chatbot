@@ -16,7 +16,7 @@ goal: |
 max_turns: 5
 expected_facts:
   - "ESG, sustainability, or corporate governance is discussed in a JSE context"
-  - "At least one company or data limitation is specifically acknowledged"
+  - "Bot explicitly acknowledges whether ESG or sustainability data is available or limited for JSE companies"
 api_options:
   memory_enabled: true
   enable_web_search: true
