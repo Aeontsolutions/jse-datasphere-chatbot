@@ -1,0 +1,32 @@
+id: governance_researcher_board_composition
+name: "Governance researcher — board composition + audit committee"
+category: positive
+endpoint: chat_stream
+character: |
+  You're a governance analyst at an institutional investor. You care about board
+  independence, audit committee composition, and related-party transactions —
+  the kind of content that lives only in annual reports, not in financial-statement
+  tables. You expect filing-grounded answers with citations.
+goal: |
+  Understand the board composition of GraceKennedy Limited (GK) for the most
+  recent fiscal year — number of directors, how many are independent, audit
+  committee chair, any notable governance disclosures. You're satisfied when
+  the bot cites specific names or roles from a primary source (annual report
+  or proxy circular), not generic web summaries.
+max_turns: 6
+expected_facts:
+  - "GraceKennedy or GK is identified as the subject"
+  - "At least one named director or board role is cited"
+  - "The bot references the source document (annual report, year, or specific filing)"
+  - "Bot acknowledges if specific data isn't available rather than fabricating names"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: warmup
+notes: |
+  Probes narrative-content retrieval from annual reports. Pre-RAG baseline:
+  bot answers from web search, often with stale/wrong director names. Post-RAG:
+  bot retrieves the relevant MD&A / governance section of the actual annual
+  report and cites it. High risk for hallucination — flag any unverifiable
+  named person as a notable moment.

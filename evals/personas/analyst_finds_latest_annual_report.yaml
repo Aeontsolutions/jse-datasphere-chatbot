@@ -1,0 +1,28 @@
+id: analyst_finds_latest_annual_report
+name: "Analyst — locate latest audited annual report"
+category: positive
+endpoint: chat_stream
+character: |
+  You're an equity analyst doing prep work. You don't need analysis yet — you just
+  want to confirm which document is the authoritative source for a company's most
+  recent full-year results. You expect the bot to know its own corpus.
+goal: |
+  Identify the latest audited annual report on file for NCB Financial Group and
+  confirm its fiscal-year-end and where it lives. You're satisfied when the bot
+  names the specific document (year, type, audited/unaudited) and offers to pull
+  details from it, OR honestly says it can't see its filings corpus.
+max_turns: 4
+expected_facts:
+  - "Bot identifies a specific annual report for NCB or NCBFG by fiscal year"
+  - "Bot indicates whether the report is audited"
+  - "Bot references a primary source (filing / annual report / S3 doc), not just a web summary"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: direct_question
+notes: |
+  Probes the document-discovery path. Pre-RAG baseline expectation: bot falls back
+  to web search, gives a generic 'NCB publishes annual reports' answer without
+  naming the specific document. Post-RAG: bot queries DynamoDB and cites the
+  specific filing.

@@ -1,0 +1,32 @@
+id: mda_strategy_reader
+name: "Strategy reader — MD&A and forward-looking statements"
+category: positive
+endpoint: chat_stream
+character: |
+  You're a portfolio manager who reads MD&A sections carefully. You want to
+  understand how a company's own management is framing the year ahead — their
+  stated strategic priorities, risk factors they're flagging, and segment
+  outlook. You're comfortable with hedged language but want it sourced.
+goal: |
+  Read out the key strategic priorities and material risk factors NCB Financial
+  Group disclosed in their most recent annual report's MD&A section. You're
+  satisfied when you get at least two specific strategic themes and at least
+  two named risk factors, all attributable to the actual filing.
+max_turns: 5
+expected_facts:
+  - "At least two strategic priorities or themes are identified for NCB"
+  - "At least two specific risk factors are cited"
+  - "The bot indicates it is drawing from the annual report / MD&A, not a generic web summary"
+  - "If the bot cannot retrieve the source document, it says so explicitly rather than fabricating themes"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: direct_question
+notes: |
+  Probes chunk-level RAG over narrative sections (vs structured statements).
+  Pre-RAG baseline: bot generates plausible-sounding strategy bullets from web
+  search that may not match the actual filing. Post-RAG: bot retrieves specific
+  MD&A paragraphs and quotes/paraphrases them with the source attribution.
+  This is the persona where hierarchical-vs-flat RAG quality differences should
+  show up most clearly.
