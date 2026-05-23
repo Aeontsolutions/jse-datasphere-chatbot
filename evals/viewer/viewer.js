@@ -195,10 +195,12 @@ function renderOverview() {
       <span class="verdict-partial">partial: ${ov.verdict_counts?.partial || 0}</span> ·
       <span class="verdict-fail">fail: ${ov.verdict_counts?.fail || 0}</span>
       ${ov.judge_failed_count ? `· <span class="verdict-judgefailed">judge_failed: ${ov.judge_failed_count}</span>` : ""}
+      ${ov.incomplete_count ? `· <span class="verdict-judgefailed">incomplete (infra-error): ${ov.incomplete_count}</span>` : ""}
     </p>
 
     <h3>Per-persona</h3>
     ${renderPersonaTable(s.by_persona)}
+    ${renderIncompleteTable(s.incomplete_by_persona)}
   `;
 }
 
@@ -219,6 +221,20 @@ function renderPersonaTable(byPersona) {
     <thead><tr>${header.map(h => `<th>${h}</th>`).join("")}</tr></thead>
     <tbody>${rows.join("")}</tbody>
   </table>`;
+}
+
+function renderIncompleteTable(incompleteByPersona) {
+  if (!incompleteByPersona || !Object.keys(incompleteByPersona).length) return "";
+  const rows = Object.entries(incompleteByPersona).map(([pid, data]) =>
+    `<tr><td>${pid}</td><td>${data.incomplete_count}</td></tr>`
+  );
+  return `
+    <h3>Incomplete conversations (infra-error or cost cap — excluded from scores)</h3>
+    <table>
+      <thead><tr><th>persona</th><th>incomplete count</th></tr></thead>
+      <tbody>${rows.join("")}</tbody>
+    </table>
+  `;
 }
 
 function fmtMeanStd(mean, std) {
