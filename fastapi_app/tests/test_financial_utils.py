@@ -527,16 +527,16 @@ def _manager_with_ratio_rows(monkeypatch, rows):
 
 
 def _ratio_row(**overrides):
-    defaults = dict(
-        Company="Test Company",
-        Symbol="TST",
-        Year=2023,
-        standard_item="dividend_per_share",
-        item=1.0,
-        unit_multiplier=1.0,
-        item_type="ratio",
-        item_name="test_item",
-    )
+    defaults = {
+        "Company": "Test Company",
+        "Symbol": "TST",
+        "Year": 2023,
+        "standard_item": "dividend_per_share",
+        "item": 1.0,
+        "unit_multiplier": 1.0,
+        "item_type": "ratio",
+        "item_name": "test_item",
+    }
     defaults.update(overrides)
     return _RatioRow(**defaults)
 
