@@ -1,9 +1,12 @@
 """
-Simplified Agent module for orchestrating Gemini with multiple tools.
+ARCHIVED — not imported by the running application (see _archive/README.md).
 
-This module provides the AgentOrchestrator class that combines:
-- Google Search (native Gemini tool) for web grounding
-- SQL Query Tool (custom) for financial database queries
+Original path: fastapi_app/app/agent.py  |  Archived: ATS-330
+
+AgentOrchestrator — 3-phase agent combining Google Search grounding with JSE
+financial-DB tool calling via Gemini function calling. Superseded by AgentV2
+(web grounding only) for live endpoints. Preserved for R10 (restore financial
+tool calling on /chat/stream).
 
 Architecture: 3-phase pipeline
 1. Smart Optimization - Single LLM call for clarification, routing, pronoun resolution
