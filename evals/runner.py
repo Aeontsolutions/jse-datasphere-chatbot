@@ -194,7 +194,17 @@ async def run_simulation(
         for persona in personas
         for rep in range(replicates)
     ]
-    results = await asyncio.gather(*tasks, return_exceptions=False)
-    conversations = [r for r in results if r is not None]
+    # return_exceptions=True so a catastrophic failure in one task (e.g.
+    # a raise outside the inner try/except in `one`) doesn't wipe out
+    # the whole run. We log unexpected exceptions and drop them from
+    # the artifact list.
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    conversations: list[ConversationArtifact] = []
+    for r in results:
+        if isinstance(r, ConversationArtifact):
+            conversations.append(r)
+        elif isinstance(r, BaseException):
+            print(f"ERROR: task crashed: {type(r).__name__}: {r}")
+        # r is None when the task was cancelled by the cost cap
 
     return RunArtifacts(conversations=conversations, cost_capped=cost_capped)

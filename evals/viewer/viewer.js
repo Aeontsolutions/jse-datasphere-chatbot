@@ -64,13 +64,38 @@ async function ingestFiles(files) {
 }
 
 function bucketByRun(files) {
-  // Detect run roots by finding manifest.json files
+  // A run is rooted at whichever directory contains its manifest.json.
+  // Find every manifest.json first; each one defines a run root (the
+  // directory portion of its relative path). Then every other file is
+  // assigned to the run whose root is the longest prefix of its path.
+  //
+  // This handles three drop patterns correctly:
+  //   1. Dropping a single runs/<id>/ folder
+  //   2. Dropping multiple runs/<id>/ folders selected together
+  //   3. Dropping the parent runs/ folder containing many runs
+  const relPath = (f) => f._relPath || f.webkitRelativePath || f.name;
+  const dirOf = (path) => {
+    const i = path.lastIndexOf("/");
+    return i === -1 ? "" : path.slice(0, i);
+  };
+
+  const runRoots = files
+    .map(relPath)
+    .filter((p) => p === "manifest.json" || p.endsWith("/manifest.json"))
+    .map(dirOf); // "" for a bare manifest.json, otherwise the dir
+
   const runs = {};
   for (const f of files) {
-    const rel = f._relPath || f.webkitRelativePath || f.name;
-    const parts = rel.split("/");
-    // Simpler heuristic: the first path segment under the dropped root is the run id
-    const runId = parts[0];
+    const rel = relPath(f);
+    // Longest run-root that is a prefix of this file's path wins.
+    let bestRoot = null;
+    for (const root of runRoots) {
+      const matches = root === "" ? true : rel === root || rel.startsWith(root + "/");
+      if (!matches) continue;
+      if (bestRoot === null || root.length > bestRoot.length) bestRoot = root;
+    }
+    if (bestRoot === null) continue; // file not under any run
+    const runId = bestRoot || ".";
     runs[runId] ||= {};
     runs[runId][rel] = f;
   }
