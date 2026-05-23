@@ -11,7 +11,7 @@ def test_load_default():
     config = load_config()
     assert config.base_url == "http://localhost:8000"
     assert config.replicates == 3
-    assert config.concurrency == 4
+    assert config.concurrency == 2
     assert config.persona_model == "gemini-2.5-flash"
     assert config.judge_model == "gemini-2.5-pro"
     assert config.max_cost_usd_per_run == 5.00
