@@ -96,25 +96,33 @@ def _summarize(
     manifest: dict[str, Any],
 ) -> dict[str, Any]:
     convos = artifacts.conversations
+    complete = [c for c in convos if c.transcript.termination.reason != "error"]
+    incomplete = [c for c in convos if c.transcript.termination.reason == "error"]
 
     by_persona: dict[str, dict[str, Any]] = {}
     for p in personas:
-        ps = [c for c in convos if c.transcript.persona_id == p.id]
+        ps = [c for c in complete if c.transcript.persona_id == p.id]
         by_persona[p.id] = _persona_stats(ps)
 
+    incomplete_by_persona: dict[str, dict[str, Any]] = {}
+    for p in personas:
+        errs = [c for c in incomplete if c.transcript.persona_id == p.id]
+        if errs:
+            incomplete_by_persona[p.id] = {"incomplete_count": len(errs)}
+
     by_endpoint = {
-        endpoint: _persona_stats([c for c in convos if c.transcript.endpoint == endpoint])
-        for endpoint in {c.transcript.endpoint for c in convos}
+        endpoint: _persona_stats([c for c in complete if c.transcript.endpoint == endpoint])
+        for endpoint in {c.transcript.endpoint for c in complete}
     }
 
     by_category = {
         cat: _persona_stats(
-            [c for c in convos if _category_for(c.transcript.persona_id, personas) == cat]
+            [c for c in complete if _category_for(c.transcript.persona_id, personas) == cat]
         )
         for cat in {p.category for p in personas}
     }
 
-    overall = _overall_stats(convos)
+    overall = _overall_stats(complete, len(incomplete))
 
     return {
         "run_id": run_id,
@@ -124,6 +132,7 @@ def _summarize(
         "config": manifest["config"],
         "conversation_count": len(convos),
         "by_persona": by_persona,
+        "incomplete_by_persona": incomplete_by_persona,
         "by_endpoint": by_endpoint,
         "by_category": by_category,
         "overall": overall,
@@ -185,9 +194,9 @@ def _persona_stats(convos: list[ConversationArtifact]) -> dict[str, Any]:
     return out
 
 
-def _overall_stats(convos: list[ConversationArtifact]) -> dict[str, Any]:
+def _overall_stats(convos: list[ConversationArtifact], incomplete_count: int = 0) -> dict[str, Any]:
     if not convos:
-        return {}
+        return {"incomplete_count": incomplete_count}
 
     judged = [c for c in convos if c.judge_output is not None]
 
@@ -217,9 +226,7 @@ def _overall_stats(convos: list[ConversationArtifact]) -> dict[str, Any]:
     overall["verdict_counts"] = verdict_counts
 
     overall["judge_failed_count"] = sum(1 for c in convos if c.judge_failed)
-    overall["incomplete_count"] = sum(
-        1 for c in convos if c.transcript.termination.reason == "error"
-    )
+    overall["incomplete_count"] = incomplete_count
     overall["mean_turns"] = statistics.mean(len(c.transcript.turns) for c in convos)
     overall["mean_latency_ms"] = statistics.mean(
         c.transcript.totals()["latency_ms"] for c in convos

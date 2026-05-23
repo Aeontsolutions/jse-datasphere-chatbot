@@ -179,3 +179,64 @@ def test_judge_failed_serialized(tmp_path: Path):
     convo = json.loads((run_dir / "conversations" / "p1__rep01.json").read_text())
     assert convo["judge"]["judge_failed"] is True
     assert "parse error" in convo["judge"]["error"]
+
+
+def _error_transcript(persona_id: str, rep: int) -> Transcript:
+    return Transcript(
+        conversation_id=f"{persona_id}__rep{rep + 1:02d}",
+        persona_id=persona_id,
+        replicate_index=rep,
+        endpoint="fast_chat_v2",
+        turns=[],
+        termination=TerminationReason(reason="error", at_turn=0, error_type="ReadTimeout", error_message="timed out"),
+    )
+
+
+def test_error_convos_excluded_from_score_means(tmp_path: Path):
+    """Error convos must not pollute score aggregation even if judge ran on them."""
+    persona = _persona()
+    artifacts = RunArtifacts(
+        conversations=[
+            ConversationArtifact(_transcript("p1", 0), _judge(score=4), False, None),
+            ConversationArtifact(_transcript("p1", 1), _judge(score=4), False, None),
+            ConversationArtifact(_error_transcript("p1", 2), _judge(score=1), False, None),
+        ],
+        cost_capped=False,
+    )
+    run_dir = write_run(
+        artifacts=artifacts,
+        personas=[persona],
+        config={},
+        run_id="r_err1",
+        git_sha=None,
+        output_root=tmp_path,
+    )
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["overall"]["mean_groundedness"] == pytest.approx(4.0)
+    assert summary["by_persona"]["p1"]["mean_groundedness"] == pytest.approx(4.0)
+
+
+def test_incomplete_by_persona_block_present(tmp_path: Path):
+    """summary.json must include incomplete_by_persona with counts for error convos."""
+    persona = _persona()
+    artifacts = RunArtifacts(
+        conversations=[
+            ConversationArtifact(_transcript("p1", 0), _judge(score=4), False, None),
+            ConversationArtifact(_error_transcript("p1", 1), None, False, None),
+            ConversationArtifact(_error_transcript("p1", 2), None, False, None),
+        ],
+        cost_capped=False,
+    )
+    run_dir = write_run(
+        artifacts=artifacts,
+        personas=[persona],
+        config={},
+        run_id="r_err2",
+        git_sha=None,
+        output_root=tmp_path,
+    )
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert "incomplete_by_persona" in summary
+    assert summary["incomplete_by_persona"]["p1"]["incomplete_count"] == 2
+    assert summary["overall"]["incomplete_count"] == 2
+    assert summary["conversation_count"] == 3
