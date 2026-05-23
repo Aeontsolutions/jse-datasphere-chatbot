@@ -23,6 +23,20 @@ logger = get_logger(__name__)
 # Feature flag for DSPy usage (default: False for safe rollout)
 USE_DSPY = os.getenv("USE_DSPY", "false").lower() in ("true", "1", "yes")
 
+# Items stored as a monetary value per share (J$/share) — format with J$ prefix, no % suffix.
+# Verified against BQ: all values in J$/share range (0.25–2.0 for dps, -266–86 for eps).
+_CURRENCY_RATIO_ITEMS = frozenset({"dividend_per_share", "eps"})
+
+# Items whose values are sometimes stored as 0–1 fractions and sometimes as already-percent.
+# Convention: values ≤ 2.0 are treated as fractions (multiplied × 100); values > 2.0 are
+# assumed already in percent form.  Threshold verified against all rows in the BQ table:
+# GK/JMMBGL/JBG payout ratios top out at 0.71; BPOW's "dividend_cover" rows start at 7.2.
+_FRACTIONAL_PERCENT_ITEMS = frozenset({"dividend_payout_ratio"})
+
+# Dimensionless ratios — display as plain decimal, no % suffix.
+# BQ data: current_ratio 0.59–14.85; debt_to_equity_ratio -3.14–49.8.
+_PURE_RATIO_ITEMS = frozenset({"current_ratio", "debt_to_equity_ratio"})
+
 
 def get_row_attr(row, attr):
     # Try exact match first
@@ -856,13 +870,22 @@ class FinancialDataManager:
                     formatted_value = f"{actual_value:,.0f}"
                 else:
                     formatted_value = f"{actual_value:,.2f}"
+                standard_item_key = str(get_row_attr(row, "standard_item") or "").lower()
                 item_type = (
                     get_row_attr(row, "item_type")
                     if hasattr(row, "item_type") or "item_type" in dir(row)
                     else ""
                 )
                 if item_type == "ratio" and unit_multiplier == 1.0 and item is not None:
-                    formatted_value = f"{item:.2f}%"
+                    if standard_item_key in _CURRENCY_RATIO_ITEMS:
+                        formatted_value = f"J${item:,.2f}"
+                    elif standard_item_key in _FRACTIONAL_PERCENT_ITEMS:
+                        pct = item * 100 if abs(item) <= 2.0 else item
+                        formatted_value = f"{pct:.2f}%"
+                    elif standard_item_key in _PURE_RATIO_ITEMS:
+                        formatted_value = f"{item:.2f}"
+                    else:
+                        formatted_value = f"{item:.2f}%"
                 record = FinancialDataRecord(
                     company=str(
                         get_row_attr(row, "company")
