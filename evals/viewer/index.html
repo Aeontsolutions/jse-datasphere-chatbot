@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JSE Eval Viewer</title>
+<link rel="stylesheet" href="styles.css" />
+<script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+<script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+<script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+</head>
+<body>
+<header>
+  <h1>JSE Eval Viewer</h1>
+  <nav id="tabs"></nav>
+</header>
+
+<main id="main">
+  <section id="dropzone" class="dropzone">
+    <p>Drop a <code>runs/&lt;run_id&gt;/</code> folder here, or drop multiple folders for comparison.</p>
+    <input type="file" id="file-input" webkitdirectory multiple />
+  </section>
+  <section id="status"></section>
+  <section id="view-root"></section>
+</main>
+
+<script src="viewer.js"></script>
+</body>
+</html>

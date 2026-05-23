@@ -1,0 +1,11 @@
+base_url: http://localhost:8000
+replicates: 3
+concurrency: 4
+request_timeout_s: 90
+persona_model: gemini-2.5-flash
+judge_model: gemini-2.5-pro
+persona_temperature: 0.8
+judge_temperature: 0.2
+max_cost_usd_per_run: 5.00
+max_cost_usd_per_conversation: 0.50
+gemini_api_key_env: GOOGLE_API_KEY

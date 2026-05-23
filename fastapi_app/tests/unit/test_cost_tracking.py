@@ -1,19 +1,20 @@
 """Unit tests for cost tracking utilities."""
 
+from unittest.mock import MagicMock, Mock
+
 import pytest
-from unittest.mock import Mock, MagicMock
 
 from app.utils.cost_tracking import (
-    TokenUsage,
-    CostResult,
-    calculate_cost,
-    calculate_cost_from_response,
-    get_pricing_for_model,
-    get_cost_config,
     DEFAULT_FLASH_INPUT_PRICE,
     DEFAULT_FLASH_OUTPUT_PRICE,
     DEFAULT_PRO_INPUT_PRICE,
     DEFAULT_PRO_OUTPUT_PRICE,
+    CostResult,
+    TokenUsage,
+    calculate_cost,
+    calculate_cost_from_response,
+    get_cost_config,
+    get_pricing_for_model,
 )
 
 

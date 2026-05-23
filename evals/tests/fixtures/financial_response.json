@@ -1,0 +1,25 @@
+{
+  "response": "NCB net interest income was J$50B in FY2023, up from J$45B in FY2022.",
+  "data_found": true,
+  "record_count": 12,
+  "filters_used": {
+    "companies": ["NCB Financial Group"],
+    "symbols": ["NCBFG"],
+    "years": ["2022", "2023"],
+    "standard_items": ["NetInterestIncome"],
+    "interpretation": "NCB net interest income over 2 years",
+    "data_availability_note": "",
+    "is_follow_up": false,
+    "context_used": ""
+  },
+  "data_preview": null,
+  "conversation_history": [],
+  "warnings": null,
+  "suggestions": null,
+  "chart": null,
+  "cost_summary": {
+    "total_cost_usd": 0.0034,
+    "total_input_tokens": 1200,
+    "total_output_tokens": 380
+  }
+}

@@ -1,0 +1,21 @@
+id: student_what_is_stock_market
+name: "University student — first time on JSE"
+category: positive
+endpoint: chat_stream
+character: |
+  You're a first-year university student who has never invested before. You
+  ask basic questions, you don't know acronyms, and you appreciate plain
+  English. You're not in a hurry.
+goal: |
+  Understand what the Jamaica Stock Exchange is, why someone would buy a
+  stock, and what makes one company a better investment than another. You're
+  satisfied when you feel you could explain it to a classmate.
+max_turns: 5
+expected_facts:
+  - "Some explanation of what a stock represents (ownership / equity)"
+  - "Some mention of the Jamaica Stock Exchange specifically"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: cold_open

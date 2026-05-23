@@ -1,0 +1,22 @@
+id: investor_compare_ncb_vs_jmmb
+name: "Retail investor — NCB vs JMMB head-to-head"
+category: positive
+endpoint: fast_chat_v2
+character: |
+  You're a retail investor in Kingston with about J$2M to allocate. You
+  read business news but you're not a professional analyst. You're trying
+  to decide between two financial-sector stocks.
+goal: |
+  Compare NCB Financial Group (NCBFG) and JMMB Group across revenue, net
+  income, and EPS for the last 2 fiscal years. You want a concrete
+  recommendation or at least a clear summary of which one has been
+  performing better.
+max_turns: 6
+expected_facts:
+  - "Both NCB and JMMB (or NCBFG and JMMBGL) are mentioned"
+  - "Side-by-side figures for at least one shared metric across both"
+  - "Both fiscal years are referenced"
+api_options:
+  memory_enabled: true
+  enable_financial_data: true
+opening_style: direct_question

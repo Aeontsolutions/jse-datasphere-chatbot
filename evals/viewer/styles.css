@@ -1,0 +1,45 @@
+:root {
+  --bg: #fafaf9;
+  --fg: #1f2937;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --pass: #16a34a;
+  --partial: #ca8a04;
+  --fail: #dc2626;
+  --neutral: #9ca3af;
+  --border: #e5e7eb;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, sans-serif; color: var(--fg); background: var(--bg); }
+header { padding: 1rem 2rem; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 2rem; }
+h1 { margin: 0; font-size: 1.25rem; }
+nav#tabs button { background: none; border: none; padding: 0.5rem 1rem; cursor: pointer; color: var(--muted); }
+nav#tabs button.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+main { padding: 1.5rem 2rem; }
+.dropzone { border: 2px dashed var(--border); border-radius: 0.5rem; padding: 2rem; text-align: center; }
+.dropzone.drag { border-color: var(--accent); background: rgba(37, 99, 235, 0.05); }
+
+table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
+th { background: #f3f4f6; font-weight: 600; cursor: pointer; }
+.verdict-pass { color: var(--pass); }
+.verdict-partial { color: var(--partial); }
+.verdict-fail { color: var(--fail); }
+.verdict-judgefailed { color: var(--neutral); }
+
+.bubble { padding: 0.5rem 0.75rem; border-radius: 0.5rem; margin: 0.25rem 0; max-width: 80%; }
+.bubble.user { background: #e0e7ff; align-self: flex-end; }
+.bubble.bot  { background: #f3f4f6; align-self: flex-start; }
+.turn-row { display: flex; flex-direction: column; margin: 0.5rem 0; }
+.turn-meta { color: var(--muted); font-size: 0.75rem; }
+
+.delta-up { color: var(--pass); font-weight: 600; }
+.delta-down { color: var(--fail); font-weight: 600; }
+.delta-noise { color: var(--neutral); }
+
+.turn-drawer { margin: 0.25rem 0 1rem; font-size: 0.8rem; }
+.turn-drawer summary { cursor: pointer; color: var(--muted); }
+.turn-drawer pre { background: #f3f4f6; padding: 0.5rem; border-radius: 0.25rem; overflow-x: auto; max-height: 20rem; }
+.turn-drawer h5 { margin: 0.5rem 0 0.25rem; }
+.turn-drawer ul { margin: 0; padding-left: 1.25rem; }
