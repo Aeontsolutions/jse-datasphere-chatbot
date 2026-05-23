@@ -50,6 +50,9 @@ SYSTEM_PROMPT = """You are JSE Financial Analyst, an expert AI assistant for the
 
 You have web search access for current market data."""
 
+SYSTEM_PROMPT_NO_SEARCH = SYSTEM_PROMPT.replace(
+    "\nYou have web search access for current market data.", ""
+)
 
 # ==============================================================================
 # AGENT V2 - Simple Google Search Grounding
@@ -245,16 +248,16 @@ class AgentV2:
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        enable_web_search: bool = True,
     ) -> Dict[str, Any]:
         """
-        Run the agent with Google Search grounding.
-
-        This makes a single generate_content call with the GoogleSearch tool
-        for web grounding, following the simpler approach from the example script.
+        Run the agent, optionally with Google Search grounding.
 
         Args:
             query: User's question
             conversation_history: Previous conversation messages
+            enable_web_search: When False, omits the GoogleSearch tool and removes
+                the web-search instruction from the system prompt.
 
         Returns:
             Dictionary compatible with AgentChatResponse
@@ -267,19 +270,19 @@ class AgentV2:
             # Build conversation contents
             contents = self._build_contents(conversation_history, query)
 
-            # Google Search tool for grounding
-            google_search_tool = types.Tool(google_search=types.GoogleSearch())
+            tools = [types.Tool(google_search=types.GoogleSearch())] if enable_web_search else None
+            system_prompt = SYSTEM_PROMPT if enable_web_search else SYSTEM_PROMPT_NO_SEARCH
 
-            # Single generate_content call with grounding
+            # Single generate_content call with optional grounding
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=contents,
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
+                    system_instruction=system_prompt,
                     temperature=0.7,
                     top_p=0.95,
                     max_output_tokens=8192,
-                    tools=[google_search_tool],
+                    tools=tools,
                 ),
             )
 

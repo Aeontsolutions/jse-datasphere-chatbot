@@ -987,6 +987,7 @@ async def chat_stream(
         result = await agent.run(
             query=request.query,
             conversation_history=request.conversation_history,
+            enable_web_search=request.enable_web_search,
         )
 
         # Build response (compatible with AgentChatResponse)
@@ -1071,6 +1072,7 @@ async def chat_stream_v2(
         result = await agent.run(
             query=request.query,
             conversation_history=request.conversation_history,
+            enable_web_search=request.enable_web_search,
         )
 
         # Build response (compatible with AgentChatResponse)
