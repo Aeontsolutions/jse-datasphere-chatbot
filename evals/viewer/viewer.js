@@ -195,7 +195,7 @@ function renderOverview() {
       <span class="verdict-partial">partial: ${ov.verdict_counts?.partial || 0}</span> ·
       <span class="verdict-fail">fail: ${ov.verdict_counts?.fail || 0}</span>
       ${ov.judge_failed_count ? `· <span class="verdict-judgefailed">judge_failed: ${ov.judge_failed_count}</span>` : ""}
-      ${ov.incomplete_count ? `· <span class="verdict-judgefailed">incomplete (infra-error): ${ov.incomplete_count}</span>` : ""}
+      ${ov.incomplete_count ? `· <span class="verdict-judgefailed">incomplete (infra-error or cost cap): ${ov.incomplete_count}</span>` : ""}
     </p>
 
     <h3>Per-persona</h3>
@@ -229,7 +229,7 @@ function renderIncompleteTable(incompleteByPersona) {
     `<tr><td>${pid}</td><td>${data.incomplete_count}</td></tr>`
   );
   return `
-    <h3>Incomplete conversations (infra-error — excluded from scores)</h3>
+    <h3>Incomplete conversations (infra-error or cost cap — excluded from scores)</h3>
     <table>
       <thead><tr><th>persona</th><th>incomplete count</th></tr></thead>
       <tbody>${rows.join("")}</tbody>
