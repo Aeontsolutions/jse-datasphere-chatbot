@@ -18,6 +18,7 @@
       "mean_turns": 1, "mean_latency_ms": 1700, "total_cost_usd": 0.004
     }
   },
+  "incomplete_by_persona": {},
   "by_endpoint": {},
   "by_category": {},
   "overall": {
