@@ -9,7 +9,7 @@ import json
 import os
 from typing import Optional
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,7 +37,11 @@ class GoogleCloudConfig(BaseSettings):
 
     project_id: str = Field(..., description="GCP Project ID")
     service_account_info: str = Field(..., description="GCP Service Account JSON as string")
-    api_key: str = Field(..., alias="GOOGLE_API_KEY", description="Google API Key for Gemini")
+    api_key: str = Field(
+        ...,
+        validation_alias=AliasChoices("GOOGLE_API_KEY", "GEMINI_API_KEY", "CHATBOT_API_KEY"),
+        description="Google API Key for Gemini",
+    )
     location: str = Field(default="us-central1", description="GCP region")
 
     model_config = SettingsConfigDict(
