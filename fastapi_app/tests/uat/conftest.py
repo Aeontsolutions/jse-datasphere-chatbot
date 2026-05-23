@@ -15,7 +15,6 @@ import pytest_asyncio
 
 from .uat_runner import UATTestRunner
 
-
 # Path to test cases JSON
 TEST_CASES_PATH = Path(__file__).parent / "prompt_optimization_test_cases.json"
 
