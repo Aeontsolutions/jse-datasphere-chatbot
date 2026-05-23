@@ -446,8 +446,8 @@ class UATTestRunner:
             validations.append(
                 ValidationDetail(
                     field="tools_executed",
-                    expected=sorted(list(expected_tools)),
-                    actual=sorted(list(actual_tools)),
+                    expected=sorted(expected_tools),
+                    actual=sorted(actual_tools),
                     passed=passed,
                     message=(
                         "Tools match"
