@@ -615,7 +615,9 @@ def test_unknown_ratio_keeps_percent_suffix(monkeypatch):
 
 def test_non_ratio_item_type_unaffected(monkeypatch):
     """Items with item_type != 'ratio' are not touched by the ratio branch."""
-    row = _ratio_row(standard_item="revenue", item=1000.0, unit_multiplier=1000000.0, item_type="currency")
+    row = _ratio_row(
+        standard_item="revenue", item=1000.0, unit_multiplier=1000000.0, item_type="currency"
+    )
     manager = _manager_with_ratio_rows(monkeypatch, [row])
     results = manager.query_data(FinancialDataFilters())
     # 1000 * 1_000_000 = 1_000_000_000 → "1.00B" (hits the >= 1e9 branch)
