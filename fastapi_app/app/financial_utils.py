@@ -870,13 +870,13 @@ class FinancialDataManager:
                     formatted_value = f"{actual_value:,.0f}"
                 else:
                     formatted_value = f"{actual_value:,.2f}"
-                standard_item_key = str(get_row_attr(row, "standard_item") or "").lower()
                 item_type = (
                     get_row_attr(row, "item_type")
                     if hasattr(row, "item_type") or "item_type" in dir(row)
                     else ""
                 )
                 if item_type == "ratio" and unit_multiplier == 1.0 and item is not None:
+                    standard_item_key = str(get_row_attr(row, "standard_item") or "").lower()
                     if standard_item_key in _CURRENCY_RATIO_ITEMS:
                         formatted_value = f"J${item:,.2f}"
                     elif standard_item_key in _FRACTIONAL_PERCENT_ITEMS:

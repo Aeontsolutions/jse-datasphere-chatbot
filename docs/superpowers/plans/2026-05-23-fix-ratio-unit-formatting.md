@@ -194,17 +194,15 @@ _CURRENCY_RATIO_ITEMS = frozenset(
     }
 )
 
-# Items stored as a 0–1 fraction that should be displayed as a percentage.
-# If abs(value) <= 1.5 the value is a fraction and is multiplied by 100.
-# If abs(value) > 1.5 the value is already in percent form and is used as-is.
+# Items whose values are sometimes stored as 0–1 fractions and sometimes as already-percent.
+# Values <= 2.0 are treated as fractions (multiplied × 100); values > 2.0 are assumed
+# already in percent form.  Threshold verified against all BQ rows:
+# GK/JMMBGL/JBG payout ratios top out at 0.71; BPOW's percent-stored rows start at 7.2.
+# NOTE: roe, roa, and margin items were intentionally excluded — BQ data shows inconsistent
+# storage conventions across companies with overlapping value ranges, making threshold-based
+# detection unsafe. Those require a separate data-quality investigation.
 _FRACTIONAL_PERCENT_ITEMS = frozenset(
     {
-        "roe",
-        "roa",
-        "gross_profit_margin",
-        "net_profit_margin",
-        "operating_profit_margin",
-        "efficiency_ratio",
         "dividend_payout_ratio",
     }
 )
