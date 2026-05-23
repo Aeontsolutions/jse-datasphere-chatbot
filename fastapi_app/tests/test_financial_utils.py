@@ -484,3 +484,141 @@ def test_parse_user_query_llm_symbol_only(monkeypatch, mock_bq_client):
     assert filters.standard_items == ["revenue"]
     assert filters.is_follow_up is False
     assert "ELITE" in filters.interpretation
+
+
+# ── ATS-325: ratio / dividend unit formatting tests ────────────────────────────
+
+
+class _RatioRow:
+    """Minimal BQ row stub for formatting tests."""
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+def _manager_with_ratio_rows(monkeypatch, rows):
+    """Return a FinancialDataManager whose BQ client yields the given rows."""
+
+    class _Result:
+        def result(self):
+            return iter(rows)
+
+    class _Client:
+        def query(self, *a, **kw):
+            return _Result()
+
+    client = _Client()
+
+    def _fake_init_bq(self):
+        self.bq_client = client
+
+    monkeypatch.setattr(FinancialDataManager, "_initialize_bigquery_client", _fake_init_bq)
+    monkeypatch.setattr(FinancialDataManager, "load_metadata_from_bigquery", lambda self: None)
+    manager = FinancialDataManager()
+    manager.metadata = {
+        "companies": [],
+        "symbols": [],
+        "years": [],
+        "standard_items": [],
+        "associations": {},
+    }
+    return manager
+
+
+def _ratio_row(**overrides):
+    defaults = {
+        "Company": "Test Company",
+        "Symbol": "TST",
+        "Year": 2023,
+        "standard_item": "dividend_per_share",
+        "item": 1.0,
+        "unit_multiplier": 1.0,
+        "item_type": "ratio",
+        "item_name": "test_item",
+    }
+    defaults.update(overrides)
+    return _RatioRow(**defaults)
+
+
+def test_dividend_per_share_formats_as_currency(monkeypatch):
+    """CCC dividend_per_share 1.8976 → J$1.90, not 1.90% (ATS-325)."""
+    row = _ratio_row(
+        Company="Caribbean Cement Company Limited",
+        Symbol="CCC",
+        standard_item="dividend_per_share",
+        item=1.8976,
+    )
+    manager = _manager_with_ratio_rows(monkeypatch, [row])
+    results = manager.query_data(FinancialDataFilters())
+    assert len(results) == 1
+    assert results[0].formatted_value == "J$1.90", results[0].formatted_value
+
+
+def test_eps_formats_as_currency(monkeypatch):
+    """EPS 2.85 → J$2.85 (ATS-325)."""
+    row = _ratio_row(standard_item="eps", item=2.85)
+    manager = _manager_with_ratio_rows(monkeypatch, [row])
+    results = manager.query_data(FinancialDataFilters())
+    assert results[0].formatted_value == "J$2.85", results[0].formatted_value
+
+
+def test_dividend_payout_ratio_fraction_multiplied(monkeypatch):
+    """GK dividend_payout_ratio 0.343 (fraction) → 34.30%, not 0.34% (ATS-325)."""
+    row = _ratio_row(
+        Company="Gracekennedy Limited",
+        Symbol="GK",
+        standard_item="dividend_payout_ratio",
+        item=0.343,
+    )
+    manager = _manager_with_ratio_rows(monkeypatch, [row])
+    results = manager.query_data(FinancialDataFilters())
+    assert results[0].formatted_value == "34.30%", results[0].formatted_value
+
+
+def test_dividend_payout_ratio_already_percent(monkeypatch):
+    """BPOW dividend_payout_ratio 21.41 (already %) → 21.41%, not 2141% (ATS-325)."""
+    row = _ratio_row(
+        Company="Blue Power Group Limited",
+        Symbol="BPOW",
+        standard_item="dividend_payout_ratio",
+        item=21.41,
+    )
+    manager = _manager_with_ratio_rows(monkeypatch, [row])
+    results = manager.query_data(FinancialDataFilters())
+    assert results[0].formatted_value == "21.41%", results[0].formatted_value
+
+
+def test_current_ratio_no_percent_suffix(monkeypatch):
+    """current_ratio 1.11 → '1.11' (plain decimal, no %) (ATS-325)."""
+    row = _ratio_row(standard_item="current_ratio", item=1.11)
+    manager = _manager_with_ratio_rows(monkeypatch, [row])
+    results = manager.query_data(FinancialDataFilters())
+    assert results[0].formatted_value == "1.11", results[0].formatted_value
+
+
+def test_debt_to_equity_ratio_no_percent_suffix(monkeypatch):
+    """debt_to_equity_ratio 1.06 → '1.06' (plain decimal, no %) (ATS-325)."""
+    row = _ratio_row(standard_item="debt_to_equity_ratio", item=1.06)
+    manager = _manager_with_ratio_rows(monkeypatch, [row])
+    results = manager.query_data(FinancialDataFilters())
+    assert results[0].formatted_value == "1.06", results[0].formatted_value
+
+
+def test_unknown_ratio_keeps_percent_suffix(monkeypatch):
+    """Unknown ratio items still get % appended (default behaviour preserved)."""
+    row = _ratio_row(standard_item="some_other_ratio", item=0.75)
+    manager = _manager_with_ratio_rows(monkeypatch, [row])
+    results = manager.query_data(FinancialDataFilters())
+    assert results[0].formatted_value == "0.75%", results[0].formatted_value
+
+
+def test_non_ratio_item_type_unaffected(monkeypatch):
+    """Items with item_type != 'ratio' are not touched by the ratio branch."""
+    row = _ratio_row(
+        standard_item="revenue", item=1000.0, unit_multiplier=1000000.0, item_type="currency"
+    )
+    manager = _manager_with_ratio_rows(monkeypatch, [row])
+    results = manager.query_data(FinancialDataFilters())
+    # 1000 * 1_000_000 = 1_000_000_000 → "1.00B" (hits the >= 1e9 branch)
+    assert "B" in results[0].formatted_value, results[0].formatted_value
