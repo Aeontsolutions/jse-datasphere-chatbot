@@ -1,6 +1,6 @@
 base_url: http://localhost:8000
 replicates: 3
-concurrency: 4
+concurrency: 2
 # 240s: /chat/stream (document loading + Gemini 2.5 Flash generation) routinely takes 30–60s.
 # 90s produced 100% spurious ReadTimeout failures (see baseline_r1_2026_05_23).
 # Do not lower this without profiling real p99 latency first.

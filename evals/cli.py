@@ -122,7 +122,8 @@ async def _amain(ns: argparse.Namespace) -> int:
     started_at = datetime.now(timezone.utc).isoformat()
     print(
         f"Running {len(personas)} persona(s) × {config.replicates} replicate(s) "
-        f"= {len(personas) * config.replicates} conversation(s)..."
+        f"= {len(personas) * config.replicates} conversation(s) "
+        f"(concurrency={config.concurrency})..."
     )
     artifacts = await run_simulation(
         personas=personas,

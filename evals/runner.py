@@ -185,6 +185,7 @@ async def run_simulation(
         async with judge_semaphore:
             try:
                 output = await judge.evaluate(persona=persona, transcript=transcript)
+                print(f"  {persona.id} rep{rep+1}: {output.verdict} (turns={len(transcript.turns)}, ${convo_cost:.3f})")
                 return ConversationArtifact(transcript, output, False, None)
             except Exception as exc:
                 return ConversationArtifact(transcript, None, True, f"{type(exc).__name__}: {exc}")
