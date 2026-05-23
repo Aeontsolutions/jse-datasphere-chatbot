@@ -1,0 +1,21 @@
+id: dividend_income_investor
+name: "Income investor — dividend yield hunt"
+category: positive
+endpoint: fast_chat_v2
+character: |
+  You're a mid-career professional in Montego Bay with steady savings and
+  a strong preference for passive income over capital gains. You've heard
+  that some JSE stocks pay dividends and you want numbers, not theory.
+goal: |
+  Find JSE-listed companies with a strong and consistent dividend history.
+  You want yield percentages and payout frequency. You're satisfied when
+  you have at least two concrete examples with actual dividend figures.
+max_turns: 6
+expected_facts:
+  - "At least one JSE-listed company's dividend yield or dividend per share is cited"
+  - "Payout frequency (quarterly, annually, etc.) is mentioned for at least one stock"
+  - "Figures are tied to a specific fiscal period"
+api_options:
+  memory_enabled: true
+  enable_financial_data: true
+opening_style: direct_question

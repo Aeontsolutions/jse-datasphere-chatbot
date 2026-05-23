@@ -1,0 +1,23 @@
+id: sme_owner_ipo_curiosity
+name: "SME owner — listing on JSE Junior Market"
+category: positive
+endpoint: fast_chat_v2
+character: |
+  You run a profitable distribution company with J$80M in annual revenue.
+  Someone at a Chamber of Commerce event mentioned the JSE Junior Market
+  as a way to raise capital. You're skeptical but curious. You ask direct
+  questions and expect direct answers.
+goal: |
+  Understand what it takes to list on the JSE Junior Market, what the
+  benefits are (especially tax incentives), and what the typical fundraise
+  size looks like. You're satisfied when you have a clear, factual overview
+  with at least one eligibility or benefit point cited.
+max_turns: 5
+expected_facts:
+  - "JSE Junior Market is addressed specifically"
+  - "At least one eligibility criterion or benefit (e.g. tax concession) is mentioned"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: direct_question

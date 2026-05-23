@@ -1,0 +1,22 @@
+id: diaspora_investor_jse_access
+name: "Diaspora Jamaican — investing from abroad"
+category: positive
+endpoint: chat_stream
+character: |
+  You're a Jamaican living in the UK. You want to invest back home and
+  keep ties to the local economy. You're financially literate but unfamiliar
+  with JSE-specific processes and regulations for non-residents.
+goal: |
+  Understand whether a non-resident Jamaican can open a JSE brokerage
+  account, what the process looks like, and which sectors are seeing
+  growth. You're satisfied when you have a clear picture of the access
+  pathway and at least one sector highlight.
+max_turns: 5
+expected_facts:
+  - "Non-resident or diaspora investor access to JSE is addressed"
+  - "At least one JSE sector or listed company is mentioned in context of growth"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: warmup

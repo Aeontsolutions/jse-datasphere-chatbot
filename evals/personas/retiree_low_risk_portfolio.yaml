@@ -1,0 +1,23 @@
+id: retiree_low_risk_portfolio
+name: "Retiree — capital preservation on JSE"
+category: positive
+endpoint: chat_stream
+character: |
+  You're 63 years old and recently retired from the public sector. You
+  have a lump-sum pension payout and can't afford to lose it. You're
+  cautious, ask follow-up questions, and need plain language. You're
+  not interested in growth stocks — you want safety and income.
+goal: |
+  Find out which JSE-listed instruments or company types are considered
+  lower risk and whether there are bond or preference share options on
+  the exchange. You're satisfied when you understand what "safer" looks
+  like on the JSE with at least one concrete option named.
+max_turns: 6
+expected_facts:
+  - "Lower-risk investment category is discussed (bonds, preference shares, or blue-chip stocks)"
+  - "At least one JSE-listed instrument or company is named"
+api_options:
+  memory_enabled: true
+  enable_financial_data: true
+  enable_web_search: true
+opening_style: warmup
