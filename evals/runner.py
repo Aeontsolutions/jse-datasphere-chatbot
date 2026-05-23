@@ -186,8 +186,8 @@ async def run_simulation(
             try:
                 output = await judge.evaluate(persona=persona, transcript=transcript)
                 return ConversationArtifact(transcript, output, False, None)
-            except RuntimeError as exc:
-                return ConversationArtifact(transcript, None, True, str(exc))
+            except Exception as exc:
+                return ConversationArtifact(transcript, None, True, f"{type(exc).__name__}: {exc}")
 
     tasks = [
         asyncio.create_task(one(persona, rep))

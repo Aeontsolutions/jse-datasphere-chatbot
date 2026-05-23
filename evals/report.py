@@ -213,7 +213,7 @@ def _overall_stats(convos: list[ConversationArtifact]) -> dict[str, Any]:
 
     verdict_counts = {"pass": 0, "partial": 0, "fail": 0}
     for c in judged:
-        verdict_counts[c.judge_output.verdict] += 1
+        verdict_counts[c.judge_output.verdict] = verdict_counts.get(c.judge_output.verdict, 0) + 1
     overall["verdict_counts"] = verdict_counts
 
     overall["judge_failed_count"] = sum(1 for c in convos if c.judge_failed)

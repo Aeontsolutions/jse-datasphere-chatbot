@@ -1,4 +1,21 @@
-"""HTTP client for the chatbot's `/chat/stream` (SSE) endpoint."""
+"""HTTP client for the chatbot's `/chat/stream` (SSE) endpoint.
+
+UNVERIFIED ENVELOPE WARNING:
+This client assumes `/chat/stream` emits SSE events of the form
+`data: {"type": "progress"|"final", "payload": ...}`. The real endpoint's
+shape has NOT been verified against a running chatbot yet. Before the first
+live run, confirm the real envelope with:
+
+    curl -v -N -X POST http://localhost:8000/chat/stream \\
+      -H "Content-Type: application/json" \\
+      -d '{"query":"test","conversation_history":[]}' | head -20
+
+If the response is plain JSON (not SSE), `/chat/stream` is effectively a
+non-streaming endpoint and this client should be rewritten to call it
+like `FinancialClient`. If the SSE envelope differs (e.g., uses
+`event: result\\ndata: <json>` instead of the `type` field), update the
+parser in `send()` to match.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +32,8 @@ from evals.metrics import extract_cost_from_response
 class AgentStreamClient:
     """Streaming client targeting `POST /chat/stream` (SSE).
 
-    Consumes `data: <json>` events; the event with `type == "final"` carries
+    See module docstring for the unverified envelope warning. Consumes
+    `data: <json>` events; the event with `type == "final"` carries
     the assembled `AgentChatResponse` under `payload`. Records TTFB and
     total elapsed time separately.
     """
