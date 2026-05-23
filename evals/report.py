@@ -122,7 +122,8 @@ def _summarize(
         for cat in {p.category for p in personas}
     }
 
-    overall = _overall_stats(complete, len(incomplete))
+    incomplete_cost = sum(c.transcript.totals()["cost_usd"] for c in incomplete)
+    overall = _overall_stats(complete, len(incomplete), incomplete_cost)
 
     return {
         "run_id": run_id,
@@ -194,7 +195,7 @@ def _persona_stats(convos: list[ConversationArtifact]) -> dict[str, Any]:
     return out
 
 
-def _overall_stats(convos: list[ConversationArtifact], incomplete_count: int = 0) -> dict[str, Any]:
+def _overall_stats(convos: list[ConversationArtifact], incomplete_count: int = 0, incomplete_cost: float = 0.0) -> dict[str, Any]:
     if not convos:
         return {"incomplete_count": incomplete_count}
 
@@ -231,5 +232,5 @@ def _overall_stats(convos: list[ConversationArtifact], incomplete_count: int = 0
     overall["mean_latency_ms"] = statistics.mean(
         c.transcript.totals()["latency_ms"] for c in convos
     )
-    overall["total_cost_usd"] = sum(c.transcript.totals()["cost_usd"] for c in convos)
+    overall["total_cost_usd"] = sum(c.transcript.totals()["cost_usd"] for c in convos) + incomplete_cost
     return overall

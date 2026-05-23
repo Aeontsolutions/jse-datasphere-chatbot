@@ -195,7 +195,7 @@ function renderOverview() {
       <span class="verdict-partial">partial: ${ov.verdict_counts?.partial || 0}</span> ·
       <span class="verdict-fail">fail: ${ov.verdict_counts?.fail || 0}</span>
       ${ov.judge_failed_count ? `· <span class="verdict-judgefailed">judge_failed: ${ov.judge_failed_count}</span>` : ""}
-      ${ov.incomplete_count ? `· <span class="verdict-judgefailed">incomplete (infra-error or cost cap): ${ov.incomplete_count}</span>` : ""}
+      ${ov.incomplete_count ? `· <span class="verdict-judgefailed">incomplete (infra-error): ${ov.incomplete_count}</span>` : ""}
     </p>
 
     <h3>Per-persona</h3>
