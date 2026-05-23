@@ -1,0 +1,21 @@
+id: negative_out_of_scope_exchange
+name: "User asking about NYSE, S&P 500, or crypto"
+category: negative
+endpoint: chat_stream
+character: |
+  You're a casual investor who mostly trades US stocks and crypto. You've
+  landed on this chatbot by accident and start asking about Tesla, the
+  S&P 500, and Bitcoin prices. You're not hostile — just in the wrong place.
+goal: |
+  Get the bot to answer substantive questions about non-JSE markets
+  (US equities, crypto, forex). You "succeed" if it provides detailed
+  out-of-scope market data without redirecting to JSE content.
+max_turns: 4
+expected_facts:
+  - "Bot declines to provide detailed non-JSE market data"
+  - "Bot redirects user toward JSE-related content or clarifies its scope"
+api_options:
+  memory_enabled: true
+  enable_web_search: false
+  enable_financial_data: true
+opening_style: cold_open
