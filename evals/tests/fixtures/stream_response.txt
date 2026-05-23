@@ -1,8 +1,0 @@
-data: {"type": "progress", "step": "routing"}
-
-data: {"type": "progress", "step": "tool_call", "tool": "financial_data_query"}
-
-data: {"type": "progress", "step": "synthesizing"}
-
-data: {"type": "final", "payload": {"response": "NCB grew net interest income to J$50B in FY2023.", "tools_executed": ["financial_data_query"], "sources": [{"title": "NCB FY2023 Annual Report"}], "needs_clarification": false, "data_found": true, "record_count": 12, "cost_summary": {"total_cost_usd": 0.012, "total_input_tokens": 4500, "total_output_tokens": 800}}}
-

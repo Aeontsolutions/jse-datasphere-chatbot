@@ -1,25 +1,17 @@
-"""HTTP client for the chatbot's `/chat/stream` (SSE) endpoint.
+"""HTTP client for the chatbot's `/chat/stream` endpoint.
 
-UNVERIFIED ENVELOPE WARNING:
-This client assumes `/chat/stream` emits SSE events of the form
-`data: {"type": "progress"|"final", "payload": ...}`. The real endpoint's
-shape has NOT been verified against a running chatbot yet. Before the first
-live run, confirm the real envelope with:
+Despite the URL name, `/chat/stream` is NOT a streaming endpoint — it
+runs the agent to completion and returns a plain JSON `AgentChatResponse`.
+Verified against `fastapi_app/app/main.py` lines 987-1015. If a real
+streaming variant is added in the future, fork a separate client rather
+than reintroducing SSE parsing here.
 
-    curl -v -N -X POST http://localhost:8000/chat/stream \\
-      -H "Content-Type: application/json" \\
-      -d '{"query":"test","conversation_history":[]}' | head -20
-
-If the response is plain JSON (not SSE), `/chat/stream` is effectively a
-non-streaming endpoint and this client should be rewritten to call it
-like `FinancialClient`. If the SSE envelope differs (e.g., uses
-`event: result\\ndata: <json>` instead of the `type` field), update the
-parser in `send()` to match.
+The class name `AgentStreamClient` is kept for stability of imports
+across the eval suite.
 """
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
@@ -30,12 +22,12 @@ from evals.metrics import extract_cost_from_response
 
 
 class AgentStreamClient:
-    """Streaming client targeting `POST /chat/stream` (SSE).
+    """Client targeting `POST /chat/stream`.
 
-    See module docstring for the unverified envelope warning. Consumes
-    `data: <json>` events; the event with `type == "final"` carries
-    the assembled `AgentChatResponse` under `payload`. Records TTFB and
-    total elapsed time separately.
+    The endpoint name implies SSE, but the response is a single JSON
+    body (`AgentChatResponse`). This client behaves like `FinancialClient`:
+    one POST in, full JSON out. `ttfb_ms` is always `None` because there
+    is no first-byte signal distinct from full completion.
     """
 
     def __init__(self, base_url: str, timeout_s: float) -> None:
@@ -55,44 +47,19 @@ class AgentStreamClient:
             "enable_web_search": api_options.get("enable_web_search", True),
             "enable_financial_data": api_options.get("enable_financial_data", True),
         }
-
-        final_payload: dict[str, Any] | None = None
         start = time.perf_counter()
-        ttfb_ms: float | None = None
-
         async with httpx.AsyncClient(timeout=self._timeout_s) as client:
-            async with client.stream(
-                "POST", f"{self._base_url}/chat/stream", json=payload
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if ttfb_ms is None:
-                        ttfb_ms = (time.perf_counter() - start) * 1000
-                    if not line.startswith("data:"):
-                        continue
-                    body = line[len("data:") :].strip()
-                    if not body:
-                        continue
-                    try:
-                        event = json.loads(body)
-                    except json.JSONDecodeError:
-                        continue
-                    if event.get("type") == "final":
-                        final_payload = event.get("payload") or {}
-
+            response = await client.post(f"{self._base_url}/chat/stream", json=payload)
+            response.raise_for_status()
+            data = response.json()
         elapsed_ms = (time.perf_counter() - start) * 1000
 
-        if final_payload is None:
-            raise RuntimeError(
-                "stream ended with no final event; the chatbot may have failed mid-stream"
-            )
-
-        cost = extract_cost_from_response(final_payload)
+        cost = extract_cost_from_response(data)
         return ChatClientResult(
-            chatbot_text=final_payload.get("response", ""),
-            chatbot_metadata=final_payload,
+            chatbot_text=data.get("response", ""),
+            chatbot_metadata=data,
             latency_ms=elapsed_ms,
-            ttfb_ms=ttfb_ms,
+            ttfb_ms=None,
             cost_usd=cost.cost_usd,
             input_tokens=cost.input_tokens,
             output_tokens=cost.output_tokens,
