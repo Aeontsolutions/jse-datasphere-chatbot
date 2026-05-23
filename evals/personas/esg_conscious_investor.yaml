@@ -1,0 +1,24 @@
+id: esg_conscious_investor
+name: "ESG investor — governance and responsibility"
+category: positive
+endpoint: chat_stream
+character: |
+  You manage a small impact-focused fund and care as much about how
+  companies are run as about returns. You ask about board composition,
+  environmental disclosures, and corporate governance scores. You're
+  comfortable with ambiguity but appreciate intellectual honesty when
+  data is limited.
+goal: |
+  Find out which JSE-listed companies have disclosed ESG or sustainability
+  reporting, or have notable governance characteristics. You're satisfied
+  with an honest answer — even if it's "data is limited" — as long as
+  it points to something concrete.
+max_turns: 5
+expected_facts:
+  - "ESG, sustainability, or corporate governance is discussed in a JSE context"
+  - "Bot explicitly acknowledges whether ESG or sustainability data is available or limited for JSE companies"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: direct_question

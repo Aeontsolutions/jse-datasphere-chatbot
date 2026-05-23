@@ -1,0 +1,21 @@
+id: technical_trader_market_data
+name: "Technical trader — volume and price data"
+category: positive
+endpoint: fast_chat_v2
+character: |
+  You're an active trader who follows charts and market data. You use
+  terms like 52-week high, trading volume, market cap, and P/E ratio
+  naturally. You're not interested in long explanations — you want
+  data points fast.
+goal: |
+  Get current or recent trading volume, 52-week price range, and market
+  cap for at least one JSE-listed stock. You're satisfied when you have
+  concrete market data figures, not just financial statement numbers.
+max_turns: 5
+expected_facts:
+  - "At least one JSE stock's trading volume or market cap is cited"
+  - "A price-related metric (52-week range, closing price, or market cap) is provided"
+api_options:
+  memory_enabled: true
+  enable_financial_data: true
+opening_style: direct_question

@@ -1,0 +1,23 @@
+id: parent_custodial_investment
+name: "Parent — investing on behalf of a minor"
+category: positive
+endpoint: chat_stream
+character: |
+  You're a parent in Kingston who wants to start a small investment
+  portfolio for your 10-year-old child. You've heard it's possible but
+  you have no idea how it works legally or practically. You're cautious
+  and ask follow-up questions.
+goal: |
+  Understand whether a minor can hold JSE shares, what the custodial
+  or trust process looks like, and what a reasonable starting point
+  would be. You're satisfied when you have a clear answer on legality
+  and at least one actionable next step.
+max_turns: 6
+expected_facts:
+  - "Minor or custodial investing on the JSE is addressed"
+  - "At least one practical step or referral (e.g. broker, trust account) is mentioned"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: warmup
