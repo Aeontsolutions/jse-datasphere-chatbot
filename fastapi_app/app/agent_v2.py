@@ -245,6 +245,7 @@ class AgentV2:
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        enable_web_search: bool = True,
     ) -> Dict[str, Any]:
         """
         Run the agent with Google Search grounding.
@@ -267,8 +268,8 @@ class AgentV2:
             # Build conversation contents
             contents = self._build_contents(conversation_history, query)
 
-            # Google Search tool for grounding
-            google_search_tool = types.Tool(google_search=types.GoogleSearch())
+            # Conditionally include Google Search grounding tool
+            tools = [types.Tool(google_search=types.GoogleSearch())] if enable_web_search else []
 
             # Single generate_content call with grounding
             response = self.client.models.generate_content(
@@ -279,7 +280,7 @@ class AgentV2:
                     temperature=0.7,
                     top_p=0.95,
                     max_output_tokens=8192,
-                    tools=[google_search_tool],
+                    tools=tools,
                 ),
             )
 
