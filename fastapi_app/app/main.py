@@ -32,7 +32,6 @@ from app.metadata_loader import load_metadata_from_s3
 from app.document_selector import auto_load_relevant_documents
 from app.streaming_chat import process_streaming_chat
 from app.financial_utils import FinancialDataManager
-from app.agent import AgentOrchestrator
 from app.agent_v2 import AgentV2
 from app.job_store import JobStore, JobProgressSink
 from app.redis_job_store import RedisJobStore
