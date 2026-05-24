@@ -716,16 +716,19 @@ class FinancialDataManager:
         # --- Filter standard_items: only keep valid ones (case-insensitive) ---
         if "standard_items" in result and result["standard_items"]:
             original_items = list(result["standard_items"])
+            dropped: list = []
             valid_items = []
-            for item in original_items:
-                # Accept if exact match (case-insensitive)
-                for s in all_standard_items:
-                    if item.lower() == s.lower():
-                        valid_items.append(s)  # Keep the original case from metadata
-                        break
+            if original_items:
+                standard_items_map = {s.lower(): s for s in all_standard_items}
+                seen_dropped: set = set()
+                for item in original_items:
+                    lowered = item.lower()
+                    if lowered in standard_items_map:
+                        valid_items.append(standard_items_map[lowered])
+                    elif lowered not in seen_dropped:
+                        dropped.append(item)
+                        seen_dropped.add(lowered)
             result["standard_items"] = valid_items
-            valid_lower = {v.lower() for v in valid_items}
-            dropped = [item for item in original_items if item.lower() not in valid_lower]
             if dropped:
                 result.setdefault("unrecognized_items", []).extend(dropped)
                 logger.warning(f"Metrics not in dataset: {dropped}")
@@ -1165,7 +1168,7 @@ class FinancialDataManager:
 
         if not records:
             if unrecognized_items:
-                items_str = ", ".join(f"'{i}'" for i in unrecognized_items)
+                items_str = ", ".join(f"'{i}'" for i in sorted(set(unrecognized_items)))
                 msg = f"The metric(s) {items_str} are not available in our dataset."
                 if self.metadata and self.metadata.get("standard_items"):
                     sample = ", ".join(self.metadata["standard_items"][:20])
@@ -1199,21 +1202,14 @@ class FinancialDataManager:
         if self.metadata:
             available_years = ", ".join(self.metadata.get("years", []))
             available_metrics = ", ".join(self.metadata.get("standard_items", []))
-            followup_constraint = (
-                "IMPORTANT: Only suggest follow-up questions about data the database actually contains.\n"
-                f"            Available years: {available_years}\n"
-                f"            Available metrics: {available_metrics}\n"
-                "            Valid follow-ups: a different year from the list above, a different metric "
-                "from the list above, or comparing a different company/symbol.\n"
-                "            Do NOT suggest share prices, dividends per share, analyst ratings, or any "
-                "metric not in the available metrics list."
-            )
+            followup_constraint = f"""IMPORTANT: Only suggest follow-up questions about data the database actually contains.
+Available years: {available_years}
+Available metrics: {available_metrics}
+Valid follow-ups: a different year from the list above, a different metric from the list above, or comparing a different company/symbol.
+Do NOT provide any analysis, data, or commentary regarding share prices, dividends per share, analyst ratings, or any metric not in the available metrics list."""
         else:
-            followup_constraint = (
-                "IMPORTANT: Only suggest follow-up questions about data you have seen returned above.\n"
-                "            Do NOT suggest share prices, dividends per share, or any metric "
-                "not already shown in the results."
-            )
+            followup_constraint = """IMPORTANT: Only suggest follow-up questions about data you have seen returned above.
+Do NOT provide any analysis, data, or commentary regarding share prices, dividends per share, or any metric not already shown in the results."""
         prompt = f"""
             Create a concise, informative response to the user's financial data query.
             {'This is a follow-up question in an ongoing conversation.' if is_follow_up else ''}
