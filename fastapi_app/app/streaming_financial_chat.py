@@ -100,6 +100,7 @@ async def _process_financial_chat_async(
             filters.interpretation,
             filters.is_follow_up,
             request.conversation_history,
+            unrecognized_items=filters.unrecognized_items or None,
         )
 
         await tracker.emit_progress("finalizing", "Finalizing response...", 95.0)

@@ -715,16 +715,23 @@ class FinancialDataManager:
 
         # --- Filter standard_items: only keep valid ones (case-insensitive) ---
         if "standard_items" in result and result["standard_items"]:
+            original_items = list(result["standard_items"])
+            dropped: list = []
             valid_items = []
-            for item in result["standard_items"]:
-                # Accept if exact match (case-insensitive)
-                for s in all_standard_items:
-                    if item.lower() == s.lower():
-                        valid_items.append(s)  # Keep the original case from metadata
-                        break
+            if original_items:
+                standard_items_map = {s.lower(): s for s in all_standard_items}
+                seen_dropped: set = set()
+                for item in original_items:
+                    lowered = item.lower()
+                    if lowered in standard_items_map:
+                        valid_items.append(standard_items_map[lowered])
+                    elif lowered not in seen_dropped:
+                        dropped.append(item)
+                        seen_dropped.add(lowered)
             result["standard_items"] = valid_items
-            if len(valid_items) != len(result["standard_items"]):
-                logger.warning("Some standard_items were not found in metadata")
+            if dropped:
+                result.setdefault("unrecognized_items", []).extend(dropped)
+                logger.warning(f"Metrics not in dataset: {dropped}")
 
         return result
 
@@ -1136,6 +1143,7 @@ class FinancialDataManager:
         interpretation: str,
         is_follow_up: bool = False,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        unrecognized_items: Optional[List[str]] = None,
     ) -> str:
         """Format the query results into a readable response with conversation awareness"""
 
@@ -1159,6 +1167,15 @@ class FinancialDataManager:
             logger.warning("DSPy formatting failed, falling back to Gemini")
 
         if not records:
+            if unrecognized_items:
+                items_str = ", ".join(f"'{i}'" for i in sorted(set(unrecognized_items)))
+                msg = f"The metric(s) {items_str} are not available in our dataset."
+                if self.metadata and self.metadata.get("standard_items"):
+                    sample = ", ".join(self.metadata["standard_items"][:20])
+                    msg += f" Available metrics include: {sample}."
+                if should_recommend_deep_research:
+                    msg += " For more comprehensive data you might want to try Deep Research."
+                return msg
             if should_recommend_deep_research:
                 return "No data found matching your query criteria. For more comprehensive financial information and detailed analysis, you might want to try Deep Research, our comprehensive research tool, which may have access to more granular financial data."
             else:
@@ -1182,6 +1199,17 @@ class FinancialDataManager:
                     for msg in recent_messages
                 ]
             )
+        if self.metadata:
+            available_years = ", ".join(self.metadata.get("years", []))
+            available_metrics = ", ".join(self.metadata.get("standard_items", []))
+            followup_constraint = f"""IMPORTANT: Only suggest follow-up questions about data the database actually contains.
+Available years: {available_years}
+Available metrics: {available_metrics}
+Valid follow-ups: a different year from the list above, a different metric from the list above, or comparing a different company/symbol.
+Do NOT provide any analysis, data, or commentary regarding share prices, dividends per share, analyst ratings, or any metric not in the available metrics list."""
+        else:
+            followup_constraint = """IMPORTANT: Only suggest follow-up questions about data you have seen returned above.
+Do NOT provide any analysis, data, or commentary regarding share prices, dividends per share, or any metric not already shown in the results."""
         prompt = f"""
             Create a concise, informative response to the user's financial data query.
             {'This is a follow-up question in an ongoing conversation.' if is_follow_up else ''}
@@ -1201,13 +1229,8 @@ class FinancialDataManager:
             5. {"Maintains conversational continuity" if is_follow_up else "Sets up potential follow-up questions"}
             {"6. IMPORTANT: Include a recommendation to try 'Deep Research, our comprehensive research tool' for more detailed financial information, as the current data may be limited for this type of query." if should_recommend_deep_research else ""}
 
-            IMPORTANT: Only suggest follow-up questions about querying financial data from the database.
+            {followup_constraint}
             Do NOT suggest creating charts, performing calculations, generating reports, or any other actions.
-            Valid follow-up suggestions include:
-            - Asking about different years (e.g., "What about 2022?" or "How did this compare in 2021?")
-            - Asking about different financial metrics (revenue, profit margins, ratios, etc.)
-            - Asking for comparative analysis between companies or time periods
-            - Asking about specific financial items not yet shown
 
             Keep the response concise but informative. Be conversational and natural.
         """

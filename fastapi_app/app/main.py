@@ -734,6 +734,7 @@ async def fast_chat_v2(
             filters.interpretation,
             filters.is_follow_up,
             request.conversation_history,
+            unrecognized_items=filters.unrecognized_items or None,
         )
         # logger.info(f"ai_response type: {type(ai_response)}, ai_response: {ai_response}")
         data_preview = results if results else None

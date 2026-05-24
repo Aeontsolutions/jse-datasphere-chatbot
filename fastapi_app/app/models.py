@@ -200,6 +200,9 @@ class FinancialDataFilters(BaseModel):
     data_availability_note: str = Field(default="", description="Notes about data availability")
     is_follow_up: bool = Field(default=False, description="Whether this is a follow-up query")
     context_used: str = Field(default="", description="Context used from previous queries")
+    unrecognized_items: List[str] = Field(
+        default=[], description="Requested metrics not found in the dataset"
+    )
 
 
 class FinancialDataRecord(BaseModel):
