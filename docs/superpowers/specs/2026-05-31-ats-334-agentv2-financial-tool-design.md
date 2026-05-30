@@ -50,6 +50,18 @@ database, AgentV2 calls `query_financial_data`, retrieves records from BigQuery
 (~1s), and synthesizes a grounded answer — instead of doing exhaustive web
 grounding. Web-only questions are unaffected.
 
+## Known limitation (accepted for v1)
+
+The sequential design answers a turn with **financial OR web**, not both. A mixed
+question ("NCB's revenue last year, and any recent news?") gets the DB figure (if
+flash calls the tool) or web news (if it declines) — not both in one turn. This is
+the deliberate trade-off of "smaller surface area / proven separate-call pattern"
+over the archived orchestrator's dual-routing. Combining both per turn (financial
+context + web context → one synthesis) is a possible future enhancement, out of
+scope here. The mixed-query eval persona is included as an aspiration/regression
+marker; it is measured against its *minimum* bar (DB figure present), not the
+"both tools" ideal.
+
 ## Non-goals
 
 - No changes to `/fast_chat_v2`, `streaming_financial_chat.py`, or the NL-parse
