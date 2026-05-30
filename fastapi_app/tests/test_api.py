@@ -1,3 +1,4 @@
+import pytest
 import requests
 
 
@@ -51,6 +52,63 @@ def test_api():
             print(f"Cache refresh error: {response.text}")
     except Exception as e:
         print(f"Error testing cache refresh endpoint: {str(e)}")
+
+
+@pytest.mark.unit
+def test_chat_stream_passes_enable_financial_data_to_orchestrator(test_client):
+    """
+    /chat/stream must delegate to app.state.agent_orchestrator and pass
+    enable_financial_data from the request body.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    from app.main import app
+
+    mock_result = {
+        "response": "NCB 2023 revenue was $50B.",
+        "data_found": True,
+        "record_count": 3,
+        "filters_used": None,
+        "data_preview": None,
+        "conversation_history": [
+            {"role": "user", "content": "NCB revenue 2023"},
+            {"role": "assistant", "content": "NCB 2023 revenue was $50B."},
+        ],
+        "warnings": None,
+        "suggestions": None,
+        "chart": None,
+        "sources": None,
+        "web_search_results": None,
+        "tools_executed": ["query_financial_data"],
+        "needs_clarification": False,
+        "clarification_question": None,
+        "cost_summary": None,
+    }
+
+    mock_orchestrator = MagicMock()
+    mock_orchestrator.run = AsyncMock(return_value=mock_result)
+    app.state.agent_orchestrator = mock_orchestrator
+
+    response = test_client.post(
+        "/chat/stream",
+        json={
+            "query": "NCB revenue 2023",
+            "enable_financial_data": True,
+            "enable_web_search": False,
+            "memory_enabled": True,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["record_count"] == 3
+    assert data["tools_executed"] == ["query_financial_data"]
+
+    mock_orchestrator.run.assert_called_once_with(
+        query="NCB revenue 2023",
+        conversation_history=None,
+        enable_web_search=False,
+        enable_financial_data=True,
+    )
 
 
 if __name__ == "__main__":
