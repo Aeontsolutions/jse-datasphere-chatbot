@@ -985,10 +985,7 @@ async def chat_stream(
         logger.info("No conversation history received")
 
     try:
-        financial_manager = app.state.financial_manager
-        if financial_manager is None:
-            raise HTTPException(status_code=503, detail="Financial data service not initialized")
-        agent = AgentOrchestrator(financial_manager=financial_manager)
+        agent = AgentOrchestrator(financial_manager=app.state.financial_manager)
 
         result = await agent.run(
             query=request.query,

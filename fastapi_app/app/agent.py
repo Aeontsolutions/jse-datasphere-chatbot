@@ -557,10 +557,16 @@ EXAMPLES:
                 if not optimized_query:
                     optimized_query = query
 
-                # Apply enable flags
+                # Apply enable flags; if financial data is requested but unavailable, fall back to web
+                financial_requested_but_unavailable = (
+                    tool_type == "FINANCIAL" and not enable_financial_data
+                )
                 routing = {
                     "use_financial": tool_type in ("FINANCIAL", "BOTH") and enable_financial_data,
-                    "use_web_search": tool_type in ("WEB", "BOTH") and enable_web_search,
+                    "use_web_search": (
+                        tool_type in ("WEB", "BOTH") or financial_requested_but_unavailable
+                    )
+                    and enable_web_search,
                 }
 
                 return {
@@ -1003,6 +1009,9 @@ Provide a helpful response. CRITICAL REQUIREMENT: Start your response by mention
         logger.info(f"Agent run: {query[:100]}...")
 
         self._reset_cost_tracking()
+
+        if not self.financial_manager:
+            enable_financial_data = False
 
         # Early exit if no tools enabled
         if not enable_web_search and not enable_financial_data:
