@@ -13,8 +13,9 @@
 ## Conventions
 
 - **All `pytest` / `python` commands run from the `fastapi_app/` directory** (imports are `from app...`, conftest lives in `fastapi_app/tests/`). On Windows PowerShell: `Set-Location fastapi_app` first, or prefix each command.
-- Tests live flat in `fastapi_app/tests/` (e.g. `tests/test_financial_tool.py`) — match the existing convention; do **not** create `tests/unit/`.
-- The Gemini-client mocking pattern is copied from the existing `tests/test_agent_v2_security.py` (patch `app.agent_v2.get_genai_client`; build responses with `MagicMock`).
+- Tests live flat in `fastapi_app/tests/` (e.g. `tests/test_financial_tool.py`) — match the existing convention used by `test_streaming.py`, `test_financial_utils.py`. (A `tests/unit/` subdir also exists for util tests; these new agent tests go flat.)
+- **AgentV2 has no prior unit tests** — these are the first. The Gemini-client mock pattern: patch `app.agent_v2.get_genai_client` and drive `client.models.generate_content` via `return_value` / `side_effect`.
+- **CRITICAL — mock responses must set `usage_metadata = None`.** `AgentV2._track_cost` runs for real in these tests; `TokenUsage.from_response` (in `app/utils/cost_tracking.py`) treats *any* truthy `usage_metadata` as real token counts. A bare `MagicMock()` response auto-creates a truthy `usage_metadata`, so its attributes become `MagicMock`s, and building `PhaseCost(input_tokens=<MagicMock>, ...)` raises a Pydantic `ValidationError`. Setting `usage_metadata = None` takes the zero-cost branch (`return cls()`), exercising `_track_cost` safely. Every mock response builder below does this.
 
 ## File Structure
 
@@ -579,10 +580,10 @@ Add a helper method (place it just after `_build_contents`, before `_extract_gro
 Run: `python -m pytest tests/test_agent_v2_financial.py -v`
 Expected: PASS (5 tests).
 
-- [ ] **Step 5: Run the existing AgentV2 security tests (regression guard)**
+- [ ] **Step 5: Regression guard — imports still resolve**
 
-Run: `python -m pytest tests/test_agent_v2_security.py -v`
-Expected: PASS (unchanged — ctor still works with no args, `_track_cost` still works with 2 args).
+Run (from `fastapi_app/`): `python -c "import app.agent_v2; import app.main; print('ok')"`
+Expected: `ok` (the new `from app.financial_tool import ...` and ctor/`_track_cost` signature changes don't break imports; back-compat preserved — `AgentV2()` with no args, `_track_cost(resp, phase)` with no model still valid). There are no prior AgentV2 unit tests to run; the new file is the coverage.
 
 - [ ] **Step 6: Commit**
 
@@ -615,6 +616,10 @@ def _record():
     )
 
 
+# NOTE: every builder sets usage_metadata = None so the real _track_cost takes
+# the zero-cost branch instead of choking on MagicMock token counts (see the
+# CRITICAL note in Conventions).
+
 def _fc_response(args=None):
     """Phase-A response that calls query_financial_data."""
     fc = MagicMock()
@@ -630,6 +635,7 @@ def _fc_response(args=None):
     resp = MagicMock()
     resp.candidates = [candidate]
     resp.text = ""
+    resp.usage_metadata = None
     return resp
 
 
@@ -638,6 +644,7 @@ def _decline_response():
     resp = MagicMock()
     resp.candidates = []
     resp.text = "I can help with that."
+    resp.usage_metadata = None
     return resp
 
 
@@ -645,6 +652,7 @@ def _text_response(text):
     resp = MagicMock()
     resp.text = text
     resp.candidates = []
+    resp.usage_metadata = None
     return resp
 
 
@@ -876,10 +884,15 @@ Also update the `run` docstring `Args:` block to document `enable_financial_data
 Run: `python -m pytest tests/test_agent_v2_financial.py -v`
 Expected: PASS (all ~10 tests).
 
-- [ ] **Step 5: Run AgentV2 security regression**
+- [ ] **Step 5: Regression guard — existing web path still covered**
 
-Run: `python -m pytest tests/test_agent_v2_security.py -v`
-Expected: PASS (web/no-search paths unchanged; `enable_financial_data` defaults True but those tests construct `AgentV2()` with no manager, so financial path is skipped).
+The web/plain path has no prior tests, but the new file now exercises it via
+`test_decline_falls_through_to_web`, `test_no_manager_skips_financial`, and
+`test_enable_financial_false_skips_financial` (all run the existing single-call
+`google_search` path). Confirm the whole new file is green:
+
+Run (from `fastapi_app/`): `python -m pytest tests/test_agent_v2_financial.py -v`
+Expected: PASS (all ~10).
 
 - [ ] **Step 6: Commit**
 
@@ -1043,84 +1056,119 @@ git commit -m "docs(_archive): point to app/financial_tool.py for restored primi
 - Create: `evals/personas/chatstream_mixed_financial_and_news.yaml`
 
 > These exercise the financial tool on `/chat/stream` (the existing chat_stream
-> personas are qualitative and barely touch it). Content ported from closed PR #32.
-> Note: the mixed persona's "both tools" ideal is **not** met by the sequential
-> design (financial OR web per turn) — it is measured against its minimum bar
-> (DB figure present). See spec "Known limitation".
+> personas are qualitative and barely touch it). **Ported verbatim from closed PR
+> #32** — they match the real `PersonaSpec` schema (`character` / `goal` /
+> `expected_facts` / `api_options` / `opening_style`; `name`/`notes` are accepted
+> because `PersonaSpec` ignores extra fields) and carry manual-verification notes.
+> The eval client reads `api_options.enable_financial_data` (see
+> `evals/client/agent_stream.py:48`). Note: the mixed persona's "both tools"
+> ideal is **not** met by the sequential design (financial OR web per turn) — its
+> `expected_facts` are still listed for aspiration, but it is judged at its
+> minimum bar (DB figure present). See spec "Known limitation".
+>
+> To re-fetch verbatim instead of copying from this plan:
+> `git show origin/claude/ecstatic-lovelace-a785e5:evals/personas/chatstream_<id>.yaml`
 
 - [ ] **Step 1: Create `chatstream_ncb_revenue_lookup.yaml`**
 
 ```yaml
 id: chatstream_ncb_revenue_lookup
-persona: |
-  You are a retail investor in Kingston who prefers a conversational assistant.
-  You want NCB's recent revenue but you are not very technical — you ask in
-  plain language and expect a clear, specific answer.
+name: "Retail investor — NCB revenue lookup (chat_stream)"
+category: positive
 endpoint: chat_stream
+character: |
+  You're a self-directed retail investor checking up on a stock you already
+  own. You ask direct, specific questions about figures and expect a number
+  back, not a pointer to "go read the annual report". You're polite but you
+  notice when an answer dodges the question.
+goal: |
+  Find out NCB Financial Group's total revenue for the 2023 fiscal year, then
+  ask how that compares to the year before. You're satisfied when you have a
+  concrete revenue figure for 2023 grounded in actual data.
 max_turns: 4
-conversation_goal: |
-  Find out NCB Financial Group's revenue for recent years and whether it grew.
-opening_message: |
-  hi! can you tell me what NCB's revenue was in 2023?
-success_criteria: |
-  The assistant returns NCB's 2023 revenue as a specific figure from the
-  financial database (not a vague web answer), with correct units, and notes
-  whether it grew versus the prior year. tools_executed should include
-  query_financial_data.
-endpoint_options:
+expected_facts:
+  - "NCB Financial Group is mentioned by name or symbol (NCBFG)"
+  - "A concrete total revenue figure for the 2023 fiscal year"
+api_options:
+  memory_enabled: true
   enable_web_search: true
   enable_financial_data: true
+opening_style: direct_question
+notes: |
+  Regression coverage for ATS-334: a financial-metric query on /chat/stream
+  must route to the query_financial_data tool (BigQuery), not fall back to web
+  grounding. Verified manually to return ~95 records for NCB revenue 2023.
 ```
 
 - [ ] **Step 2: Create `chatstream_compare_gk_ncb_profit.yaml`**
 
 ```yaml
 id: chatstream_compare_gk_ncb_profit
-persona: |
-  You are a diaspora investor comparing two big JSE names before deciding where
-  to allocate. You are comfortable with numbers and want a side-by-side.
+name: "Investor comparing GK vs NCB profit (chat_stream)"
+category: positive
 endpoint: chat_stream
-max_turns: 4
-conversation_goal: |
-  Compare GraceKennedy and NCB net profit for the most recent shared year.
-opening_message: |
-  how do GraceKennedy and NCB compare on net profit for 2023?
-success_criteria: |
-  The assistant returns net profit figures for BOTH GraceKennedy and NCB for
-  2023 from the financial database with correct units, and states which was
-  higher. tools_executed should include query_financial_data.
-endpoint_options:
+character: |
+  You're weighing two blue-chip JSE stocks against each other and you think in
+  side-by-side comparisons. You ask the bot to compare specific metrics for
+  specific companies and years, and you follow up if only one side is answered.
+  You speak plainly and expect both figures, clearly labelled.
+goal: |
+  Compare GraceKennedy and NCB Financial Group on net profit for the 2022
+  fiscal year, then ask which of the two grew faster. You're satisfied when you
+  have a labelled net-profit figure for each company for 2022.
+max_turns: 5
+expected_facts:
+  - "Both GraceKennedy (GK) and NCB Financial Group (NCBFG) are named"
+  - "A net profit figure for each company for the 2022 fiscal year"
+api_options:
+  memory_enabled: true
   enable_web_search: true
   enable_financial_data: true
+opening_style: direct_question
+notes: |
+  Regression coverage for ATS-334: a multi-company comparison on /chat/stream
+  must resolve both symbols and call query_financial_data. Verified manually
+  that "compare GK and NCB net profit 2022" resolves symbols=['GK','NCBFG'].
 ```
 
 - [ ] **Step 3: Create `chatstream_mixed_financial_and_news.yaml`**
 
 ```yaml
 id: chatstream_mixed_financial_and_news
-persona: |
-  You are an engaged retail investor who wants both the hard numbers and the
-  recent news context. You ask one combined question.
+name: "Investor mixing financials and news (chat_stream)"
+category: positive
 endpoint: chat_stream
-max_turns: 4
-conversation_goal: |
-  Get NCB's most recent revenue figure AND any recent news about the company.
-opening_message: |
-  what was NCB's revenue last year, and is there any recent news about them?
-success_criteria: |
-  The assistant returns NCB's revenue from the financial database (specific
-  figure, correct units) AND summarizes recent news with web sources. Ideally
-  tools_executed includes both query_financial_data and google_search, but at
-  minimum the revenue figure must come from the database.
-endpoint_options:
+character: |
+  You're an engaged investor who jumps between hard numbers and current events
+  in the same conversation. First you want a specific financial figure, then
+  you pivot to "what's the latest news". You expect the bot to handle both
+  without losing the thread of which company you're discussing.
+goal: |
+  Get NCB Financial Group's net profit for 2023, then ask for the latest news
+  about the company. You're satisfied when the financial figure is grounded in
+  data and the news answer cites current web sources.
+max_turns: 5
+expected_facts:
+  - "A net profit figure for NCB Financial Group for 2023"
+  - "A news/current-events answer that references recent sources"
+api_options:
+  memory_enabled: true
   enable_web_search: true
   enable_financial_data: true
+opening_style: direct_question
+notes: |
+  Regression coverage for ATS-334: exercises both routing branches on
+  /chat/stream within one conversation — the metric question must hit
+  query_financial_data while the news question must route to google_search.
+  NOTE (sequential design): v1 answers financial OR web per turn, so this is
+  judged at its minimum bar (the net-profit figure is DB-grounded); the
+  "both tools in one turn" ideal is a future enhancement (see spec).
 ```
 
-- [ ] **Step 4: Sanity-check YAML parses**
+- [ ] **Step 4: Schema-validate the personas with the real loader**
 
-Run (from repo root): `python -c "import yaml,glob; [yaml.safe_load(open(f)) for f in glob.glob('evals/personas/chatstream_*.yaml')]; print('ok')"`
-Expected: `ok`
+Run (from repo root): `python -c "from evals.persona import load_persona; import glob; [load_persona(f) for f in glob.glob('evals/personas/chatstream_*.yaml')]; print('ok')"`
+Expected: `ok` (validates against `PersonaSpec`, not just YAML well-formedness — catches a bad `opening_style`/`category`). If `evals` isn't importable from the worktree, run with `PYTHONPATH=.`.
 
 - [ ] **Step 5: Commit**
 
