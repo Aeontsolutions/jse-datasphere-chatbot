@@ -1082,6 +1082,7 @@ Provide a helpful response. CRITICAL REQUIREMENT: Start your response by mention
                 "chart": chart_spec,
                 "web_search_results": web_search_results,
                 "suggestions": follow_up,
+                "warnings": None,
                 "conversation_history": updated_history,
                 "cost_summary": self._build_cost_summary(),
             }
