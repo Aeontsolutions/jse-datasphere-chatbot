@@ -557,14 +557,12 @@ EXAMPLES:
                 if not optimized_query:
                     optimized_query = query
 
-                # Apply enable flags; if financial data is requested but unavailable, fall back to web
-                financial_requested_but_unavailable = (
-                    tool_type == "FINANCIAL" and not enable_financial_data
-                )
+                # Apply enable flags; if financial is requested but disabled, fall back to web
                 routing = {
                     "use_financial": tool_type in ("FINANCIAL", "BOTH") and enable_financial_data,
                     "use_web_search": (
-                        tool_type in ("WEB", "BOTH") or financial_requested_but_unavailable
+                        tool_type in ("WEB", "BOTH")
+                        or (tool_type == "FINANCIAL" and not enable_financial_data)
                     )
                     and enable_web_search,
                 }
