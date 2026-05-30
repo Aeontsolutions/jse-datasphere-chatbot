@@ -2,23 +2,19 @@
 
 This directory holds code that is **not active** but is preserved for reference.
 
-Files here are intentionally excluded from the running application. They are kept
-because they document non-obvious capabilities (tool declarations, 3-phase pipeline
-patterns, financial DB query logic) that may be revived in a future ticket (see R10).
+Files here are intentionally excluded from the running application.
 
 ## Contents
 
-| File | Original path | What it is |
-|---|---|---|
-| `agent_orchestrator.py` | `app/agent.py` | `AgentOrchestrator` — a 3-phase agent (clarification → routing → synthesis) with both Google Search grounding *and* JSE financial-DB tool calling via Gemini function calling. Was imported in `main.py` but never instantiated; all live endpoints use the simpler `AgentV2` instead. |
+| File | Original path | What it is | Status |
+|---|---|---|---|
+| `agent_orchestrator.py` | `app/agent.py` | `AgentOrchestrator` — a 3-phase agent (clarification → routing → synthesis) with both Google Search grounding *and* JSE financial-DB tool calling via Gemini function calling. | Restored in R10 (ATS-334). `app/agent.py` is the live version. This copy is kept for historical reference. |
 
-## Restoring
+## Restoration (R10 — ATS-334)
 
-To wire `AgentOrchestrator` back up (ticket R10):
-1. Move `agent_orchestrator.py` back to `app/agent.py` and remove the `ARCHIVED` header from the module docstring
-2. Re-add `from app.agent import AgentOrchestrator` in `main.py`
-3. In the `lifespan` context manager in `main.py`, instantiate the orchestrator after `financial_manager` is ready and store it on app state:
-   ```python
-   app.state.agent_orchestrator = AgentOrchestrator(financial_manager=app.state.financial_manager)
-   ```
-4. In the `/chat/stream` endpoint, swap out `AgentV2` for `app.state.agent_orchestrator` — note that `AgentOrchestrator.run()` returns a full dict (not a streaming generator), so the endpoint response shape will need to be reconciled with the current streaming contract
+Completed. `AgentOrchestrator` is live at `app/agent.py` and wired into `/chat/stream`.
+Changes made:
+- Removed `ARCHIVED` header from module docstring
+- Split `model_name` into `flash_model` ("gemini-2.5-flash", phases 1–2) and `pro_model` ("gemini-2.5-pro", phase 3)
+- Fixed conversation-history bug (now appends new turn before returning)
+- Instantiated in `lifespan` on `app.state.agent_orchestrator`
