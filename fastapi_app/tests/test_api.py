@@ -89,7 +89,9 @@ def test_chat_stream_passes_enable_financial_data_to_orchestrator(test_client, m
     mock_orchestrator.run = AsyncMock(return_value=mock_result)
 
     monkeypatch.setattr(app.state, "financial_manager", MagicMock())
-    monkeypatch.setattr(main_module, "AgentOrchestrator", lambda financial_manager: mock_orchestrator)
+    monkeypatch.setattr(
+        main_module, "AgentOrchestrator", lambda financial_manager: mock_orchestrator
+    )
 
     response = test_client.post(
         "/chat/stream",
