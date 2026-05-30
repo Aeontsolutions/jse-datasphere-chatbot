@@ -33,6 +33,7 @@ from app.document_selector import auto_load_relevant_documents
 from app.streaming_chat import process_streaming_chat
 from app.financial_utils import FinancialDataManager
 from app.agent_v2 import AgentV2
+from app.agent import AgentOrchestrator
 from app.job_store import JobStore, JobProgressSink
 from app.redis_job_store import RedisJobStore
 from app.progress_tracker import ProgressTracker
@@ -96,6 +97,13 @@ async def lifespan(app: FastAPI):
             logger.error(f"Failed to initialize financial data manager: {financial_err}")
             app.state.financial_manager = None
         # -----------------------
+        # Initialize AgentOrchestrator (financial DB + web search)
+        # -----------------------
+        app.state.agent_orchestrator = AgentOrchestrator(
+            financial_manager=app.state.financial_manager
+        )
+        logger.info("AgentOrchestrator initialized")
+        # -----------------------
         # Initialize Job Store (Redis or In-Memory)
         # -----------------------
         # Use centralized config instead of multiple env var checks
@@ -148,6 +156,10 @@ app = FastAPI(
     version="1.2.0",
     lifespan=lifespan,
 )
+
+# Pre-initialize state attributes so monkeypatch.setattr works in tests
+# (Starlette State requires the attribute to exist before setattr can replace it)
+app.state.agent_orchestrator = None
 
 # Add Request ID middleware (must be added before other middleware)
 app.add_middleware(RequestIDMiddleware)
@@ -980,17 +992,15 @@ async def chat_stream(
         logger.info("No conversation history received")
 
     try:
-        # Create simplified agent (uses Gemini 2.5 Pro with Google Search grounding)
-        agent = AgentV2()
+        agent = app.state.agent_orchestrator
 
-        # Run the agent
         result = await agent.run(
             query=request.query,
             conversation_history=request.conversation_history,
             enable_web_search=request.enable_web_search,
+            enable_financial_data=request.enable_financial_data,
         )
 
-        # Build response (compatible with AgentChatResponse)
         response = AgentChatResponse(
             response=result["response"],
             data_found=result["data_found"],
@@ -1006,6 +1016,7 @@ async def chat_stream(
             tools_executed=result.get("tools_executed"),
             needs_clarification=result.get("needs_clarification", False),
             clarification_question=result.get("clarification_question"),
+            cost_summary=result.get("cost_summary"),
         )
 
         logger.info(
