@@ -61,6 +61,7 @@ def test_chat_stream_passes_enable_financial_data_to_orchestrator(test_client, m
     enable_financial_data from the request body.
     """
     from unittest.mock import AsyncMock, MagicMock
+
     import app.main as main_module
     from app.main import app
 
