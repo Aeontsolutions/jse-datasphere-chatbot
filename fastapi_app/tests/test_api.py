@@ -57,10 +57,11 @@ def test_api():
 @pytest.mark.unit
 def test_chat_stream_passes_enable_financial_data_to_orchestrator(test_client, monkeypatch):
     """
-    /chat/stream must delegate to app.state.agent_orchestrator and pass
+    /chat/stream must instantiate a fresh AgentOrchestrator per request and pass
     enable_financial_data from the request body.
     """
     from unittest.mock import AsyncMock, MagicMock
+    import app.main as main_module
     from app.main import app
 
     mock_result = {
@@ -86,7 +87,9 @@ def test_chat_stream_passes_enable_financial_data_to_orchestrator(test_client, m
 
     mock_orchestrator = MagicMock()
     mock_orchestrator.run = AsyncMock(return_value=mock_result)
-    monkeypatch.setattr(app.state, "agent_orchestrator", mock_orchestrator)
+
+    monkeypatch.setattr(app.state, "financial_manager", MagicMock())
+    monkeypatch.setattr(main_module, "AgentOrchestrator", lambda financial_manager: mock_orchestrator)
 
     response = test_client.post(
         "/chat/stream",

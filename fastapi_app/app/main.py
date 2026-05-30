@@ -97,17 +97,6 @@ async def lifespan(app: FastAPI):
             logger.error(f"Failed to initialize financial data manager: {financial_err}")
             app.state.financial_manager = None
         # -----------------------
-        # Initialize AgentOrchestrator (financial DB + web search)
-        # -----------------------
-        try:
-            app.state.agent_orchestrator = AgentOrchestrator(
-                financial_manager=app.state.financial_manager
-            )
-            logger.info("AgentOrchestrator initialized")
-        except Exception as agent_err:
-            logger.error(f"Failed to initialize AgentOrchestrator: {agent_err}")
-            app.state.agent_orchestrator = None
-        # -----------------------
         # Initialize Job Store (Redis or In-Memory)
         # -----------------------
         # Use centralized config instead of multiple env var checks
@@ -163,7 +152,7 @@ app = FastAPI(
 
 # Pre-initialize state attributes so monkeypatch.setattr works in tests
 # (Starlette State requires the attribute to exist before setattr can replace it)
-app.state.agent_orchestrator = None
+app.state.financial_manager = None
 
 # Add Request ID middleware (must be added before other middleware)
 app.add_middleware(RequestIDMiddleware)
@@ -996,9 +985,10 @@ async def chat_stream(
         logger.info("No conversation history received")
 
     try:
-        agent = app.state.agent_orchestrator
-        if agent is None:
-            raise HTTPException(status_code=503, detail="Agent not initialized")
+        financial_manager = app.state.financial_manager
+        if financial_manager is None:
+            raise HTTPException(status_code=503, detail="Financial data service not initialized")
+        agent = AgentOrchestrator(financial_manager=financial_manager)
 
         result = await agent.run(
             query=request.query,

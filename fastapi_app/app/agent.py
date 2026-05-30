@@ -1083,6 +1083,8 @@ Provide a helpful response. CRITICAL REQUIREMENT: Start your response by mention
                 "web_search_results": web_search_results,
                 "suggestions": follow_up,
                 "warnings": None,
+                "needs_clarification": False,
+                "clarification_question": None,
                 "conversation_history": updated_history,
                 "cost_summary": self._build_cost_summary(),
             }
