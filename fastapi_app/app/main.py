@@ -99,10 +99,14 @@ async def lifespan(app: FastAPI):
         # -----------------------
         # Initialize AgentOrchestrator (financial DB + web search)
         # -----------------------
-        app.state.agent_orchestrator = AgentOrchestrator(
-            financial_manager=app.state.financial_manager
-        )
-        logger.info("AgentOrchestrator initialized")
+        try:
+            app.state.agent_orchestrator = AgentOrchestrator(
+                financial_manager=app.state.financial_manager
+            )
+            logger.info("AgentOrchestrator initialized")
+        except Exception as agent_err:
+            logger.error(f"Failed to initialize AgentOrchestrator: {agent_err}")
+            app.state.agent_orchestrator = None
         # -----------------------
         # Initialize Job Store (Redis or In-Memory)
         # -----------------------
@@ -993,6 +997,8 @@ async def chat_stream(
 
     try:
         agent = app.state.agent_orchestrator
+        if agent is None:
+            raise HTTPException(status_code=503, detail="Agent not initialized")
 
         result = await agent.run(
             query=request.query,
