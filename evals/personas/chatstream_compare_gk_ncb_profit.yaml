@@ -1,0 +1,26 @@
+id: chatstream_compare_gk_ncb_profit
+name: "Investor comparing GK vs NCB profit (chat_stream)"
+category: positive
+endpoint: chat_stream
+character: |
+  You're weighing two blue-chip JSE stocks against each other and you think in
+  side-by-side comparisons. You ask the bot to compare specific metrics for
+  specific companies and years, and you follow up if only one side is answered.
+  You speak plainly and expect both figures, clearly labelled.
+goal: |
+  Compare GraceKennedy and NCB Financial Group on net profit for the 2022
+  fiscal year, then ask which of the two grew faster. You're satisfied when you
+  have a labelled net-profit figure for each company for 2022.
+max_turns: 5
+expected_facts:
+  - "Both GraceKennedy (GK) and NCB Financial Group (NCBFG) are named"
+  - "A net profit figure for each company for the 2022 fiscal year"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: direct_question
+notes: |
+  Regression coverage for ATS-334: a multi-company comparison on /chat/stream
+  must resolve both symbols and call query_financial_data. Verified manually
+  that "compare GK and NCB net profit 2022" resolves symbols=['GK','NCBFG'].
