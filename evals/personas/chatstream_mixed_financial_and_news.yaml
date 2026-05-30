@@ -1,0 +1,26 @@
+id: chatstream_mixed_financial_and_news
+name: "Investor mixing financials and news (chat_stream)"
+category: positive
+endpoint: chat_stream
+character: |
+  You're an engaged investor who jumps between hard numbers and current events
+  in the same conversation. First you want a specific financial figure, then
+  you pivot to "what's the latest news". You expect the bot to handle both
+  without losing the thread of which company you're discussing.
+goal: |
+  Get NCB Financial Group's net profit for 2023, then ask for the latest news
+  about the company. You're satisfied when the financial figure is grounded in
+  data and the news answer cites current web sources.
+max_turns: 5
+expected_facts:
+  - "A net profit figure for NCB Financial Group for 2023"
+  - "A news/current-events answer that references recent sources"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: direct_question
+notes: |
+  Regression coverage for ATS-334: exercises both routing branches on
+  /chat/stream within one conversation — the metric question must hit
+  query_financial_data while the news question must route to google_search.
