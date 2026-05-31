@@ -21,6 +21,12 @@ from app.logging_config import get_logger
 from app.models import CostSummary, PhaseCost
 from app.utils.cost_tracking import calculate_cost_from_response
 from app.utils.monitoring import record_ai_cost
+from app.financial_tool import (
+    build_financial_context,
+    execute_financial_query,
+    extract_query_financial_data_call,
+    get_financial_tool,
+)
 
 logger = get_logger(__name__)
 
@@ -74,6 +80,21 @@ SYSTEM_PROMPT_NO_SEARCH = SYSTEM_PROMPT.replace(
     "\nYou have web search access for current market data.", ""
 )
 
+# Model used for the cheap financial decide/extract call (Phase A).
+FINANCIAL_DECISION_MODEL = "gemini-2.5-flash"
+
+# Phase-A system prompt: decide whether the question is a JSE financial-metric
+# lookup and, if so, call query_financial_data. {metadata_context} is filled with
+# available symbols/years so extracted symbols are valid.
+FINANCIAL_DECISION_PROMPT = """You decide whether a user's question can be answered from the Jamaica Stock Exchange (JSE) financial-statement database.
+
+Call the query_financial_data tool ONLY when the user asks for specific company financial metrics (revenue, profit, EPS, margins, assets, liabilities, ratios) for JSE-listed companies, optionally for specific years.
+
+Do NOT call the tool for: news, announcements, qualitative or opinion questions, market commentary, current stock prices, IPO timelines, or anything outside the metric list. If the question is not a financial-metric lookup, do not call the tool at all.
+
+When you call the tool, use uppercase trading symbols.
+{metadata_context}"""
+
 # ==============================================================================
 # AGENT V2 - Simple Google Search Grounding
 # ==============================================================================
@@ -87,15 +108,22 @@ class AgentV2:
     call with the GoogleSearch tool for web grounding.
     """
 
-    def __init__(self, model_name: str = "gemini-2.5-pro"):
+    def __init__(
+        self,
+        model_name: str = "gemini-2.5-pro",
+        financial_manager: Any = None,
+    ):
         """
         Initialize the agent.
 
         Args:
-            model_name: Gemini model to use. Defaults to gemini-2.5-pro.
+            model_name: Gemini model for synthesis/web. Defaults to gemini-2.5-pro.
+            financial_manager: FinancialDataManager for the query_financial_data
+                tool. When None, the financial path is skipped (web/plain only).
         """
         self.client = get_genai_client()
         self.model_name = model_name
+        self.financial_manager = financial_manager
         self._phase_costs: List[PhaseCost] = []
 
     # --------------------------------------------------------------------------
@@ -141,9 +169,10 @@ class AgentV2:
             phases=self._phase_costs.copy(),
         )
 
-    def _track_cost(self, response: Any, phase: str) -> None:
-        """Track cost from a Gemini response."""
-        cost = calculate_cost_from_response(self.model_name, response, phase)
+    def _track_cost(self, response: Any, phase: str, model: Optional[str] = None) -> None:
+        """Track cost from a Gemini response (model defaults to self.model_name)."""
+        model = model or self.model_name
+        cost = calculate_cost_from_response(model, response, phase)
         record_ai_cost(
             model=cost.model,
             phase=cost.phase,
@@ -156,7 +185,7 @@ class AgentV2:
         )
         self._add_phase_cost(
             phase=phase,
-            model=self.model_name,
+            model=model,
             input_tokens=cost.token_usage.input_tokens,
             output_tokens=cost.token_usage.output_tokens,
             cached_tokens=cost.token_usage.cached_tokens,
@@ -198,6 +227,23 @@ class AgentV2:
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=new_message)]))
 
         return contents
+
+    def _get_metadata_context(self) -> str:
+        """Available symbols/years from the financial manager metadata.
+
+        Injected into the Phase-A decision prompt so the model emits valid
+        trading symbols (the tool exposes only `symbols`, not company names).
+        """
+        manager = self.financial_manager
+        if not manager or not getattr(manager, "metadata", None):
+            return ""
+        metadata = manager.metadata
+        parts = []
+        if metadata.get("symbols"):
+            parts.append(f"Available symbols: {', '.join(metadata['symbols'][:50])}")
+        if metadata.get("years"):
+            parts.append(f"Available years: {', '.join(metadata['years'])}")
+        return "\n".join(parts)
 
     def _extract_grounding_metadata(self, response: Any) -> Dict[str, Any]:
         """
