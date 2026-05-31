@@ -310,11 +310,119 @@ class AgentV2:
     # Main Entry Point
     # --------------------------------------------------------------------------
 
+    async def _try_financial(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]],
+    ) -> Optional[Dict[str, Any]]:
+        """Phase A (flash decide/extract) + Phase B (pro synthesize).
+
+        Returns a full result dict if query_financial_data was invoked, or None
+        to signal the caller should fall through to the web/plain path (model
+        declined, or the path errored).
+        """
+        try:
+            contents = self._build_contents(conversation_history, query)
+            system_prompt = FINANCIAL_DECISION_PROMPT.format(
+                metadata_context=self._get_metadata_context()
+            )
+
+            # Phase A: decide + extract (cheap/fast, AUTO function calling)
+            decision = self.client.models.generate_content(
+                model=FINANCIAL_DECISION_MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    tools=[get_financial_tool()],
+                    tool_config=types.ToolConfig(
+                        function_calling_config=types.FunctionCallingConfig(mode="AUTO")
+                    ),
+                    temperature=0.3,
+                    max_output_tokens=512,
+                ),
+            )
+            self._track_cost(decision, "financial_extraction", model=FINANCIAL_DECISION_MODEL)
+
+            fc = extract_query_financial_data_call(decision)
+            if not fc:
+                logger.info("AgentV2 financial: tool not called; falling through to web")
+                return None
+
+            args = dict(fc.args) if fc.args else {}
+            records, filters, chart, sources = await execute_financial_query(
+                self.financial_manager, args
+            )
+
+            # Phase B: synthesize from the retrieved data only (no tools)
+            context = build_financial_context(records)
+            synth_contents = self._build_contents(conversation_history, query)
+            synth_contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(
+                            text=(
+                                "Financial data retrieved from the JSE database:\n"
+                                f"{context}\n\n"
+                                "Answer the user's question using ONLY this data. "
+                                "Use J$ and include a brief investment disclaimer."
+                            )
+                        )
+                    ],
+                )
+            )
+            synthesis = self.client.models.generate_content(
+                model=self.model_name,
+                contents=synth_contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT_NO_SEARCH,
+                    temperature=0.3,
+                    max_output_tokens=8192,
+                ),
+            )
+            self._track_cost(synthesis, "synthesis")
+
+            response_text = synthesis.text if synthesis.text else ""
+            if not response_text:
+                response_text = (
+                    "I found financial data but could not generate a response. "
+                    "Please try again."
+                )
+
+            updated_history = list(conversation_history) if conversation_history else []
+            updated_history.append({"role": "user", "content": query})
+            updated_history.append({"role": "assistant", "content": response_text})
+            if len(updated_history) > 20:
+                updated_history = updated_history[-20:]
+
+            return {
+                "response": response_text,
+                "data_found": len(records) > 0,
+                "record_count": len(records),
+                "needs_clarification": False,
+                "clarification_question": None,
+                "tools_executed": ["query_financial_data"],
+                "sources": sources if sources else None,
+                "filters_used": filters,
+                "data_preview": records[:10] if records else None,
+                "chart": chart,
+                "web_search_results": None,
+                "suggestions": None,
+                "conversation_history": updated_history,
+                "warnings": None,
+                "cost_summary": self._build_cost_summary(),
+            }
+
+        except Exception as e:
+            logger.error(f"AgentV2 financial path failed: {e}", exc_info=True)
+            return None
+
     async def run(
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         enable_web_search: bool = True,
+        enable_financial_data: bool = True,
     ) -> Dict[str, Any]:
         """
         Run the agent, optionally with Google Search grounding.
@@ -324,6 +432,9 @@ class AgentV2:
             conversation_history: Previous conversation messages
             enable_web_search: When False, omits the GoogleSearch tool and removes
                 the web-search instruction from the system prompt.
+            enable_financial_data: When True and a financial_manager is set, first
+                attempts the query_financial_data path; falls through to web/plain
+                if the model declines.
 
         Returns:
             Dictionary compatible with AgentChatResponse
@@ -331,6 +442,16 @@ class AgentV2:
         logger.info(f"AgentV2 run: {query[:100]}...")
 
         self._reset_cost_tracking()
+
+        # Financial tool path (Phase A decide -> execute -> Phase B synthesize).
+        # Falls through to the web/plain path if the model declines or it errors.
+        if enable_financial_data and self.financial_manager:
+            financial_result = await self._try_financial(query, conversation_history)
+            if financial_result is not None:
+                logger.info(
+                    f"AgentV2 financial path used. records={financial_result['record_count']}"
+                )
+                return financial_result
 
         try:
             # Build conversation contents

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.agent_v2 import FINANCIAL_DECISION_MODEL, AgentV2
+from app.models import FinancialDataRecord
 
 
 @pytest.fixture
@@ -42,3 +43,118 @@ def test_metadata_context_empty_when_no_manager(mock_genai_client):
 
 def test_decision_model_is_flash():
     assert FINANCIAL_DECISION_MODEL == "gemini-2.5-flash"
+
+
+def _record():
+    return FinancialDataRecord(
+        company="NCB Financial Group", symbol="NCB", year="2023",
+        standard_item="revenue", item=123456789.0, unit_multiplier=1,
+        formatted_value="123,456,789",
+    )
+
+
+# NOTE: every builder sets usage_metadata = None so the real _track_cost takes
+# the zero-cost branch instead of choking on MagicMock token counts. This is
+# REQUIRED — TokenUsage.from_response treats any truthy usage_metadata as real
+# counts, and a bare MagicMock attribute would crash PhaseCost validation.
+
+def _fc_response(args=None):
+    """Phase-A response that calls query_financial_data."""
+    fc = MagicMock()
+    fc.name = "query_financial_data"
+    fc.args = args if args is not None else {"symbols": ["NCB"], "years": ["2023"],
+                                             "standard_items": ["revenue"]}
+    part = MagicMock()
+    part.function_call = fc
+    content = MagicMock()
+    content.parts = [part]
+    candidate = MagicMock()
+    candidate.content = content
+    resp = MagicMock()
+    resp.candidates = [candidate]
+    resp.text = ""
+    resp.usage_metadata = None
+    return resp
+
+
+def _decline_response():
+    """Phase-A response with no function call (model declined)."""
+    resp = MagicMock()
+    resp.candidates = []
+    resp.text = "I can help with that."
+    resp.usage_metadata = None
+    return resp
+
+
+def _text_response(text):
+    resp = MagicMock()
+    resp.text = text
+    resp.candidates = []
+    resp.usage_metadata = None
+    return resp
+
+
+def _mock_manager(records):
+    mgr = MagicMock()
+    mgr.metadata = {"symbols": ["NCB"], "years": ["2023"]}
+    mgr.query_data.return_value = records
+    return mgr
+
+
+def test_financial_path_calls_tool_and_synthesizes(mock_genai_client):
+    mock_genai_client.models.generate_content.side_effect = [
+        _fc_response(),
+        _text_response("NCB's 2023 revenue was J$123.5M."),
+    ]
+    agent = AgentV2(financial_manager=_mock_manager([_record()]))
+    result = asyncio.run(agent.run(query="What was NCB revenue in 2023?"))
+
+    assert result["tools_executed"] == ["query_financial_data"]
+    assert result["record_count"] == 1
+    assert result["filters_used"].symbols == ["NCB"]
+    assert result["data_preview"] and len(result["data_preview"]) == 1
+    assert "123.5M" in result["response"]
+    assert mock_genai_client.models.generate_content.call_count == 2
+
+
+def test_decline_falls_through_to_web(mock_genai_client):
+    mock_genai_client.models.generate_content.side_effect = [
+        _decline_response(),
+        _text_response("Here is some recent JSE news."),
+    ]
+    agent = AgentV2(financial_manager=_mock_manager([]))
+    result = asyncio.run(agent.run(query="Any recent JSE news?"))
+
+    assert result["response"] == "Here is some recent JSE news."
+    assert "query_financial_data" not in (result.get("tools_executed") or [])
+    agent.financial_manager.query_data.assert_not_called()
+
+
+def test_enable_financial_false_skips_financial(mock_genai_client):
+    mock_genai_client.models.generate_content.return_value = _text_response("web answer")
+    mgr = _mock_manager([_record()])
+    agent = AgentV2(financial_manager=mgr)
+    result = asyncio.run(agent.run(query="What was NCB revenue?", enable_financial_data=False))
+
+    mgr.query_data.assert_not_called()
+    assert mock_genai_client.models.generate_content.call_count == 1
+    assert result["response"] == "web answer"
+
+
+def test_no_manager_skips_financial(mock_genai_client):
+    mock_genai_client.models.generate_content.return_value = _text_response("web answer")
+    agent = AgentV2()  # financial_manager=None
+    result = asyncio.run(agent.run(query="What was NCB revenue?"))
+    assert result["response"] == "web answer"
+    assert mock_genai_client.models.generate_content.call_count == 1
+
+
+def test_financial_phase_a_uses_flash_model(mock_genai_client):
+    mock_genai_client.models.generate_content.side_effect = [
+        _fc_response(),
+        _text_response("answer"),
+    ]
+    agent = AgentV2(financial_manager=_mock_manager([_record()]))
+    asyncio.run(agent.run(query="NCB revenue 2023?"))
+    first_call_kwargs = mock_genai_client.models.generate_content.call_args_list[0].kwargs
+    assert first_call_kwargs["model"] == "gemini-2.5-flash"
