@@ -158,3 +158,23 @@ def test_financial_phase_a_uses_flash_model(mock_genai_client):
     asyncio.run(agent.run(query="NCB revenue 2023?"))
     first_call_kwargs = mock_genai_client.models.generate_content.call_args_list[0].kwargs
     assert first_call_kwargs["model"] == "gemini-2.5-flash"
+
+
+def test_financial_error_falls_through_to_web(mock_genai_client):
+    # Phase A calls the tool, but the BigQuery query raises -> _try_financial
+    # returns None -> run() must fall through to the web/plain path (graceful
+    # degradation: BigQuery being down must not break /chat/stream).
+    mock_genai_client.models.generate_content.side_effect = [
+        _fc_response(),
+        _text_response("web fallback answer"),
+    ]
+    mgr = MagicMock()
+    mgr.metadata = {"symbols": ["NCB"], "years": ["2023"]}
+    mgr.query_data.side_effect = RuntimeError("BigQuery exploded")
+    agent = AgentV2(financial_manager=mgr)
+    result = asyncio.run(agent.run(query="What was NCB revenue in 2023?"))
+
+    assert result["response"] == "web fallback answer"
+    assert "query_financial_data" not in (result.get("tools_executed") or [])
+    # Both calls happened: Phase-A decision (flash) + web fallback
+    assert mock_genai_client.models.generate_content.call_count == 2
