@@ -16,17 +16,17 @@ from typing import Any, Dict, List, Optional
 
 from google.genai import types
 
-from app.gemini_client import get_genai_client
-from app.logging_config import get_logger
-from app.models import CostSummary, PhaseCost
-from app.utils.cost_tracking import calculate_cost_from_response
-from app.utils.monitoring import record_ai_cost
 from app.financial_tool import (
     build_financial_context,
     execute_financial_query,
     extract_query_financial_data_call,
     get_financial_tool,
 )
+from app.gemini_client import get_genai_client
+from app.logging_config import get_logger
+from app.models import CostSummary, PhaseCost
+from app.utils.cost_tracking import calculate_cost_from_response
+from app.utils.monitoring import record_ai_cost
 
 logger = get_logger(__name__)
 
@@ -385,8 +385,7 @@ class AgentV2:
             response_text = synthesis.text if synthesis.text else ""
             if not response_text:
                 response_text = (
-                    "I found financial data but could not generate a response. "
-                    "Please try again."
+                    "I found financial data but could not generate a response. " "Please try again."
                 )
 
             updated_history = list(conversation_history) if conversation_history else []

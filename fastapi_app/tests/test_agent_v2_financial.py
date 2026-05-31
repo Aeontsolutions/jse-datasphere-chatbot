@@ -47,8 +47,12 @@ def test_decision_model_is_flash():
 
 def _record():
     return FinancialDataRecord(
-        company="NCB Financial Group", symbol="NCB", year="2023",
-        standard_item="revenue", item=123456789.0, unit_multiplier=1,
+        company="NCB Financial Group",
+        symbol="NCB",
+        year="2023",
+        standard_item="revenue",
+        item=123456789.0,
+        unit_multiplier=1,
         formatted_value="123,456,789",
     )
 
@@ -58,12 +62,16 @@ def _record():
 # REQUIRED — TokenUsage.from_response treats any truthy usage_metadata as real
 # counts, and a bare MagicMock attribute would crash PhaseCost validation.
 
+
 def _fc_response(args=None):
     """Phase-A response that calls query_financial_data."""
     fc = MagicMock()
     fc.name = "query_financial_data"
-    fc.args = args if args is not None else {"symbols": ["NCB"], "years": ["2023"],
-                                             "standard_items": ["revenue"]}
+    fc.args = (
+        args
+        if args is not None
+        else {"symbols": ["NCB"], "years": ["2023"], "standard_items": ["revenue"]}
+    )
     part = MagicMock()
     part.function_call = fc
     content = MagicMock()

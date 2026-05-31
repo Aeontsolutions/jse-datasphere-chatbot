@@ -31,11 +31,17 @@ def _fc_response(name="query_financial_data", args=None):
     return response
 
 
-def _record(company="NCB Financial Group", symbol="NCB", year="2023",
-            item_name="revenue", item=123456789.0):
+def _record(
+    company="NCB Financial Group", symbol="NCB", year="2023", item_name="revenue", item=123456789.0
+):
     return FinancialDataRecord(
-        company=company, symbol=symbol, year=year, standard_item=item_name,
-        item=item, unit_multiplier=1, formatted_value=f"{item:,.0f}",
+        company=company,
+        symbol=symbol,
+        year=year,
+        standard_item=item_name,
+        item=item,
+        unit_multiplier=1,
+        formatted_value=f"{item:,.0f}",
     )
 
 
@@ -101,8 +107,8 @@ class TestExecuteFinancialQuery:
 
         manager.query_data.assert_called_once()
         passed = manager.query_data.call_args.args[0]
-        assert passed.symbols == ["NCB"]              # uppercased
-        assert passed.years == ["2023"]               # stringified
+        assert passed.symbols == ["NCB"]  # uppercased
+        assert passed.years == ["2023"]  # stringified
         assert passed.standard_items == ["net_profit"]  # lower + underscored
         assert len(records) == 1
         assert sources[0]["type"] == "database"
