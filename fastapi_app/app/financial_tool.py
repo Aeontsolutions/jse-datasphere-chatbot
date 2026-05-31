@@ -79,3 +79,109 @@ def extract_query_financial_data_call(response: Any) -> Optional[Any]:
         if fc and getattr(fc, "name", None) == "query_financial_data":
             return fc
     return None
+
+
+async def execute_financial_query(
+    financial_manager: Any,
+    args: Dict[str, Any],
+) -> Tuple[List[FinancialDataRecord], FinancialDataFilters, Optional[Dict], List[Dict]]:
+    """Execute financial data query and return results with source metadata.
+
+    The BigQuery call (financial_manager.query_data) is synchronous/blocking, so
+    it is run via asyncio.to_thread to avoid blocking the event loop.
+    """
+    start_time = time.time()
+
+    try:
+        raw_symbols = args.get("symbols") or []
+        raw_years = args.get("years") or []
+        raw_items = args.get("standard_items") or []
+
+        symbols = [s.upper() for s in raw_symbols if s]
+        years = [str(y) for y in raw_years if y]
+        standard_items = [item.lower().replace(" ", "_") for item in raw_items if item]
+
+        filters = FinancialDataFilters(
+            companies=[],
+            symbols=symbols,
+            years=years,
+            standard_items=standard_items,
+            interpretation=f"Agent query: symbols={symbols}, years={years}, items={standard_items}",
+            data_availability_note="",
+            is_follow_up=False,
+            context_used="",
+        )
+
+        # Post-process filters using associations from metadata (e.g. symbol->company)
+        if financial_manager.metadata and "associations" in financial_manager.metadata:
+            filters_dict = filters.model_dump()
+            filters_dict = financial_manager._post_process_filters(filters_dict)
+            filters = FinancialDataFilters(**filters_dict)
+
+        # Query the data (blocking BigQuery call -> off-thread)
+        records = await asyncio.to_thread(financial_manager.query_data, filters)
+
+        # Generate chart if applicable
+        chart_spec = None
+        if records:
+            chart_data = generate_chart(records, "")
+            if chart_data:
+                chart_spec = chart_data
+
+        # Build source citations
+        symbols_str = ", ".join(filters.symbols) if filters.symbols else "all"
+        years_str = ", ".join(filters.years) if filters.years else "all years"
+        source_entry = {
+            "type": "database",
+            "description": f"JSE Financial Database: {symbols_str} ({years_str})",
+            "table": "financial_data",
+        }
+        if filters.symbols:
+            source_entry["symbols"] = filters.symbols
+        if filters.years:
+            source_entry["years"] = filters.years
+        if filters.standard_items:
+            source_entry["metrics"] = filters.standard_items
+        sources = [source_entry]
+
+        duration_ms = (time.time() - start_time) * 1000
+        logger.info(f"Financial query: {len(records)} records in {duration_ms:.2f}ms")
+
+        return records, filters, chart_spec, sources
+
+    except Exception as e:
+        logger.error(f"Financial query failed: {e}", exc_info=True)
+        raise
+
+
+def build_financial_context(records: List[FinancialDataRecord]) -> str:
+    """Build a compact context string from financial records (caps at 50)."""
+    if not records:
+        return "No financial data found."
+
+    lines = [f"Financial Data ({len(records)} records):"]
+    by_company: Dict[str, List[FinancialDataRecord]] = {}
+
+    for record in records[:50]:
+        company = record.company or record.symbol
+        if company not in by_company:
+            by_company[company] = []
+        by_company[company].append(record)
+
+    for company, company_records in by_company.items():
+        lines.append(f"\n{company}:")
+        for r in company_records:
+            year = r.year or "N/A"
+            metric = r.standard_item or "metric"
+            if r.item is not None:
+                if abs(r.item) >= 1_000_000:
+                    formatted = f"${r.item/1_000_000:,.2f}M"
+                elif abs(r.item) >= 1_000:
+                    formatted = f"${r.item/1_000:,.2f}K"
+                else:
+                    formatted = f"{r.item:,.2f}"
+                lines.append(f"  - {metric} ({year}): {formatted}")
+            else:
+                lines.append(f"  - {metric} ({year}): {r.formatted_value}")
+
+    return "\n".join(lines)
