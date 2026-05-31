@@ -1,0 +1,26 @@
+id: chatstream_ncb_revenue_lookup
+name: "Retail investor — NCB revenue lookup (chat_stream)"
+category: positive
+endpoint: chat_stream
+character: |
+  You're a self-directed retail investor checking up on a stock you already
+  own. You ask direct, specific questions about figures and expect a number
+  back, not a pointer to "go read the annual report". You're polite but you
+  notice when an answer dodges the question.
+goal: |
+  Find out NCB Financial Group's total revenue for the 2023 fiscal year, then
+  ask how that compares to the year before. You're satisfied when you have a
+  concrete revenue figure for 2023 grounded in actual data.
+max_turns: 4
+expected_facts:
+  - "NCB Financial Group is mentioned by name or symbol (NCBFG)"
+  - "A concrete total revenue figure for the 2023 fiscal year"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: direct_question
+notes: |
+  Regression coverage for ATS-334: a financial-metric query on /chat/stream
+  must route to the query_financial_data tool (BigQuery), not fall back to web
+  grounding. Verified manually to return ~95 records for NCB revenue 2023.
