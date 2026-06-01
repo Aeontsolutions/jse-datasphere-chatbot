@@ -1,0 +1,199 @@
+name: Full Deploy (Infra + App)
+
+# Runs only when BOTH terraform and fastapi_app change in the same push.
+# Sequences: infra staging → app staging → smoke test → infra prod → app prod.
+# For isolated changes use infra.yml or app.yml instead.
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  TF_VERSION: "~1.9"
+  TF_WORKING_DIR: terraform
+  AWS_REGION: us-east-1
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Detect which paths changed ───────────────────────────────────────────────
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      terraform: ${{ steps.filter.outputs.terraform }}
+      app: ${{ steps.filter.outputs.app }}
+      both: ${{ steps.both.outputs.result }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            terraform:
+              - 'terraform/**'
+            app:
+              - 'fastapi_app/**'
+
+      - id: both
+        run: |
+          if [[ "${{ steps.filter.outputs.terraform }}" == "true" && \
+                "${{ steps.filter.outputs.app }}" == "true" ]]; then
+            echo "result=true" >> $GITHUB_OUTPUT
+          else
+            echo "result=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ── Build app image (runs in parallel with infra) ───────────────────────────
+  build:
+    name: Build & Push Image
+    needs: changes
+    if: needs.changes.outputs.both == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.tag }}
+      ecr_url: ${{ steps.login.outputs.registry }}/${{ vars.ECR_REPOSITORY_NAME }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: echo "tag=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Login to ECR
+        id: login
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push
+        env:
+          IMAGE: ${{ steps.login.outputs.registry }}/${{ vars.ECR_REPOSITORY_NAME }}:${{ steps.tag.outputs.tag }}
+        run: |
+          docker build -t "$IMAGE" ./fastapi_app
+          docker push "$IMAGE"
+
+  # ── Infra staging (must complete before app deploy) ──────────────────────────
+  infra-staging:
+    name: Infra → Staging
+    needs: changes
+    if: needs.changes.outputs.both == 'true'
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+      - run: terraform apply -auto-approve -var-file=environments/staging.tfvars
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+  # ── App staging (waits for infra AND image build) ───────────────────────────
+  app-staging:
+    name: App → Staging
+    needs: [infra-staging, build]
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Rolling deploy
+        env:
+          CLUSTER: jse-datasphere-staging
+          SERVICE: api
+          IMAGE: ${{ needs.build.outputs.ecr_url }}:${{ needs.build.outputs.image_tag }}
+          FAMILY: jse-datasphere-staging-api
+        run: |
+          CURRENT=$(aws ecs describe-task-definition --task-definition "$FAMILY" --query 'taskDefinition')
+          NEW_TASKDEF=$(echo "$CURRENT" | jq \
+            --arg IMAGE "$IMAGE" \
+            '.containerDefinitions[0].image = $IMAGE |
+             del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                 .compatibilities, .registeredAt, .registeredBy)')
+          aws ecs register-task-definition --cli-input-json "$NEW_TASKDEF"
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+
+  # ── Smoke test ──────────────────────────────────────────────────────────────
+  smoke-test:
+    name: Smoke test — Staging
+    needs: app-staging
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Health check
+        run: |
+          for i in {1..5}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ vars.STAGING_API_URL }}/health")
+            [ "$STATUS" = "200" ] && exit 0
+            sleep 15
+          done
+          exit 1
+
+  # ── Infra prod ───────────────────────────────────────────────────────────────
+  infra-prod:
+    name: Infra → Prod
+    needs: smoke-test
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+      - run: terraform apply -auto-approve -var-file=environments/prod.tfvars
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+  # ── App prod ─────────────────────────────────────────────────────────────────
+  app-prod:
+    name: App → Prod
+    needs: [infra-prod, build]
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Rolling deploy
+        env:
+          CLUSTER: jse-datasphere-prod
+          SERVICE: api
+          IMAGE: ${{ needs.build.outputs.ecr_url }}:${{ needs.build.outputs.image_tag }}
+          FAMILY: jse-datasphere-prod-api
+        run: |
+          CURRENT=$(aws ecs describe-task-definition --task-definition "$FAMILY" --query 'taskDefinition')
+          NEW_TASKDEF=$(echo "$CURRENT" | jq \
+            --arg IMAGE "$IMAGE" \
+            '.containerDefinitions[0].image = $IMAGE |
+             del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                 .compatibilities, .registeredAt, .registeredBy)')
+          aws ecs register-task-definition --cli-input-json "$NEW_TASKDEF"
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
