@@ -123,35 +123,48 @@ class TestExecuteFinancialQuery:
         assert records == []
         assert chart is None
 
-    def test_non_canonical_symbol_routed_to_companies(self):
-        # The tool only exposes `symbols`, but the model often emits a colloquial
-        # company token ("NCB") that is not a canonical JSE symbol ("NCBFG").
-        # When metadata + associations are present, such tokens must be routed to
-        # the `companies` bucket (fragment-matched by _post_process_filters), NOT
-        # left in `symbols` (exact-matched -> dropped -> WHERE 1=1 over all rows).
+    # Faithful slice of the REAL BigQuery metadata: note the empty-string company
+    # entry ('') — routing "NCB" into the companies bucket collapses onto it and
+    # yields garbage symbols, which is why we resolve to canonical symbols instead.
+    _REAL_META = {
+        "symbols": ["NCBFG", "GK", "EFRESH", "KLE"],
+        "companies": ["", "NCB Financial Group Limited", "Gracekennedy Limited"],
+        "associations": {
+            "company_to_symbol": {
+                "": ["EFRESH", "KLE"],
+                "NCB Financial Group Limited": ["NCBFG"],
+                "Gracekennedy Limited": ["GK"],
+            },
+            "symbol_to_company": {
+                "NCBFG": ["NCB Financial Group Limited"],
+                "GK": ["Gracekennedy Limited"],
+            },
+        },
+    }
+
+    def test_non_canonical_token_resolved_to_canonical_symbol(self):
+        # "NCB" is not a real symbol; it must resolve to NCBFG via the company
+        # name, and stay in `symbols` (NOT be routed to the broken companies path).
         manager = MagicMock()
-        manager.metadata = {
-            "symbols": ["NCBFG", "GK"],
-            "associations": {"symbol_to_company": {}},
-        }
+        manager.metadata = self._REAL_META
         captured = {}
         manager._post_process_filters.side_effect = lambda d: (captured.update(d) or d)
         manager.query_data.return_value = []
 
-        asyncio.run(
+        _, filters, _, _ = asyncio.run(
             execute_financial_query(manager, {"symbols": ["NCB"], "standard_items": ["revenue"]})
         )
 
-        assert captured["symbols"] == []  # NCB is not a known symbol
-        assert captured["companies"] == ["NCB"]  # routed here for fragment match
+        # Resolved before post-processing: symbols=[NCBFG], companies stays empty.
+        assert captured["symbols"] == ["NCBFG"]
+        assert captured["companies"] == []
+        # And NOT the all-companies-leak symbols the old routing produced.
+        assert "EFRESH" not in captured["symbols"]
 
-    def test_canonical_symbol_kept_in_symbols(self):
-        # A real trading symbol (GK) must stay in `symbols`, not get moved.
+    def test_canonical_symbol_passed_through(self):
+        # A real trading symbol (GK) is kept exactly, no rewrite.
         manager = MagicMock()
-        manager.metadata = {
-            "symbols": ["NCBFG", "GK"],
-            "associations": {"symbol_to_company": {}},
-        }
+        manager.metadata = self._REAL_META
         captured = {}
         manager._post_process_filters.side_effect = lambda d: (captured.update(d) or d)
         manager.query_data.return_value = []
@@ -161,9 +174,22 @@ class TestExecuteFinancialQuery:
         assert captured["symbols"] == ["GK"]
         assert captured["companies"] == []
 
+    def test_unresolvable_token_preserved(self):
+        # A token matching no symbol and no company name is preserved unchanged
+        # (downstream exact-match will simply find nothing — no all-rows leak here).
+        manager = MagicMock()
+        manager.metadata = self._REAL_META
+        captured = {}
+        manager._post_process_filters.side_effect = lambda d: (captured.update(d) or d)
+        manager.query_data.return_value = []
+
+        asyncio.run(execute_financial_query(manager, {"symbols": ["ZZZZ"]}))
+
+        assert captured["symbols"] == ["ZZZZ"]
+
     def test_no_metadata_keeps_tokens_in_symbols(self):
-        # No metadata/associations -> cannot resolve companies, so DO NOT reroute;
-        # preserve the original behavior (token stays in symbols). No regression.
+        # No metadata -> cannot resolve, so preserve the original token in symbols
+        # (no regression to the metadata-less path).
         manager = MagicMock()
         manager.metadata = {}
         manager.query_data.return_value = []

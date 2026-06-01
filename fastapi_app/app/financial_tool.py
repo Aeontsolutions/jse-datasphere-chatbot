@@ -81,6 +81,48 @@ def extract_query_financial_data_call(response: Any) -> Optional[Any]:
     return None
 
 
+def _resolve_to_canonical_symbols(symbols: List[str], financial_manager: Any) -> List[str]:
+    """Map colloquial company tokens to canonical JSE trading symbols.
+
+    Tokens already matching a known symbol (e.g. "GK", "NCBFG") are kept as-is.
+    An unrecognized token (e.g. "NCB") is matched as a fragment against company
+    NAMES and mapped to that company's symbol via company_to_symbol (e.g.
+    "NCB" -> "NCB Financial Group Limited" -> "NCBFG"). Empty-string company
+    keys in the metadata are ignored. If metadata/associations are unavailable
+    or no match is found, the original token is preserved unchanged.
+    """
+    metadata = getattr(financial_manager, "metadata", None) or {}
+    known_symbols = {s.upper() for s in metadata.get("symbols", []) if s}
+    if not known_symbols:
+        return symbols
+    associations = metadata.get("associations") or {}
+    company_to_symbol = associations.get("company_to_symbol") or {}
+
+    resolved: List[str] = []
+    for token in symbols:
+        if token in known_symbols:
+            resolved.append(token)
+            continue
+        # Unrecognized: fragment-match against company names (skip empty keys).
+        matched_symbols: List[str] = []
+        for company, syms in company_to_symbol.items():
+            if company and token.lower() in company.lower():
+                matched_symbols.extend(s.upper() for s in syms if s)
+        if matched_symbols:
+            resolved.extend(matched_symbols)
+        else:
+            resolved.append(token)  # preserve; let downstream handle/limit it
+
+    # De-dup while preserving order.
+    seen: set = set()
+    deduped = []
+    for s in resolved:
+        if s not in seen:
+            seen.add(s)
+            deduped.append(s)
+    return deduped
+
+
 async def execute_financial_query(
     financial_manager: Any,
     args: Dict[str, Any],
@@ -104,30 +146,22 @@ async def execute_financial_query(
         # The query_financial_data tool only exposes `symbols`, but the model
         # often emits a colloquial company token ("NCB") that is not a canonical
         # JSE trading symbol ("NCBFG"). _post_process_filters matches `symbols` by
-        # EXACT match (so "NCB" is dropped -> empty -> WHERE 1=1 over all rows) but
-        # matches `companies` by FRAGMENT ("ncb" in "ncb financial group limited").
-        # So: keep tokens that ARE known symbols in `symbols`; route the rest into
-        # `companies` to be resolved. Only when metadata is available to tell the
-        # difference — otherwise preserve the original tokens in `symbols`.
-        companies: List[str] = []
-        metadata = getattr(financial_manager, "metadata", None) or {}
-        known_symbols = {s.upper() for s in metadata.get("symbols", [])}
-        if known_symbols:
-            recognized = [s for s in symbols if s in known_symbols]
-            unrecognized = [s for s in symbols if s not in known_symbols]
-            if unrecognized:
-                symbols = recognized
-                companies = unrecognized
+        # EXACT match, so an unrecognized token is dropped -> empty filter ->
+        # WHERE 1=1 over all companies. (Routing it to `companies` instead is
+        # worse: that path's fragment matcher collapses "NCB" onto an empty-string
+        # company entry in the metadata and yields garbage symbols.) The reliable
+        # path is symbols: so resolve any unrecognized token to its canonical
+        # symbol here via company_to_symbol (fragment match on the company NAME),
+        # and keep everything in `symbols`. Gated on metadata, so behavior is
+        # unchanged when it is absent (no regression).
+        symbols = _resolve_to_canonical_symbols(symbols, financial_manager)
 
         filters = FinancialDataFilters(
-            companies=companies,
+            companies=[],
             symbols=symbols,
             years=years,
             standard_items=standard_items,
-            interpretation=(
-                f"Agent query: symbols={symbols}, companies={companies}, "
-                f"years={years}, items={standard_items}"
-            ),
+            interpretation=f"Agent query: symbols={symbols}, years={years}, items={standard_items}",
             data_availability_note="",
             is_follow_up=False,
             context_used="",
