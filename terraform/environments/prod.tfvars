@@ -1,5 +1,6 @@
-environment = "prod"
-aws_region  = "us-east-1" # TODO: set your region
+environment    = "prod"
+aws_region     = "us-east-1" # TODO: set your region
+nat_gateway_ha = true         # one NAT GW per AZ for prod HA (~$32/month extra)
 
 task_cpu    = 1024
 task_memory = 2048

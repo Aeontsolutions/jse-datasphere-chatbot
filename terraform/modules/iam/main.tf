@@ -27,12 +27,21 @@ resource "aws_iam_role_policy" "execution_ssm" {
   role = aws_iam_role.execution.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = ["ssm:GetParameters", "ssm:GetParameter"]
-      # Scoped to this project/environment's secret namespace
-      Resource = "arn:aws:ssm:*:*:parameter/${var.project}/${var.environment}/*"
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["ssm:GetParameters", "ssm:GetParameter"]
+        # Scoped to this project/environment's secret namespace
+        Resource = "arn:aws:ssm:*:*:parameter/${var.project}/${var.environment}/*"
+      },
+      {
+        # Required to decrypt SecureString parameters — without this ECS tasks
+        # fail to start with "AccessDeniedException" when pulling secrets.
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = "*"
+      }
+    ]
   })
 }
 

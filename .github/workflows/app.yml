@@ -18,6 +18,7 @@ env:
 permissions:
   contents: read
   pull-requests: write
+  id-token: write   # required for OIDC
 
 jobs:
   # ── PR: run tests ───────────────────────────────────────────────────────────
@@ -60,10 +61,10 @@ jobs:
       - id: tag
         run: echo "tag=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.TF_AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
@@ -76,7 +77,6 @@ jobs:
         run: |
           docker build -t "$IMAGE" ./fastapi_app
           docker push "$IMAGE"
-          # Also tag as latest for Terraform default
           docker tag "$IMAGE" \
             ${{ steps.login.outputs.registry }}/${{ vars.ECR_REPOSITORY_NAME }}:latest
           docker push \
@@ -90,20 +90,17 @@ jobs:
     environment: staging
 
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.TF_AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Update ECS task definition
         env:
           IMAGE: ${{ needs.build.outputs.ecr_url }}:${{ needs.build.outputs.image_tag }}
-          CLUSTER: jse-datasphere-staging
-          SERVICE: api
           FAMILY: jse-datasphere-staging-api
         run: |
-          # Fetch current task definition, update image, register new revision
           CURRENT=$(aws ecs describe-task-definition --task-definition "$FAMILY" --query 'taskDefinition')
           NEW_TASKDEF=$(echo "$CURRENT" | jq \
             --arg IMAGE "$IMAGE" \
@@ -123,7 +120,6 @@ jobs:
             --cluster "$CLUSTER" \
             --service "$SERVICE" \
             --force-new-deployment
-
           aws ecs wait services-stable \
             --cluster "$CLUSTER" \
             --services "$SERVICE"
@@ -155,10 +151,10 @@ jobs:
     environment: production
 
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.TF_AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Update ECS task definition
@@ -185,7 +181,6 @@ jobs:
             --cluster "$CLUSTER" \
             --service "$SERVICE" \
             --force-new-deployment
-
           aws ecs wait services-stable \
             --cluster "$CLUSTER" \
             --services "$SERVICE"

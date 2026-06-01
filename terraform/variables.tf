@@ -19,6 +19,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "nat_gateway_ha" {
+  description = "Deploy one NAT Gateway per AZ (recommended for prod, adds ~$32/month per extra gateway)"
+  type        = bool
+  default     = false
+}
+
 variable "vpc_cidr" {
   description = "CIDR block for the environment VPC"
   type        = string

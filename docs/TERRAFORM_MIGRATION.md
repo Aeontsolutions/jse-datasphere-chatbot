@@ -201,55 +201,95 @@ curl http://<staging_alb_dns>/health
 
 ---
 
-## Step 6 — Set up GitHub secrets and variables
+## Step 6 — Set up GitHub OIDC and variables
 
-In your GitHub repo → **Settings → Secrets and variables → Actions**:
+The workflows use **AWS OIDC** (OpenID Connect) instead of long-lived IAM access keys.
+GitHub Actions assumes a short-lived IAM role directly — no stored credentials,
+no rotation needed, no leakage risk.
 
-### Secrets (sensitive, never shown in logs)
-| Secret name | Value |
-|---|---|
-| `TF_AWS_ACCESS_KEY_ID` | IAM access key for a dedicated `terraform-ci` user |
-| `TF_AWS_SECRET_ACCESS_KEY` | Corresponding secret key |
-
-### Variables (non-sensitive, visible in logs)
-| Variable name | Value |
-|---|---|
-| `ECR_REPOSITORY_NAME` | `jse-datasphere-api` |
-| `STAGING_API_URL` | `https://staging.yourdomain.com` (or raw ALB DNS) |
-
-### Create the `terraform-ci` IAM user
-
-This user needs only what Terraform requires — don't use your personal key:
+### 6a — Create the OIDC provider in AWS (one-time per account)
 
 ```bash
-aws iam create-user --user-name terraform-ci
-aws iam create-access-key --user-name terraform-ci
-# Save the output — you will not see the secret again
+# Check if the provider already exists first
+aws iam list-open-id-connect-providers \
+  --query 'OpenIDConnectProviderList[*].Arn' --output text
 
-# Attach the policies Terraform needs (adjust as your resources expand)
-aws iam attach-user-policy --user-name terraform-ci \
-  --policy-arn arn:aws:iam::aws:policy/AmazonEC2FullAccess
-aws iam attach-user-policy --user-name terraform-ci \
-  --policy-arn arn:aws:iam::aws:policy/AmazonECS_FullAccess
-aws iam attach-user-policy --user-name terraform-ci \
-  --policy-arn arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess
-aws iam attach-user-policy --user-name terraform-ci \
-  --policy-arn arn:aws:iam::aws:policy/AmazonElastiCacheFullAccess
-aws iam attach-user-policy --user-name terraform-ci \
-  --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
-aws iam attach-user-policy --user-name terraform-ci \
-  --policy-arn arn:aws:iam::aws:policy/AmazonSSMFullAccess
-aws iam attach-user-policy --user-name terraform-ci \
-  --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
-aws iam attach-user-policy --user-name terraform-ci \
-  --policy-arn arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
-aws iam attach-user-policy --user-name terraform-ci \
-  --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess
-aws iam attach-user-policy --user-name terraform-ci \
-  --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+# Create it if not present
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com \
+  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
 ```
 
-### Create GitHub Environments
+### 6b — Create the IAM role GitHub Actions will assume
+
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REPO="Aeontsolutions/jse-datasphere-chatbot"
+
+# Trust policy: only this repo's main branch and PRs can assume the role
+cat > /tmp/trust-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Federated": "arn:aws:iam::${ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com"
+    },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+      },
+      "StringLike": {
+        "token.actions.githubusercontent.com:sub": "repo:${REPO}:*"
+      }
+    }
+  }]
+}
+EOF
+
+aws iam create-role \
+  --role-name jse-datasphere-github-actions \
+  --assume-role-policy-document file:///tmp/trust-policy.json
+
+# Attach the permissions Terraform + ECS deploys need
+for POLICY in \
+  AmazonEC2FullAccess \
+  AmazonECS_FullAccess \
+  ElasticLoadBalancingFullAccess \
+  AmazonElastiCacheFullAccess \
+  IAMFullAccess \
+  AmazonSSMFullAccess \
+  AmazonS3FullAccess \
+  AmazonDynamoDBFullAccess \
+  AmazonEC2ContainerRegistryFullAccess \
+  CloudWatchLogsFullAccess; do
+  aws iam attach-role-policy \
+    --role-name jse-datasphere-github-actions \
+    --policy-arn "arn:aws:iam::aws:policy/${POLICY}"
+done
+
+echo "Role ARN: arn:aws:iam::${ACCOUNT_ID}:role/jse-datasphere-github-actions"
+```
+
+> **Note on permissions:** The `*FullAccess` policies are a pragmatic starting point.
+> Once the infrastructure is stable, tighten these to least-privilege using
+> AWS IAM Access Analyzer to identify what's actually used.
+
+### 6c — Add GitHub Variables
+
+In your GitHub repo → **Settings → Secrets and variables → Actions → Variables**:
+
+| Variable name | Value |
+|---|---|
+| `TF_AWS_ROLE_ARN` | `arn:aws:iam::ACCOUNT_ID:role/jse-datasphere-github-actions` |
+| `ECR_REPOSITORY_NAME` | `jse-datasphere-api` |
+| `STAGING_API_URL` | `https://staging.yourdomain.com` (or raw ALB DNS once deployed) |
+
+No secrets needed — OIDC eliminates stored credentials entirely.
+
+### 6d — Create GitHub Environments
 
 In GitHub repo → **Settings → Environments**, create:
 - `staging` — no protection rules (auto-deploys)

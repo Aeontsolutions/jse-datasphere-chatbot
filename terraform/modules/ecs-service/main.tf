@@ -232,13 +232,11 @@ resource "aws_ecs_task_definition" "api" {
         }
       }
 
-      healthCheck = {
-        command     = ["CMD-SHELL", "curl -f http://localhost:${var.app_port}/health || exit 1"]
-        interval    = 30
-        timeout     = 10
-        retries     = 3
-        startPeriod = 30
-      }
+      # Container-level health check intentionally omitted: the ALB target group
+      # already checks /health every 30s. A redundant container check would also
+      # fail on slim Python images that don't include curl.
+      # TODO: If ChromaDB persistence is required across task restarts, mount an
+      # EFS volume here instead of relying on ephemeral /app/chroma_db storage.
     }
   ])
 }

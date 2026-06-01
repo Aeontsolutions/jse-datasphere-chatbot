@@ -34,11 +34,12 @@ provider "aws" {
 # ---------------------------------------------------------------------------
 
 module "networking" {
-  source      = "./modules/networking"
-  project     = var.project
-  environment = var.environment
-  aws_region  = var.aws_region
-  vpc_cidr    = var.vpc_cidr
+  source         = "./modules/networking"
+  project        = var.project
+  environment    = var.environment
+  aws_region     = var.aws_region
+  vpc_cidr       = var.vpc_cidr
+  nat_gateway_ha = var.nat_gateway_ha
 }
 
 module "iam" {
@@ -49,12 +50,22 @@ module "iam" {
 }
 
 module "redis" {
-  source             = "./modules/redis"
-  project            = var.project
-  environment        = var.environment
-  vpc_id             = module.networking.vpc_id
-  subnet_ids         = module.networking.private_subnet_ids
-  ecs_security_group = module.ecs_service.ecs_security_group_id
+  source      = "./modules/redis"
+  project     = var.project
+  environment = var.environment
+  vpc_id      = module.networking.vpc_id
+  subnet_ids  = module.networking.private_subnet_ids
+}
+
+# Security group rule defined here to break the circular dependency:
+# redis module needs ecs_service SG id, ecs_service module needs redis URL.
+resource "aws_security_group_rule" "ecs_to_redis" {
+  type                     = "ingress"
+  from_port                = 6379
+  to_port                  = 6379
+  protocol                 = "tcp"
+  security_group_id        = module.redis.security_group_id
+  source_security_group_id = module.ecs_service.ecs_security_group_id
 }
 
 module "ecs_service" {
