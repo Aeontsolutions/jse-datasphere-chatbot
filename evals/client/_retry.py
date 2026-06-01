@@ -31,7 +31,7 @@ async def send_with_retry(
     for attempt in range(max_retries + 1):
         try:
             return await fn()
-        except (httpx.ReadTimeout, httpx.ConnectError) as exc:
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
             if attempt == max_retries:
                 raise
             _log_retry(attempt, max_retries, label, type(exc).__name__)
