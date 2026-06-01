@@ -9,7 +9,7 @@ from evals.judge import (
     DimensionScore, FactfulnessScore, JudgeOutput, JudgeScores, ToolUseScore,
 )
 from evals.persona import PersonaSpec
-from evals.report import write_run
+from evals.report import write_conversation, write_run
 from evals.runner import ConversationArtifact, RunArtifacts
 from evals.transcript import ChatTurn, TerminationReason, Transcript
 
@@ -279,3 +279,91 @@ def test_write_conversation_creates_json_file(tmp_path: Path):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["conversation_id"] == "p1__rep01"
     assert data["endpoint"] == "fast_chat_v2"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: load_conversation_artifacts + write_run skip guard
+# ---------------------------------------------------------------------------
+
+def test_load_conversation_artifacts_roundtrip(tmp_path: Path):
+    from evals.report import load_conversation_artifacts
+
+    run_dir = tmp_path / "run1"
+    (run_dir / "conversations").mkdir(parents=True)
+
+    artifact = ConversationArtifact(_transcript("p1", 0), _judge(), False, None)
+    write_conversation(run_dir, artifact, _persona("p1"))
+
+    loaded, ids = load_conversation_artifacts(run_dir)
+
+    assert ids == {"p1__rep01"}
+    assert len(loaded) == 1
+    la = loaded[0]
+    assert la.transcript.conversation_id == "p1__rep01"
+    assert la.transcript.persona_id == "p1"
+    assert la.transcript.replicate_index == 0
+    assert la.transcript.endpoint == "fast_chat_v2"
+    assert la.judge_output is not None
+    assert la.judge_output.verdict == "pass"
+    assert la.judge_failed is False
+
+
+def test_load_conversation_artifacts_empty_dir(tmp_path: Path):
+    from evals.report import load_conversation_artifacts
+
+    run_dir = tmp_path / "run1"
+    (run_dir / "conversations").mkdir(parents=True)
+
+    loaded, ids = load_conversation_artifacts(run_dir)
+
+    assert loaded == []
+    assert ids == set()
+
+
+def test_load_conversation_artifacts_missing_dir(tmp_path: Path):
+    from evals.report import load_conversation_artifacts
+
+    run_dir = tmp_path / "run1"
+    run_dir.mkdir()
+
+    loaded, ids = load_conversation_artifacts(run_dir)
+
+    assert loaded == []
+    assert ids == set()
+
+
+def test_load_conversation_artifacts_skips_corrupt_file(tmp_path: Path):
+    from evals.report import load_conversation_artifacts
+
+    run_dir = tmp_path / "run1"
+    (run_dir / "conversations").mkdir(parents=True)
+    (run_dir / "conversations" / "bad.json").write_text("not json", encoding="utf-8")
+
+    artifact = ConversationArtifact(_transcript("p1", 0), None, False, None)
+    write_conversation(run_dir, artifact, _persona("p1"))
+
+    loaded, ids = load_conversation_artifacts(run_dir)
+
+    assert ids == {"p1__rep01"}
+    assert len(loaded) == 1
+
+
+def test_write_run_skips_existing_conversation_files(tmp_path: Path):
+    run_dir = tmp_path / "run1"
+    (run_dir / "conversations").mkdir(parents=True)
+
+    existing = run_dir / "conversations" / "p1__rep01.json"
+    existing.write_text('{"pre_existing": true}', encoding="utf-8")
+
+    artifact = ConversationArtifact(_transcript("p1", 0), None, False, None)
+    write_run(
+        artifacts=RunArtifacts(conversations=[artifact], cost_capped=False),
+        personas=[_persona()],
+        config={},
+        run_id="run1",
+        git_sha=None,
+        output_root=tmp_path,
+    )
+
+    data = json.loads(existing.read_text(encoding="utf-8"))
+    assert data.get("pre_existing") is True

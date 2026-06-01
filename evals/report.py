@@ -12,6 +12,7 @@ from typing import Any
 from evals.judge import JudgeOutput
 from evals.persona import PersonaSpec
 from evals.runner import ConversationArtifact, RunArtifacts
+from evals.transcript import ChatTurn, TerminationReason, Transcript
 
 
 def write_run(
@@ -47,6 +48,8 @@ def write_run(
     for c in artifacts.conversations:
         persona = persona_by_id.get(c.transcript.persona_id)
         path = run_dir / "conversations" / f"{c.transcript.conversation_id}.json"
+        if path.exists():
+            continue
         path.write_text(
             json.dumps(_convo_payload(c, persona), indent=2),
             encoding="utf-8",
@@ -88,6 +91,48 @@ def write_conversation(
     """Write a single conversation artifact to conversations/<id>.json."""
     path = run_dir / "conversations" / f"{artifact.transcript.conversation_id}.json"
     path.write_text(json.dumps(_convo_payload(artifact, persona), indent=2), encoding="utf-8")
+
+
+def load_conversation_artifacts(
+    run_dir: Path,
+) -> tuple[list[ConversationArtifact], set[str]]:
+    """Load completed conversation artifacts from a partial or crashed run."""
+    convos_dir = run_dir / "conversations"
+    artifacts: list[ConversationArtifact] = []
+    ids: set[str] = set()
+    if not convos_dir.exists():
+        return artifacts, ids
+    for path in sorted(convos_dir.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            artifacts.append(_artifact_from_payload(payload))
+            ids.add(payload["conversation_id"])
+        except Exception as exc:
+            print(f"WARNING: skipping unreadable conversation file {path.name}: {exc}", file=sys.stderr)
+    return artifacts, ids
+
+
+def _artifact_from_payload(payload: dict[str, Any]) -> ConversationArtifact:
+    persona_data = payload.get("persona") or {}
+    persona_id = persona_data.get("id") or payload["conversation_id"].rsplit("__rep", 1)[0]
+    rep_str = payload["conversation_id"].rsplit("__rep", 1)[-1]
+    replicate_index = int(rep_str) - 1
+
+    transcript = Transcript(
+        conversation_id=payload["conversation_id"],
+        persona_id=persona_id,
+        replicate_index=replicate_index,
+        endpoint=payload["endpoint"],
+        turns=[ChatTurn.model_validate(t) for t in payload["turns"]],
+        termination=TerminationReason.model_validate(payload["termination"]),
+    )
+
+    judge_data = payload.get("judge")
+    if judge_data is None:
+        return ConversationArtifact(transcript, None, False, None)
+    if judge_data.get("judge_failed"):
+        return ConversationArtifact(transcript, None, True, judge_data.get("error"))
+    return ConversationArtifact(transcript, JudgeOutput.model_validate(judge_data), False, None)
 
 
 def _detect_replicates(artifacts: RunArtifacts) -> int:
