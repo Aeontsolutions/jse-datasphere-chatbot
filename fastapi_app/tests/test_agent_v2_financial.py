@@ -1,4 +1,12 @@
-"""Tests for the AgentV2 financial-data path (ATS-334)."""
+"""Tests for the AgentV2 financial-data path (ATS-334).
+
+The financial path is two-step ("route then force"): a cheap flash ROUTE call
+classifies the question FINANCIAL vs OTHER (plain text, no tools); only when
+FINANCIAL does a second flash call force a query_financial_data extraction
+(mode=ANY). This fixes flash's reluctance to call the tool in a single AUTO step
+(see the ATS-334 eval finding). Non-financial questions fall through to the
+unchanged web/plain path.
+"""
 
 import asyncio
 from unittest.mock import MagicMock, patch
@@ -63,8 +71,17 @@ def _record():
 # counts, and a bare MagicMock attribute would crash PhaseCost validation.
 
 
+def _route_response(decision="FINANCIAL"):
+    """Step-1 ROUTE response: plain-text FINANCIAL / OTHER, no function call."""
+    resp = MagicMock()
+    resp.text = decision
+    resp.candidates = []
+    resp.usage_metadata = None
+    return resp
+
+
 def _fc_response(args=None):
-    """Phase-A response that calls query_financial_data."""
+    """Step-2 EXTRACT response: forces a query_financial_data function call."""
     fc = MagicMock()
     fc.name = "query_financial_data"
     fc.args = (
@@ -85,15 +102,6 @@ def _fc_response(args=None):
     return resp
 
 
-def _decline_response():
-    """Phase-A response with no function call (model declined)."""
-    resp = MagicMock()
-    resp.candidates = []
-    resp.text = "I can help with that."
-    resp.usage_metadata = None
-    return resp
-
-
 def _text_response(text):
     resp = MagicMock()
     resp.text = text
@@ -109,8 +117,10 @@ def _mock_manager(records):
     return mgr
 
 
-def test_financial_path_calls_tool_and_synthesizes(mock_genai_client):
+def test_financial_path_routes_extracts_and_synthesizes(mock_genai_client):
+    # route=FINANCIAL -> force-extract (tool call) -> synthesize = 3 LLM calls.
     mock_genai_client.models.generate_content.side_effect = [
+        _route_response("FINANCIAL"),
         _fc_response(),
         _text_response("NCB's 2023 revenue was J$123.5M."),
     ]
@@ -122,12 +132,13 @@ def test_financial_path_calls_tool_and_synthesizes(mock_genai_client):
     assert result["filters_used"].symbols == ["NCB"]
     assert result["data_preview"] and len(result["data_preview"]) == 1
     assert "123.5M" in result["response"]
-    assert mock_genai_client.models.generate_content.call_count == 2
+    assert mock_genai_client.models.generate_content.call_count == 3
 
 
-def test_decline_falls_through_to_web(mock_genai_client):
+def test_route_other_skips_extraction_and_falls_through_to_web(mock_genai_client):
+    # route=OTHER -> NO extraction call, NO query_data; web path runs (route + web).
     mock_genai_client.models.generate_content.side_effect = [
-        _decline_response(),
+        _route_response("OTHER"),
         _text_response("Here is some recent JSE news."),
     ]
     agent = AgentV2(financial_manager=_mock_manager([]))
@@ -136,6 +147,29 @@ def test_decline_falls_through_to_web(mock_genai_client):
     assert result["response"] == "Here is some recent JSE news."
     assert "query_financial_data" not in (result.get("tools_executed") or [])
     agent.financial_manager.query_data.assert_not_called()
+    assert mock_genai_client.models.generate_content.call_count == 2
+
+
+def test_route_then_force_extraction_uses_mode_any(mock_genai_client):
+    # The ROUTE call passes no tools; the EXTRACT call forces the financial tool.
+    mock_genai_client.models.generate_content.side_effect = [
+        _route_response("FINANCIAL"),
+        _fc_response(),
+        _text_response("answer"),
+    ]
+    agent = AgentV2(financial_manager=_mock_manager([_record()]))
+    asyncio.run(agent.run(query="NCB revenue 2023?"))
+
+    calls = mock_genai_client.models.generate_content.call_args_list
+    assert len(calls) == 3
+    route_cfg = calls[0].kwargs["config"]
+    extract_cfg = calls[1].kwargs["config"]
+    # ROUTE call uses flash and no tools (pure classification).
+    assert calls[0].kwargs["model"] == "gemini-2.5-flash"
+    assert route_cfg.tools is None
+    # EXTRACT call forces the query_financial_data tool with mode=ANY.
+    assert extract_cfg.tools is not None
+    assert "ANY" in str(extract_cfg.tool_config.function_calling_config.mode)
 
 
 def test_enable_financial_false_skips_financial(mock_genai_client):
@@ -145,6 +179,7 @@ def test_enable_financial_false_skips_financial(mock_genai_client):
     result = asyncio.run(agent.run(query="What was NCB revenue?", enable_financial_data=False))
 
     mgr.query_data.assert_not_called()
+    # No route call either — financial path never entered.
     assert mock_genai_client.models.generate_content.call_count == 1
     assert result["response"] == "web answer"
 
@@ -157,22 +192,12 @@ def test_no_manager_skips_financial(mock_genai_client):
     assert mock_genai_client.models.generate_content.call_count == 1
 
 
-def test_financial_phase_a_uses_flash_model(mock_genai_client):
-    mock_genai_client.models.generate_content.side_effect = [
-        _fc_response(),
-        _text_response("answer"),
-    ]
-    agent = AgentV2(financial_manager=_mock_manager([_record()]))
-    asyncio.run(agent.run(query="NCB revenue 2023?"))
-    first_call_kwargs = mock_genai_client.models.generate_content.call_args_list[0].kwargs
-    assert first_call_kwargs["model"] == "gemini-2.5-flash"
-
-
 def test_financial_error_falls_through_to_web(mock_genai_client):
-    # Phase A calls the tool, but the BigQuery query raises -> _try_financial
-    # returns None -> run() must fall through to the web/plain path (graceful
-    # degradation: BigQuery being down must not break /chat/stream).
+    # route=FINANCIAL, extraction succeeds, but the BigQuery query raises ->
+    # _try_financial returns None -> run() falls through to the web/plain path
+    # (graceful degradation: BigQuery being down must not break /chat/stream).
     mock_genai_client.models.generate_content.side_effect = [
+        _route_response("FINANCIAL"),
         _fc_response(),
         _text_response("web fallback answer"),
     ]
@@ -184,5 +209,5 @@ def test_financial_error_falls_through_to_web(mock_genai_client):
 
     assert result["response"] == "web fallback answer"
     assert "query_financial_data" not in (result.get("tools_executed") or [])
-    # Both calls happened: Phase-A decision (flash) + web fallback
-    assert mock_genai_client.models.generate_content.call_count == 2
+    # route + extract + web fallback
+    assert mock_genai_client.models.generate_content.call_count == 3

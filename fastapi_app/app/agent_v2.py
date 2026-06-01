@@ -80,19 +80,31 @@ SYSTEM_PROMPT_NO_SEARCH = SYSTEM_PROMPT.replace(
     "\nYou have web search access for current market data.", ""
 )
 
-# Model used for the cheap financial decide/extract call (Phase A).
+# Model used for the cheap financial route + extract calls (Phase A).
 FINANCIAL_DECISION_MODEL = "gemini-2.5-flash"
 
-# Phase-A system prompt: decide whether the question is a JSE financial-metric
-# lookup and, if so, call query_financial_data. {metadata_context} is filled with
-# available symbols/years so extracted symbols are valid.
-FINANCIAL_DECISION_PROMPT = """You decide whether a user's question can be answered from the Jamaica Stock Exchange (JSE) financial-statement database.
+# Phase-A step 1 — ROUTE: a plain-text classifier (no tools) that decides whether
+# the question is a JSE financial-metric lookup. Kept separate from extraction
+# because a single AUTO function-calling step makes flash too reluctant to call
+# the tool (ATS-334 eval finding); a forced extraction follows only on FINANCIAL.
+FINANCIAL_ROUTER_PROMPT = """You are a router for a Jamaica Stock Exchange (JSE) assistant. Classify the user's latest question into exactly one label.
 
-Call the query_financial_data tool ONLY when the user asks for specific company financial metrics (revenue, profit, EPS, margins, assets, liabilities, ratios) for JSE-listed companies, optionally for specific years.
+Reply with a single word — no punctuation, no explanation:
 
-Do NOT call the tool for: news, announcements, qualitative or opinion questions, market commentary, current stock prices, IPO timelines, or anything outside the metric list. If the question is not a financial-metric lookup, do not call the tool at all.
+FINANCIAL — the user asks for specific company financial metrics from financial statements (revenue, profit, net profit, gross/operating profit, EPS, margins, assets, liabilities, shareholders' equity, ROE, ROA, ratios), optionally for specific years or compared across companies. Examples: "What was NCB's revenue in 2023?", "Compare GraceKennedy and NCB net profit", "Wisynco EPS last year".
 
-When you call the tool, use uppercase trading symbols.
+OTHER — anything else: news, announcements, current stock prices, IPO timelines, qualitative/opinion/strategy questions, market commentary, definitions, or non-JSE topics.
+
+When in doubt between FINANCIAL and OTHER for a question that names a JSE company and a financial metric, choose FINANCIAL.
+
+Output only: FINANCIAL or OTHER"""
+
+# Phase-A step 2 — EXTRACT: runs only when the router said FINANCIAL. The tool is
+# FORCED (mode=ANY), so flash must emit query_financial_data args rather than
+# deciding whether to call it. {metadata_context} supplies valid symbols/years.
+FINANCIAL_EXTRACTION_PROMPT = """Extract JSE financial-data query parameters from the user's question and call query_financial_data.
+
+Use uppercase trading symbols. Include the years the user asked for (or implied); if none are specified, you may leave years empty. Include the requested metrics as standard_items.
 {metadata_context}"""
 
 # ==============================================================================
@@ -315,37 +327,68 @@ class AgentV2:
         query: str,
         conversation_history: Optional[List[Dict[str, str]]],
     ) -> Optional[Dict[str, Any]]:
-        """Phase A (flash decide/extract) + Phase B (pro synthesize).
+        """Phase A (flash route -> forced extract) + Phase B (pro synthesize).
 
-        Returns a full result dict if query_financial_data was invoked, or None
-        to signal the caller should fall through to the web/plain path (model
-        declined, or the path errored).
+        Step 1 classifies the question FINANCIAL vs OTHER (plain text, no tools);
+        only on FINANCIAL does step 2 force a query_financial_data extraction
+        (mode=ANY). Returns a full result dict if the tool was invoked, or None to
+        signal the caller should fall through to the web/plain path (router said
+        OTHER, extraction produced no call, or the path errored).
         """
         try:
             contents = self._build_contents(conversation_history, query)
-            system_prompt = FINANCIAL_DECISION_PROMPT.format(
-                metadata_context=self._get_metadata_context()
-            )
+            metadata_context = self._get_metadata_context()
 
-            # Phase A: decide + extract (cheap/fast, AUTO function calling)
-            decision = self.client.models.generate_content(
+            # Phase A step 1 — ROUTE: plain-text classify (no tools). Separating
+            # the decision from extraction avoids flash's reluctance to call a
+            # tool in a single AUTO step (ATS-334 eval finding).
+            route = self.client.models.generate_content(
                 model=FINANCIAL_DECISION_MODEL,
                 contents=contents,
                 config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
+                    system_instruction=FINANCIAL_ROUTER_PROMPT,
+                    temperature=0.0,
+                    max_output_tokens=8,
+                ),
+            )
+            self._track_cost(route, "financial_routing", model=FINANCIAL_DECISION_MODEL)
+
+            route_label = (route.text or "").strip().upper()
+            if "FINANCIAL" not in route_label:
+                logger.info(
+                    f"AgentV2 financial: router said '{route_label or 'OTHER'}'; "
+                    "falling through to web"
+                )
+                return None
+
+            # Phase A step 2 — EXTRACT: tool FORCED (mode=ANY) so flash must emit
+            # query_financial_data args rather than choose whether to call it.
+            extraction = self.client.models.generate_content(
+                model=FINANCIAL_DECISION_MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=FINANCIAL_EXTRACTION_PROMPT.format(
+                        metadata_context=metadata_context
+                    ),
                     tools=[get_financial_tool()],
                     tool_config=types.ToolConfig(
-                        function_calling_config=types.FunctionCallingConfig(mode="AUTO")
+                        function_calling_config=types.FunctionCallingConfig(
+                            mode="ANY",
+                            allowed_function_names=["query_financial_data"],
+                        )
                     ),
                     temperature=0.3,
                     max_output_tokens=512,
                 ),
             )
-            self._track_cost(decision, "financial_extraction", model=FINANCIAL_DECISION_MODEL)
+            self._track_cost(extraction, "financial_extraction", model=FINANCIAL_DECISION_MODEL)
 
-            fc = extract_query_financial_data_call(decision)
+            fc = extract_query_financial_data_call(extraction)
             if not fc:
-                logger.info("AgentV2 financial: tool not called; falling through to web")
+                logger.warning(
+                    "AgentV2 financial: router said FINANCIAL but extraction "
+                    "produced no tool call; falling through to web"
+                )
                 return None
 
             args = dict(fc.args) if fc.args else {}
