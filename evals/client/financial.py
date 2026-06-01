@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from evals.client._retry import send_with_retry
 from evals.client.base import ChatClientResult
 from evals.metrics import extract_cost_from_response
 
@@ -29,11 +30,16 @@ class FinancialClient:
             "conversation_history": conversation_history,
             "memory_enabled": api_options.get("memory_enabled", True),
         }
+        url = f"{self._base_url}/fast_chat_v2"
+
+        async def _post() -> dict:
+            async with httpx.AsyncClient(timeout=self._timeout_s) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                return response.json()
+
         start = time.perf_counter()
-        async with httpx.AsyncClient(timeout=self._timeout_s) as client:
-            response = await client.post(f"{self._base_url}/fast_chat_v2", json=payload)
-            response.raise_for_status()
-            data = response.json()
+        data = await send_with_retry(_post, label="/fast_chat_v2")
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         cost = extract_cost_from_response(data)
