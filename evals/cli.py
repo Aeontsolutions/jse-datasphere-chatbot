@@ -126,10 +126,7 @@ async def _amain(ns: argparse.Namespace) -> int:
             return FinancialClient(base_url=config.base_url, timeout_s=config.request_timeout_s)
         return AgentStreamClient(base_url=config.base_url, timeout_s=config.request_timeout_s)
 
-    run_id = ns.run_id or (
-        ns.resume_run_id if ns.resume_run_id
-        else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-    )
+    run_id = ns.resume_run_id or ns.run_id or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
     output_root = Path(ns.output_dir) if ns.output_dir else Path(__file__).parent / "runs"
     run_dir = output_root / run_id
     (run_dir / "conversations").mkdir(parents=True, exist_ok=True)
