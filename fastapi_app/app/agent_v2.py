@@ -16,12 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from google.genai import types
 
-from app.financial_tool import (
-    build_financial_context,
-    execute_financial_query,
-    extract_query_financial_data_call,
-    get_financial_tool,
-)
+from app.financial_tool import build_financial_context, query_and_run
 from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.models import CostSummary, PhaseCost
@@ -98,14 +93,6 @@ OTHER — anything else: news, announcements, current stock prices, IPO timeline
 When in doubt between FINANCIAL and OTHER for a question that names a JSE company and a financial metric, choose FINANCIAL.
 
 Output only: FINANCIAL or OTHER"""
-
-# Phase-A step 2 — EXTRACT: runs only when the router said FINANCIAL. The tool is
-# FORCED (mode=ANY), so flash must emit query_financial_data args rather than
-# deciding whether to call it. {metadata_context} supplies valid symbols/years.
-FINANCIAL_EXTRACTION_PROMPT = """Extract JSE financial-data query parameters from the user's question and call query_financial_data.
-
-Use uppercase trading symbols. Include the years the user asked for (or implied); if none are specified, you may leave years empty. Include the requested metrics as standard_items.
-{metadata_context}"""
 
 # ==============================================================================
 # AGENT V2 - Simple Google Search Grounding
@@ -337,7 +324,6 @@ class AgentV2:
         """
         try:
             contents = self._build_contents(conversation_history, query)
-            metadata_context = self._get_metadata_context()
 
             # Phase A step 1 — ROUTE: plain-text classify (no tools). Separating
             # the decision from extraction avoids flash's reluctance to call a
@@ -366,40 +352,21 @@ class AgentV2:
                 )
                 return None
 
-            # Phase A step 2 — EXTRACT: tool FORCED (mode=ANY) so flash must emit
-            # query_financial_data args rather than choose whether to call it.
-            extraction = self.client.models.generate_content(
-                model=FINANCIAL_DECISION_MODEL,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=FINANCIAL_EXTRACTION_PROMPT.format(
-                        metadata_context=metadata_context
-                    ),
-                    tools=[get_financial_tool()],
-                    tool_config=types.ToolConfig(
-                        function_calling_config=types.FunctionCallingConfig(
-                            mode="ANY",
-                            allowed_function_names=["query_financial_data"],
-                        )
-                    ),
-                    temperature=0.3,
-                    max_output_tokens=512,
-                ),
+            # Phase A step 2 — EXTRACT + QUERY via the proven parse_user_query
+            # extractor (the same one /fast_chat_v2 uses). It handles full company
+            # names, symbol normalization, metric synonyms, and follow-up/pronoun
+            # resolution far better than a hand-rolled tool-arg parse — and runs
+            # _post_process_filters internally. This also drops a Gemini round-trip.
+            records, filters, chart, sources = await query_and_run(
+                self.financial_manager, query, conversation_history
             )
-            self._track_cost(extraction, "financial_extraction", model=FINANCIAL_DECISION_MODEL)
 
-            fc = extract_query_financial_data_call(extraction)
-            if not fc:
-                logger.warning(
-                    "AgentV2 financial: router said FINANCIAL but extraction "
-                    "produced no tool call; falling through to web"
+            if not records:
+                logger.info(
+                    "AgentV2 financial: router said FINANCIAL but query returned "
+                    "no records; falling through to web"
                 )
                 return None
-
-            args = dict(fc.args) if fc.args else {}
-            records, filters, chart, sources = await execute_financial_query(
-                self.financial_manager, args
-            )
 
             # Phase B: synthesize from the retrieved data only (no tools)
             context = build_financial_context(records)

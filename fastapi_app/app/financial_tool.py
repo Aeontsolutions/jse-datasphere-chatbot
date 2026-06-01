@@ -132,8 +132,6 @@ async def execute_financial_query(
     The BigQuery call (financial_manager.query_data) is synchronous/blocking, so
     it is run via asyncio.to_thread to avoid blocking the event loop.
     """
-    start_time = time.time()
-
     try:
         raw_symbols = args.get("symbols") or []
         raw_years = args.get("years") or []
@@ -173,40 +171,74 @@ async def execute_financial_query(
             filters_dict = financial_manager._post_process_filters(filters_dict)
             filters = FinancialDataFilters(**filters_dict)
 
-        # Query the data (blocking BigQuery call -> off-thread)
-        records = await asyncio.to_thread(financial_manager.query_data, filters)
-
-        # Generate chart if applicable
-        chart_spec = None
-        if records:
-            chart_data = generate_chart(records, "")
-            if chart_data:
-                chart_spec = chart_data
-
-        # Build source citations
-        symbols_str = ", ".join(filters.symbols) if filters.symbols else "all"
-        years_str = ", ".join(filters.years) if filters.years else "all years"
-        source_entry = {
-            "type": "database",
-            "description": f"JSE Financial Database: {symbols_str} ({years_str})",
-            "table": "financial_data",
-        }
-        if filters.symbols:
-            source_entry["symbols"] = filters.symbols
-        if filters.years:
-            source_entry["years"] = filters.years
-        if filters.standard_items:
-            source_entry["metrics"] = filters.standard_items
-        sources = [source_entry]
-
-        duration_ms = (time.time() - start_time) * 1000
-        logger.info(f"Financial query: {len(records)} records in {duration_ms:.2f}ms")
-
-        return records, filters, chart_spec, sources
+        return await run_financial_filters(financial_manager, filters)
 
     except Exception as e:
         logger.error(f"Financial query failed: {e}", exc_info=True)
         raise
+
+
+async def query_and_run(
+    financial_manager: Any,
+    query: str,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+) -> Tuple[List[FinancialDataRecord], FinancialDataFilters, Optional[Dict], List[Dict]]:
+    """Parse a natural-language query into filters via the proven extractor, then run it.
+
+    Uses FinancialDataManager.parse_user_query — the same extractor /fast_chat_v2
+    relies on — instead of a hand-rolled tool-arg parse. It handles full company
+    names, symbol normalization, metric synonyms, follow-up/pronoun resolution,
+    and runs _post_process_filters internally, returning a finished
+    FinancialDataFilters. parse_user_query is synchronous (it makes a blocking
+    Gemini call), so it is run off-thread.
+    """
+    filters = await asyncio.to_thread(
+        financial_manager.parse_user_query, query, conversation_history
+    )
+    return await run_financial_filters(financial_manager, filters)
+
+
+async def run_financial_filters(
+    financial_manager: Any,
+    filters: FinancialDataFilters,
+) -> Tuple[List[FinancialDataRecord], FinancialDataFilters, Optional[Dict], List[Dict]]:
+    """Run an already-built FinancialDataFilters against BigQuery (off-thread).
+
+    Returns (records, filters, chart_spec, sources). The blocking query_data call
+    is wrapped in asyncio.to_thread to avoid blocking the event loop.
+    """
+    start_time = time.time()
+
+    # Query the data (blocking BigQuery call -> off-thread)
+    records = await asyncio.to_thread(financial_manager.query_data, filters)
+
+    # Generate chart if applicable
+    chart_spec = None
+    if records:
+        chart_data = generate_chart(records, "")
+        if chart_data:
+            chart_spec = chart_data
+
+    # Build source citations
+    symbols_str = ", ".join(filters.symbols) if filters.symbols else "all"
+    years_str = ", ".join(filters.years) if filters.years else "all years"
+    source_entry = {
+        "type": "database",
+        "description": f"JSE Financial Database: {symbols_str} ({years_str})",
+        "table": "financial_data",
+    }
+    if filters.symbols:
+        source_entry["symbols"] = filters.symbols
+    if filters.years:
+        source_entry["years"] = filters.years
+    if filters.standard_items:
+        source_entry["metrics"] = filters.standard_items
+    sources = [source_entry]
+
+    duration_ms = (time.time() - start_time) * 1000
+    logger.info(f"Financial query: {len(records)} records in {duration_ms:.2f}ms")
+
+    return records, filters, chart_spec, sources
 
 
 def build_financial_context(records: List[FinancialDataRecord]) -> str:

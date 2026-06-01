@@ -80,28 +80,6 @@ def _route_response(decision="FINANCIAL"):
     return resp
 
 
-def _fc_response(args=None):
-    """Step-2 EXTRACT response: forces a query_financial_data function call."""
-    fc = MagicMock()
-    fc.name = "query_financial_data"
-    fc.args = (
-        args
-        if args is not None
-        else {"symbols": ["NCB"], "years": ["2023"], "standard_items": ["revenue"]}
-    )
-    part = MagicMock()
-    part.function_call = fc
-    content = MagicMock()
-    content.parts = [part]
-    candidate = MagicMock()
-    candidate.content = content
-    resp = MagicMock()
-    resp.candidates = [candidate]
-    resp.text = ""
-    resp.usage_metadata = None
-    return resp
-
-
 def _text_response(text):
     resp = MagicMock()
     resp.text = text
@@ -110,18 +88,37 @@ def _text_response(text):
     return resp
 
 
-def _mock_manager(records):
+def _filters(symbols=None, years=None, items=None):
+    from app.models import FinancialDataFilters
+
+    return FinancialDataFilters(
+        companies=[],
+        symbols=symbols or [],
+        years=years or [],
+        standard_items=items or [],
+        interpretation="parsed",
+        data_availability_note="",
+        is_follow_up=False,
+        context_used="",
+    )
+
+
+def _mock_manager(records, filters=None):
+    # parse_user_query is the proven extractor (used by query_and_run); it returns
+    # finished filters. query_data returns the rows for those filters.
     mgr = MagicMock()
-    mgr.metadata = {"symbols": ["NCB"], "years": ["2023"]}
+    mgr.metadata = {"symbols": ["NCBFG"], "years": ["2023"]}
+    mgr.parse_user_query.return_value = filters or _filters(symbols=["NCBFG"], years=["2023"])
     mgr.query_data.return_value = records
     return mgr
 
 
-def test_financial_path_routes_extracts_and_synthesizes(mock_genai_client):
-    # route=FINANCIAL -> force-extract (tool call) -> synthesize = 3 LLM calls.
+def test_financial_path_routes_parses_and_synthesizes(mock_genai_client):
+    # route=FINANCIAL -> parse_user_query + query_data -> synthesize.
+    # Only TWO generate_content calls now (route + synth); extraction is the
+    # manager's parse_user_query, not a Gemini tool call.
     mock_genai_client.models.generate_content.side_effect = [
         _route_response("FINANCIAL"),
-        _fc_response(),
         _text_response("NCB's 2023 revenue was J$123.5M."),
     ]
     agent = AgentV2(financial_manager=_mock_manager([_record()]))
@@ -129,14 +126,15 @@ def test_financial_path_routes_extracts_and_synthesizes(mock_genai_client):
 
     assert result["tools_executed"] == ["query_financial_data"]
     assert result["record_count"] == 1
-    assert result["filters_used"].symbols == ["NCB"]
+    assert result["filters_used"].symbols == ["NCBFG"]
     assert result["data_preview"] and len(result["data_preview"]) == 1
     assert "123.5M" in result["response"]
-    assert mock_genai_client.models.generate_content.call_count == 3
+    agent.financial_manager.parse_user_query.assert_called_once()
+    assert mock_genai_client.models.generate_content.call_count == 2
 
 
-def test_route_other_skips_extraction_and_falls_through_to_web(mock_genai_client):
-    # route=OTHER -> NO extraction call, NO query_data; web path runs (route + web).
+def test_route_other_skips_parse_and_falls_through_to_web(mock_genai_client):
+    # route=OTHER -> NO parse_user_query, NO query_data; web path runs (route + web).
     mock_genai_client.models.generate_content.side_effect = [
         _route_response("OTHER"),
         _text_response("Here is some recent JSE news."),
@@ -146,30 +144,25 @@ def test_route_other_skips_extraction_and_falls_through_to_web(mock_genai_client
 
     assert result["response"] == "Here is some recent JSE news."
     assert "query_financial_data" not in (result.get("tools_executed") or [])
+    agent.financial_manager.parse_user_query.assert_not_called()
     agent.financial_manager.query_data.assert_not_called()
     assert mock_genai_client.models.generate_content.call_count == 2
 
 
-def test_route_then_force_extraction_uses_mode_any(mock_genai_client):
-    # The ROUTE call passes no tools; the EXTRACT call forces the financial tool.
+def test_route_call_uses_flash_and_no_tools(mock_genai_client):
+    # The ROUTE call is a plain-text flash classification — no tools attached.
     mock_genai_client.models.generate_content.side_effect = [
         _route_response("FINANCIAL"),
-        _fc_response(),
         _text_response("answer"),
     ]
     agent = AgentV2(financial_manager=_mock_manager([_record()]))
     asyncio.run(agent.run(query="NCB revenue 2023?"))
 
     calls = mock_genai_client.models.generate_content.call_args_list
-    assert len(calls) == 3
+    assert len(calls) == 2
     route_cfg = calls[0].kwargs["config"]
-    extract_cfg = calls[1].kwargs["config"]
-    # ROUTE call uses flash and no tools (pure classification).
     assert calls[0].kwargs["model"] == "gemini-2.5-flash"
     assert route_cfg.tools is None
-    # EXTRACT call forces the query_financial_data tool with mode=ANY.
-    assert extract_cfg.tools is not None
-    assert "ANY" in str(extract_cfg.tool_config.function_calling_config.mode)
 
 
 def test_enable_financial_false_skips_financial(mock_genai_client):
@@ -178,6 +171,7 @@ def test_enable_financial_false_skips_financial(mock_genai_client):
     agent = AgentV2(financial_manager=mgr)
     result = asyncio.run(agent.run(query="What was NCB revenue?", enable_financial_data=False))
 
+    mgr.parse_user_query.assert_not_called()
     mgr.query_data.assert_not_called()
     # No route call either — financial path never entered.
     assert mock_genai_client.models.generate_content.call_count == 1
@@ -193,21 +187,36 @@ def test_no_manager_skips_financial(mock_genai_client):
 
 
 def test_financial_error_falls_through_to_web(mock_genai_client):
-    # route=FINANCIAL, extraction succeeds, but the BigQuery query raises ->
+    # route=FINANCIAL, parse succeeds, but the BigQuery query raises ->
     # _try_financial returns None -> run() falls through to the web/plain path
     # (graceful degradation: BigQuery being down must not break /chat/stream).
     mock_genai_client.models.generate_content.side_effect = [
         _route_response("FINANCIAL"),
-        _fc_response(),
         _text_response("web fallback answer"),
     ]
     mgr = MagicMock()
-    mgr.metadata = {"symbols": ["NCB"], "years": ["2023"]}
+    mgr.metadata = {"symbols": ["NCBFG"], "years": ["2023"]}
+    mgr.parse_user_query.return_value = _filters(symbols=["NCBFG"], years=["2023"])
     mgr.query_data.side_effect = RuntimeError("BigQuery exploded")
     agent = AgentV2(financial_manager=mgr)
     result = asyncio.run(agent.run(query="What was NCB revenue in 2023?"))
 
     assert result["response"] == "web fallback answer"
     assert "query_financial_data" not in (result.get("tools_executed") or [])
-    # route + extract + web fallback
-    assert mock_genai_client.models.generate_content.call_count == 3
+    # route + web fallback
+    assert mock_genai_client.models.generate_content.call_count == 2
+
+
+def test_financial_no_records_falls_through_to_web(mock_genai_client):
+    # route=FINANCIAL, parse succeeds, but query returns no rows -> fall through
+    # to web rather than synthesizing an empty-data answer.
+    mock_genai_client.models.generate_content.side_effect = [
+        _route_response("FINANCIAL"),
+        _text_response("web fallback answer"),
+    ]
+    agent = AgentV2(financial_manager=_mock_manager([]))  # query_data -> []
+    result = asyncio.run(agent.run(query="What was NCB revenue in 1850?"))
+
+    assert result["response"] == "web fallback answer"
+    assert "query_financial_data" not in (result.get("tools_executed") or [])
+    assert mock_genai_client.models.generate_content.call_count == 2

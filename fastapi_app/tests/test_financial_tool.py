@@ -11,8 +11,10 @@ from app.financial_tool import (
     extract_query_financial_data_call,
     get_financial_data_tool_declaration,
     get_financial_tool,
+    query_and_run,
+    run_financial_filters,
 )
-from app.models import FinancialDataRecord
+from app.models import FinancialDataFilters, FinancialDataRecord
 
 
 def _fc_response(name="query_financial_data", args=None):
@@ -209,3 +211,77 @@ class TestBuildFinancialContext:
         assert "NCB Financial Group" in ctx
         assert "revenue" in ctx
         assert "$5.00M" in ctx
+
+
+def _filters(symbols=None, companies=None, years=None, items=None):
+    return FinancialDataFilters(
+        companies=companies or [],
+        symbols=symbols or [],
+        years=years or [],
+        standard_items=items or [],
+        interpretation="test",
+        data_availability_note="",
+        is_follow_up=False,
+        context_used="",
+    )
+
+
+class TestRunFinancialFilters:
+    def test_runs_query_offthread_and_builds_sources(self):
+        manager = MagicMock()
+        manager.query_data.return_value = [_record()]
+        records, filters, chart, sources = asyncio.run(
+            run_financial_filters(manager, _filters(symbols=["NCBFG"], years=["2023"]))
+        )
+        manager.query_data.assert_called_once()
+        passed = manager.query_data.call_args.args[0]
+        assert passed.symbols == ["NCBFG"]
+        assert len(records) == 1
+        assert sources[0]["type"] == "database"
+        assert sources[0]["symbols"] == ["NCBFG"]
+
+    def test_empty_results_no_chart(self):
+        manager = MagicMock()
+        manager.query_data.return_value = []
+        records, _, chart, _ = asyncio.run(
+            run_financial_filters(manager, _filters(symbols=["NCBFG"]))
+        )
+        assert records == []
+        assert chart is None
+
+
+class TestQueryAndRun:
+    def test_uses_parse_user_query_then_runs(self):
+        # parse_user_query is the proven /fast_chat_v2 extractor — it returns a
+        # fully-formed, post-processed FinancialDataFilters. query_and_run must
+        # use it (NOT re-parse args by hand) and pass its result to query_data.
+        manager = MagicMock()
+        parsed = _filters(
+            symbols=["NCBFG", "GK"], companies=["NCB Financial Group Limited"], years=["2022"]
+        )
+        manager.parse_user_query.return_value = parsed
+        manager.query_data.return_value = [_record()]
+
+        records, filters, _, _ = asyncio.run(
+            query_and_run(manager, "Compare NCB and GK 2022", conversation_history=None)
+        )
+
+        manager.parse_user_query.assert_called_once()
+        # filters came from parse_user_query, unchanged
+        passed = manager.query_data.call_args.args[0]
+        assert passed.symbols == ["NCBFG", "GK"]
+        assert filters.symbols == ["NCBFG", "GK"]
+        assert len(records) == 1
+
+    def test_passes_conversation_history_to_parser(self):
+        manager = MagicMock()
+        manager.parse_user_query.return_value = _filters(symbols=["NCBFG"])
+        manager.query_data.return_value = []
+        history = [{"role": "user", "content": "earlier"}]
+
+        asyncio.run(query_and_run(manager, "what about 2022?", conversation_history=history))
+
+        # the parser receives the query and the history (for pronoun/follow-up resolution)
+        call = manager.parse_user_query.call_args
+        assert call.args[0] == "what about 2022?"
+        assert history in (list(call.args) + list(call.kwargs.values()))
