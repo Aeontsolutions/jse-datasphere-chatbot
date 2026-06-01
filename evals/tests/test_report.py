@@ -240,3 +240,42 @@ def test_incomplete_by_persona_block_present(tmp_path: Path):
     assert summary["incomplete_by_persona"]["p1"]["incomplete_count"] == 2
     assert summary["overall"]["incomplete_count"] == 2
     assert summary["conversation_count"] == 3
+
+
+def test_write_initial_manifest_creates_in_progress_file(tmp_path: Path):
+    from evals.report import write_initial_manifest
+
+    run_dir = tmp_path / "run1"
+    run_dir.mkdir()
+
+    write_initial_manifest(
+        run_dir=run_dir,
+        run_id="run1",
+        git_sha="abc123",
+        config={"replicates": 2},
+        personas=[_persona("p1")],
+        started_at="2026-06-02T00:00:00+00:00",
+    )
+
+    data = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert data["status"] == "in_progress"
+    assert data["run_id"] == "run1"
+    assert data["git_sha"] == "abc123"
+    assert data["personas_run"] == ["p1"]
+    assert data["started_at"] == "2026-06-02T00:00:00+00:00"
+
+
+def test_write_conversation_creates_json_file(tmp_path: Path):
+    from evals.report import write_conversation
+
+    run_dir = tmp_path / "run1"
+    (run_dir / "conversations").mkdir(parents=True)
+
+    artifact = ConversationArtifact(_transcript("p1", 0), None, False, None)
+    write_conversation(run_dir, artifact, _persona("p1"))
+
+    path = run_dir / "conversations" / "p1__rep01.json"
+    assert path.exists()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["conversation_id"] == "p1__rep01"
+    assert data["endpoint"] == "fast_chat_v2"

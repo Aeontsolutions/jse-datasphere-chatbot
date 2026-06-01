@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import statistics
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,36 @@ def write_run(
     )
 
     return run_dir
+
+
+def write_initial_manifest(
+    run_dir: Path,
+    run_id: str,
+    git_sha: str | None,
+    config: dict[str, Any],
+    personas: list[PersonaSpec],
+    started_at: str,
+) -> None:
+    """Write manifest.json with status 'in_progress' before the run starts."""
+    manifest = {
+        "run_id": run_id,
+        "status": "in_progress",
+        "started_at": started_at,
+        "git_sha": git_sha,
+        "config": config,
+        "personas_run": [p.id for p in personas],
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def write_conversation(
+    run_dir: Path,
+    artifact: ConversationArtifact,
+    persona: PersonaSpec | None,
+) -> None:
+    """Write a single conversation artifact to conversations/<id>.json."""
+    path = run_dir / "conversations" / f"{artifact.transcript.conversation_id}.json"
+    path.write_text(json.dumps(_convo_payload(artifact, persona), indent=2), encoding="utf-8")
 
 
 def _detect_replicates(artifacts: RunArtifacts) -> int:
