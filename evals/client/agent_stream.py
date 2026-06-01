@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from evals.client._retry import send_with_retry
 from evals.client.base import ChatClientResult
 from evals.metrics import extract_cost_from_response
 
@@ -47,11 +48,16 @@ class AgentStreamClient:
             "enable_web_search": api_options.get("enable_web_search", True),
             "enable_financial_data": api_options.get("enable_financial_data", True),
         }
+        url = f"{self._base_url}/chat/stream"
+
+        async def _post() -> dict:
+            async with httpx.AsyncClient(timeout=self._timeout_s) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                return response.json()
+
         start = time.perf_counter()
-        async with httpx.AsyncClient(timeout=self._timeout_s) as client:
-            response = await client.post(f"{self._base_url}/chat/stream", json=payload)
-            response.raise_for_status()
-            data = response.json()
+        data = await send_with_retry(_post, label="/chat/stream")
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         cost = extract_cost_from_response(data)

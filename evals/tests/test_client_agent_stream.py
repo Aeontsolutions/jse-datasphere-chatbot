@@ -4,7 +4,9 @@ The endpoint is non-streaming despite the name; see
 `evals/client/agent_stream.py` module docstring for the verification.
 """
 
+import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -77,3 +79,108 @@ async def test_send_passes_options():
     assert captured["payload"]["enable_web_search"] is True
     assert captured["payload"]["enable_financial_data"] is False
     assert captured["payload"]["memory_enabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# Retry behaviour
+# ---------------------------------------------------------------------------
+
+_GOOD_BODY = {
+    "response": "NCB grew net interest income to J$50B in FY2023.",
+    "tools_executed": ["financial_data_query"],
+    "sources": [{"title": "NCB FY2023 Annual Report"}],
+    "needs_clarification": False,
+    "data_found": True,
+    "record_count": 12,
+    "cost_summary": {
+        "total_cost_usd": 0.012,
+        "total_input_tokens": 4500,
+        "total_output_tokens": 800,
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_retries_on_504_then_succeeds(monkeypatch):
+    """Client retries on 504 and returns the eventual success."""
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    call_count = 0
+
+    def respond(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(504)
+        return httpx.Response(200, json=_GOOD_BODY)
+
+    async with respx.mock() as router:
+        router.post("http://localhost:8000/chat/stream").mock(side_effect=respond)
+        client = AgentStreamClient(base_url="http://localhost:8000", timeout_s=10)
+        result = await client.send("q", [], {})
+
+    assert "J$50B" in result.chatbot_text
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_raises_after_max_retries_on_503(monkeypatch):
+    """Client raises HTTPStatusError after exhausting 2 retries on persistent 503."""
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    call_count = 0
+
+    def always_503(request):
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(503)
+
+    async with respx.mock() as router:
+        router.post("http://localhost:8000/chat/stream").mock(side_effect=always_503)
+        client = AgentStreamClient(base_url="http://localhost:8000", timeout_s=10)
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.send("q", [], {})
+
+    assert call_count == 3  # initial + 2 retries
+
+
+@pytest.mark.asyncio
+async def test_does_not_retry_on_400():
+    """Client raises immediately on 4xx without retrying."""
+    call_count = 0
+
+    def respond_400(request):
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(400)
+
+    async with respx.mock() as router:
+        router.post("http://localhost:8000/chat/stream").mock(side_effect=respond_400)
+        client = AgentStreamClient(base_url="http://localhost:8000", timeout_s=10)
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.send("q", [], {})
+
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retries_on_connect_error_then_succeeds(monkeypatch):
+    """Client retries after ConnectError and returns result on eventual success."""
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    call_count = 0
+
+    def respond(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.ConnectError("connection refused")
+        return httpx.Response(200, json=_GOOD_BODY)
+
+    async with respx.mock() as router:
+        router.post("http://localhost:8000/chat/stream").mock(side_effect=respond)
+        client = AgentStreamClient(base_url="http://localhost:8000", timeout_s=10)
+        result = await client.send("q", [], {})
+
+    assert "J$50B" in result.chatbot_text
+    assert call_count == 2
