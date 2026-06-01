@@ -348,7 +348,12 @@ class AgentV2:
                 config=types.GenerateContentConfig(
                     system_instruction=FINANCIAL_ROUTER_PROMPT,
                     temperature=0.0,
-                    max_output_tokens=8,
+                    # gemini-2.5-flash is a thinking model; a tiny cap (e.g. 8)
+                    # is consumed by internal reasoning and returns empty text
+                    # (finish_reason=MAX_TOKENS). 256 leaves room for the
+                    # one-word answer after thinking. Verified: 8 -> empty,
+                    # 64+/256 -> "FINANCIAL".
+                    max_output_tokens=256,
                 ),
             )
             self._track_cost(route, "financial_routing", model=FINANCIAL_DECISION_MODEL)
