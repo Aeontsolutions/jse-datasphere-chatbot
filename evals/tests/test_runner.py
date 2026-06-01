@@ -137,6 +137,22 @@ async def test_run_conversation_respects_per_convo_cost_cap():
 import asyncio  # noqa: E402
 
 from evals.runner import RunArtifacts, run_simulation  # noqa: E402
+from evals.judge import DimensionScore, FactfulnessScore, JudgeOutput, JudgeScores, ToolUseScore
+
+
+def _fake_judge_output() -> JudgeOutput:
+    return JudgeOutput(
+        scores=JudgeScores(
+            groundedness=DimensionScore(score=4, justification="x"),
+            factfulness=FactfulnessScore(score=None, facts_satisfied=[], justification="n/a"),
+            goal_completion=DimensionScore(score=4, justification="x"),
+            tool_use_appropriateness=ToolUseScore(score=4, justification="x"),
+            coherence=DimensionScore(score=4, justification="x"),
+            persona_handling=DimensionScore(score=4, justification="x"),
+        ),
+        verdict="pass",
+        verdict_reason="ok",
+    )
 
 
 @pytest.mark.asyncio
@@ -290,3 +306,63 @@ async def test_run_simulation_cost_cap_marks_artifacts_and_skips_remaining():
     assert artifacts.cost_capped is True
     assert len(artifacts.conversations) < 10
     assert len(artifacts.conversations) >= 1
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_calls_on_artifact_per_completed():
+    persona = _persona(max_turns=1).model_copy(update={"id": "a"})
+    from evals.persona_actor import PersonaTurn
+
+    actor = MagicMock()
+    actor.act = AsyncMock(return_value=PersonaTurn(utterance="q", done=True))
+    client = MagicMock()
+    client.send = AsyncMock(return_value=_client_result())
+    fake_judge = MagicMock()
+    fake_judge.evaluate = AsyncMock(return_value=_fake_judge_output())
+
+    received: list[str] = []
+
+    async def capture(artifact):
+        received.append(artifact.transcript.conversation_id)
+
+    await run_simulation(
+        personas=[persona],
+        replicates=2,
+        concurrency=2,
+        max_cost_usd_per_run=10.0,
+        max_cost_usd_per_conversation=1.0,
+        chat_client_factory=lambda _: client,
+        persona_actor=actor,
+        judge=fake_judge,
+        on_artifact=capture,
+    )
+
+    assert set(received) == {"a__rep01", "a__rep02"}
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_skip_ids_skips_matching():
+    persona = _persona(max_turns=1).model_copy(update={"id": "a"})
+    from evals.persona_actor import PersonaTurn
+
+    actor = MagicMock()
+    actor.act = AsyncMock(return_value=PersonaTurn(utterance="q", done=True))
+    client = MagicMock()
+    client.send = AsyncMock(return_value=_client_result())
+    fake_judge = MagicMock()
+    fake_judge.evaluate = AsyncMock(return_value=_fake_judge_output())
+
+    artifacts = await run_simulation(
+        personas=[persona],
+        replicates=3,
+        concurrency=3,
+        max_cost_usd_per_run=10.0,
+        max_cost_usd_per_conversation=1.0,
+        chat_client_factory=lambda _: client,
+        persona_actor=actor,
+        judge=fake_judge,
+        skip_ids={"a__rep01", "a__rep02"},
+    )
+
+    assert len(artifacts.conversations) == 1
+    assert artifacts.conversations[0].transcript.conversation_id == "a__rep03"
