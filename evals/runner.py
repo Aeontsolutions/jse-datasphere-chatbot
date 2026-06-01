@@ -154,6 +154,10 @@ async def run_simulation(
 ) -> RunArtifacts:
     """Run all personas × replicates concurrently with a global cost cap."""
     semaphore = asyncio.Semaphore(concurrency)
+    # judge_semaphore is intentionally wider than semaphore: once a conversation
+    # finishes its semaphore slot is released, so up to concurrency new convos can
+    # start while up to concurrency*2 judge calls run concurrently. This keeps the
+    # judge pipeline full without blocking new conversations.
     judge_semaphore = asyncio.Semaphore(concurrency * 2)
 
     running_cost = 0.0
