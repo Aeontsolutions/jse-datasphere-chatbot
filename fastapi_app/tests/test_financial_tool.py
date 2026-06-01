@@ -123,6 +123,56 @@ class TestExecuteFinancialQuery:
         assert records == []
         assert chart is None
 
+    def test_non_canonical_symbol_routed_to_companies(self):
+        # The tool only exposes `symbols`, but the model often emits a colloquial
+        # company token ("NCB") that is not a canonical JSE symbol ("NCBFG").
+        # When metadata + associations are present, such tokens must be routed to
+        # the `companies` bucket (fragment-matched by _post_process_filters), NOT
+        # left in `symbols` (exact-matched -> dropped -> WHERE 1=1 over all rows).
+        manager = MagicMock()
+        manager.metadata = {
+            "symbols": ["NCBFG", "GK"],
+            "associations": {"symbol_to_company": {}},
+        }
+        captured = {}
+        manager._post_process_filters.side_effect = lambda d: (captured.update(d) or d)
+        manager.query_data.return_value = []
+
+        asyncio.run(
+            execute_financial_query(manager, {"symbols": ["NCB"], "standard_items": ["revenue"]})
+        )
+
+        assert captured["symbols"] == []  # NCB is not a known symbol
+        assert captured["companies"] == ["NCB"]  # routed here for fragment match
+
+    def test_canonical_symbol_kept_in_symbols(self):
+        # A real trading symbol (GK) must stay in `symbols`, not get moved.
+        manager = MagicMock()
+        manager.metadata = {
+            "symbols": ["NCBFG", "GK"],
+            "associations": {"symbol_to_company": {}},
+        }
+        captured = {}
+        manager._post_process_filters.side_effect = lambda d: (captured.update(d) or d)
+        manager.query_data.return_value = []
+
+        asyncio.run(execute_financial_query(manager, {"symbols": ["GK"]}))
+
+        assert captured["symbols"] == ["GK"]
+        assert captured["companies"] == []
+
+    def test_no_metadata_keeps_tokens_in_symbols(self):
+        # No metadata/associations -> cannot resolve companies, so DO NOT reroute;
+        # preserve the original behavior (token stays in symbols). No regression.
+        manager = MagicMock()
+        manager.metadata = {}
+        manager.query_data.return_value = []
+
+        _, filters, _, _ = asyncio.run(execute_financial_query(manager, {"symbols": ["NCB"]}))
+
+        assert filters.symbols == ["NCB"]
+        assert filters.companies == []
+
 
 class TestBuildFinancialContext:
     def test_empty(self):

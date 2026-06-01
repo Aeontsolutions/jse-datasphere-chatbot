@@ -101,12 +101,33 @@ async def execute_financial_query(
         years = [str(y) for y in raw_years if y]
         standard_items = [item.lower().replace(" ", "_") for item in raw_items if item]
 
+        # The query_financial_data tool only exposes `symbols`, but the model
+        # often emits a colloquial company token ("NCB") that is not a canonical
+        # JSE trading symbol ("NCBFG"). _post_process_filters matches `symbols` by
+        # EXACT match (so "NCB" is dropped -> empty -> WHERE 1=1 over all rows) but
+        # matches `companies` by FRAGMENT ("ncb" in "ncb financial group limited").
+        # So: keep tokens that ARE known symbols in `symbols`; route the rest into
+        # `companies` to be resolved. Only when metadata is available to tell the
+        # difference — otherwise preserve the original tokens in `symbols`.
+        companies: List[str] = []
+        metadata = getattr(financial_manager, "metadata", None) or {}
+        known_symbols = {s.upper() for s in metadata.get("symbols", [])}
+        if known_symbols:
+            recognized = [s for s in symbols if s in known_symbols]
+            unrecognized = [s for s in symbols if s not in known_symbols]
+            if unrecognized:
+                symbols = recognized
+                companies = unrecognized
+
         filters = FinancialDataFilters(
-            companies=[],
+            companies=companies,
             symbols=symbols,
             years=years,
             standard_items=standard_items,
-            interpretation=f"Agent query: symbols={symbols}, years={years}, items={standard_items}",
+            interpretation=(
+                f"Agent query: symbols={symbols}, companies={companies}, "
+                f"years={years}, items={standard_items}"
+            ),
             data_availability_note="",
             is_follow_up=False,
             context_used="",
