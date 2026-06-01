@@ -8,13 +8,13 @@ character: |
   specific companies and years, and you follow up if only one side is answered.
   You speak plainly and expect both figures, clearly labelled.
 goal: |
-  Compare GraceKennedy and NCB Financial Group on net profit for the 2022
+  Compare GraceKennedy and NCB Financial Group on net profit for the 2023
   fiscal year, then ask which of the two grew faster. You're satisfied when you
-  have a labelled net-profit figure for each company for 2022.
+  have a labelled net-profit figure for each company for 2023.
 max_turns: 5
 expected_facts:
   - "Both GraceKennedy (GK) and NCB Financial Group (NCBFG) are named"
-  - "A net profit figure for each company for the 2022 fiscal year"
+  - "A net profit figure for each company for the 2023 fiscal year"
 api_options:
   memory_enabled: true
   enable_web_search: true
