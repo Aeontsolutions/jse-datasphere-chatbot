@@ -14,6 +14,13 @@ patterns, financial DB query logic) that may be revived in a future ticket (see 
 
 ## Restoring
 
+> **ATS-334 update (2026-05-31):** The financial function-calling primitives
+> (`get_financial_data_tool_declaration`, `execute_financial_query`,
+> `build_financial_context`) now live in `app/financial_tool.py` and are used by
+> `AgentV2` on `/chat/stream` (Option 2). The 3-phase `AgentOrchestrator` below
+> was **not** restored (Option 1, PR #32, was closed in favor of the smaller
+> AgentV2 path). This file remains archived for reference only.
+
 To wire `AgentOrchestrator` back up (ticket R10):
 1. Move `agent_orchestrator.py` back to `app/agent.py` and remove the `ARCHIVED` header from the module docstring
 2. Re-add `from app.agent import AgentOrchestrator` in `main.py`

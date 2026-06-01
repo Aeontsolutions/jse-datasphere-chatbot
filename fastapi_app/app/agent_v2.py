@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from google.genai import types
 
+from app.financial_tool import build_financial_context, query_and_run
 from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.models import CostSummary, PhaseCost
@@ -74,6 +75,25 @@ SYSTEM_PROMPT_NO_SEARCH = SYSTEM_PROMPT.replace(
     "\nYou have web search access for current market data.", ""
 )
 
+# Model used for the cheap financial route + extract calls (Phase A).
+FINANCIAL_DECISION_MODEL = "gemini-2.5-flash"
+
+# Phase-A step 1 — ROUTE: a plain-text classifier (no tools) that decides whether
+# the question is a JSE financial-metric lookup. Kept separate from extraction
+# because a single AUTO function-calling step makes flash too reluctant to call
+# the tool (ATS-334 eval finding); a forced extraction follows only on FINANCIAL.
+FINANCIAL_ROUTER_PROMPT = """You are a router for a Jamaica Stock Exchange (JSE) assistant. Classify the user's latest question into exactly one label.
+
+Reply with a single word — no punctuation, no explanation:
+
+FINANCIAL — the user asks for specific company financial metrics from financial statements (revenue, profit, net profit, gross/operating profit, EPS, margins, assets, liabilities, shareholders' equity, ROE, ROA, ratios), optionally for specific years or compared across companies. Examples: "What was NCB's revenue in 2023?", "Compare GraceKennedy and NCB net profit", "Wisynco EPS last year".
+
+OTHER — anything else: news, announcements, current stock prices, IPO timelines, qualitative/opinion/strategy questions, market commentary, definitions, or non-JSE topics.
+
+When in doubt between FINANCIAL and OTHER for a question that names a JSE company and a financial metric, choose FINANCIAL.
+
+Output only: FINANCIAL or OTHER"""
+
 # ==============================================================================
 # AGENT V2 - Simple Google Search Grounding
 # ==============================================================================
@@ -87,15 +107,22 @@ class AgentV2:
     call with the GoogleSearch tool for web grounding.
     """
 
-    def __init__(self, model_name: str = "gemini-2.5-pro"):
+    def __init__(
+        self,
+        model_name: str = "gemini-2.5-pro",
+        financial_manager: Any = None,
+    ):
         """
         Initialize the agent.
 
         Args:
-            model_name: Gemini model to use. Defaults to gemini-2.5-pro.
+            model_name: Gemini model for synthesis/web. Defaults to gemini-2.5-pro.
+            financial_manager: FinancialDataManager for the query_financial_data
+                tool. When None, the financial path is skipped (web/plain only).
         """
         self.client = get_genai_client()
         self.model_name = model_name
+        self.financial_manager = financial_manager
         self._phase_costs: List[PhaseCost] = []
 
     # --------------------------------------------------------------------------
@@ -141,9 +168,10 @@ class AgentV2:
             phases=self._phase_costs.copy(),
         )
 
-    def _track_cost(self, response: Any, phase: str) -> None:
-        """Track cost from a Gemini response."""
-        cost = calculate_cost_from_response(self.model_name, response, phase)
+    def _track_cost(self, response: Any, phase: str, model: Optional[str] = None) -> None:
+        """Track cost from a Gemini response (model defaults to self.model_name)."""
+        model = model or self.model_name
+        cost = calculate_cost_from_response(model, response, phase)
         record_ai_cost(
             model=cost.model,
             phase=cost.phase,
@@ -156,7 +184,7 @@ class AgentV2:
         )
         self._add_phase_cost(
             phase=phase,
-            model=self.model_name,
+            model=model,
             input_tokens=cost.token_usage.input_tokens,
             output_tokens=cost.token_usage.output_tokens,
             cached_tokens=cost.token_usage.cached_tokens,
@@ -198,6 +226,23 @@ class AgentV2:
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=new_message)]))
 
         return contents
+
+    def _get_metadata_context(self) -> str:
+        """Available symbols/years from the financial manager metadata.
+
+        Injected into the Phase-A decision prompt so the model emits valid
+        trading symbols (the tool exposes only `symbols`, not company names).
+        """
+        manager = self.financial_manager
+        if not manager or not getattr(manager, "metadata", None):
+            return ""
+        metadata = manager.metadata
+        parts = []
+        if metadata.get("symbols"):
+            parts.append(f"Available symbols: {', '.join(metadata['symbols'][:50])}")
+        if metadata.get("years"):
+            parts.append(f"Available years: {', '.join(metadata['years'])}")
+        return "\n".join(parts)
 
     def _extract_grounding_metadata(self, response: Any) -> Dict[str, Any]:
         """
@@ -264,11 +309,134 @@ class AgentV2:
     # Main Entry Point
     # --------------------------------------------------------------------------
 
+    async def _try_financial(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]],
+    ) -> Optional[Dict[str, Any]]:
+        """Phase A (flash route -> forced extract) + Phase B (pro synthesize).
+
+        Step 1 classifies the question FINANCIAL vs OTHER (plain text, no tools);
+        only on FINANCIAL does step 2 force a query_financial_data extraction
+        (mode=ANY). Returns a full result dict if the tool was invoked, or None to
+        signal the caller should fall through to the web/plain path (router said
+        OTHER, extraction produced no call, or the path errored).
+        """
+        try:
+            contents = self._build_contents(conversation_history, query)
+
+            # Phase A step 1 — ROUTE: plain-text classify (no tools). Separating
+            # the decision from extraction avoids flash's reluctance to call a
+            # tool in a single AUTO step (ATS-334 eval finding).
+            route = self.client.models.generate_content(
+                model=FINANCIAL_DECISION_MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=FINANCIAL_ROUTER_PROMPT,
+                    temperature=0.0,
+                    # gemini-2.5-flash is a thinking model; a tiny cap (e.g. 8)
+                    # is consumed by internal reasoning and returns empty text
+                    # (finish_reason=MAX_TOKENS). 256 leaves room for the
+                    # one-word answer after thinking. Verified: 8 -> empty,
+                    # 64+/256 -> "FINANCIAL".
+                    max_output_tokens=256,
+                ),
+            )
+            self._track_cost(route, "financial_routing", model=FINANCIAL_DECISION_MODEL)
+
+            route_label = (route.text or "").strip().upper()
+            if "FINANCIAL" not in route_label:
+                logger.info(
+                    f"AgentV2 financial: router said '{route_label or 'OTHER'}'; "
+                    "falling through to web"
+                )
+                return None
+
+            # Phase A step 2 — EXTRACT + QUERY via the proven parse_user_query
+            # extractor (the same one /fast_chat_v2 uses). It handles full company
+            # names, symbol normalization, metric synonyms, and follow-up/pronoun
+            # resolution far better than a hand-rolled tool-arg parse — and runs
+            # _post_process_filters internally. This also drops a Gemini round-trip.
+            records, filters, chart, sources = await query_and_run(
+                self.financial_manager, query, conversation_history
+            )
+
+            if not records:
+                logger.info(
+                    "AgentV2 financial: router said FINANCIAL but query returned "
+                    "no records; falling through to web"
+                )
+                return None
+
+            # Phase B: synthesize from the retrieved data only (no tools)
+            context = build_financial_context(records)
+            synth_contents = self._build_contents(conversation_history, query)
+            synth_contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(
+                            text=(
+                                "Financial data retrieved from the JSE database:\n"
+                                f"{context}\n\n"
+                                "Answer the user's question using ONLY this data. "
+                                "Use J$ and include a brief investment disclaimer."
+                            )
+                        )
+                    ],
+                )
+            )
+            synthesis = self.client.models.generate_content(
+                model=self.model_name,
+                contents=synth_contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT_NO_SEARCH,
+                    temperature=0.3,
+                    max_output_tokens=8192,
+                ),
+            )
+            self._track_cost(synthesis, "synthesis")
+
+            response_text = synthesis.text if synthesis.text else ""
+            if not response_text:
+                response_text = (
+                    "I found financial data but could not generate a response. " "Please try again."
+                )
+
+            updated_history = list(conversation_history) if conversation_history else []
+            updated_history.append({"role": "user", "content": query})
+            updated_history.append({"role": "assistant", "content": response_text})
+            if len(updated_history) > 20:
+                updated_history = updated_history[-20:]
+
+            return {
+                "response": response_text,
+                "data_found": len(records) > 0,
+                "record_count": len(records),
+                "needs_clarification": False,
+                "clarification_question": None,
+                "tools_executed": ["query_financial_data"],
+                "sources": sources if sources else None,
+                "filters_used": filters,
+                "data_preview": records[:10] if records else None,
+                "chart": chart,
+                "web_search_results": None,
+                "suggestions": None,
+                "conversation_history": updated_history,
+                "warnings": None,
+                "cost_summary": self._build_cost_summary(),
+            }
+
+        except Exception as e:
+            logger.error(f"AgentV2 financial path failed: {e}", exc_info=True)
+            return None
+
     async def run(
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         enable_web_search: bool = True,
+        enable_financial_data: bool = True,
     ) -> Dict[str, Any]:
         """
         Run the agent, optionally with Google Search grounding.
@@ -278,6 +446,9 @@ class AgentV2:
             conversation_history: Previous conversation messages
             enable_web_search: When False, omits the GoogleSearch tool and removes
                 the web-search instruction from the system prompt.
+            enable_financial_data: When True and a financial_manager is set, first
+                attempts the query_financial_data path; falls through to web/plain
+                if the model declines.
 
         Returns:
             Dictionary compatible with AgentChatResponse
@@ -285,6 +456,16 @@ class AgentV2:
         logger.info(f"AgentV2 run: {query[:100]}...")
 
         self._reset_cost_tracking()
+
+        # Financial tool path (Phase A decide -> execute -> Phase B synthesize).
+        # Falls through to the web/plain path if the model declines or it errors.
+        if enable_financial_data and self.financial_manager:
+            financial_result = await self._try_financial(query, conversation_history)
+            if financial_result is not None:
+                logger.info(
+                    f"AgentV2 financial path used. records={financial_result['record_count']}"
+                )
+                return financial_result
 
         try:
             # Build conversation contents
