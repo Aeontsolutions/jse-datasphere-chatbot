@@ -366,3 +366,35 @@ async def test_run_simulation_skip_ids_skips_matching():
 
     assert len(artifacts.conversations) == 1
     assert artifacts.conversations[0].transcript.conversation_id == "a__rep03"
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_on_artifact_failure_does_not_drop_artifact():
+    """A failing on_artifact callback logs a warning but the artifact is still returned."""
+    persona = _persona(max_turns=1).model_copy(update={"id": "a"})
+    from evals.persona_actor import PersonaTurn
+
+    actor = MagicMock()
+    actor.act = AsyncMock(return_value=PersonaTurn(utterance="q", done=True))
+    client = MagicMock()
+    client.send = AsyncMock(return_value=_client_result())
+    fake_judge = MagicMock()
+    fake_judge.evaluate = AsyncMock(return_value=_fake_judge_output())
+
+    async def failing_callback(artifact):
+        raise OSError("disk full")
+
+    artifacts = await run_simulation(
+        personas=[persona],
+        replicates=1,
+        concurrency=1,
+        max_cost_usd_per_run=10.0,
+        max_cost_usd_per_conversation=1.0,
+        chat_client_factory=lambda _: client,
+        persona_actor=actor,
+        judge=fake_judge,
+        on_artifact=failing_callback,
+    )
+
+    assert len(artifacts.conversations) == 1
+    assert artifacts.conversations[0].transcript.conversation_id == "a__rep01"

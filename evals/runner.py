@@ -199,7 +199,10 @@ async def run_simulation(
             except Exception as exc:
                 artifact = ConversationArtifact(transcript, None, True, f"{type(exc).__name__}: {exc}")
             if on_artifact is not None:
-                await on_artifact(artifact)
+                try:
+                    await on_artifact(artifact)
+                except Exception as exc:
+                    print(f"WARNING: on_artifact callback failed for {artifact.transcript.conversation_id}: {exc}")
             return artifact
 
     tasks = [

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -129,6 +130,9 @@ async def _amain(ns: argparse.Namespace) -> int:
     run_id = ns.resume_run_id or ns.run_id or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
     output_root = Path(ns.output_dir) if ns.output_dir else Path(__file__).parent / "runs"
     run_dir = output_root / run_id
+    if ns.resume_run_id and not run_dir.exists():
+        print(f"ERROR: run directory {run_dir} does not exist. Cannot resume.")
+        return 2
     (run_dir / "conversations").mkdir(parents=True, exist_ok=True)
 
     git_sha = _git_sha()
@@ -139,6 +143,14 @@ async def _amain(ns: argparse.Namespace) -> int:
     if ns.resume_run_id:
         existing_artifacts, skip_ids = load_conversation_artifacts(run_dir)
         print(f"Resuming {run_id}: {len(existing_artifacts)} conversation(s) already complete, skipping.")
+        manifest_path = run_dir / "manifest.json"
+        if manifest_path.exists():
+            try:
+                old_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if "started_at" in old_manifest:
+                    started_at = old_manifest["started_at"]
+            except Exception:
+                pass
 
     write_initial_manifest(
         run_dir=run_dir,
