@@ -9,18 +9,17 @@ from google.cloud import bigquery
 from google.genai import types as genai_types
 from google.oauth2 import service_account
 
-from app.gemini_client import get_genai_client
-from app.utils.prompt_cache import PromptCache
-
 # DSPy integration (optional, graceful fallback)
 from app.dspy_modules import (
     configure_dspy_lm,
     get_query_parser,
     get_response_formatter,
 )
+from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.models import FinancialDataFilters, FinancialDataRecord
 from app.utils.monitoring import record_ai_request, record_bigquery_query
+from app.utils.prompt_cache import PromptCache
 
 logger = get_logger(__name__)
 

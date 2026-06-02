@@ -629,8 +629,9 @@ def test_non_ratio_item_type_unaffected(monkeypatch):
 
 def _make_mgr_with_metadata():
     """Return a FinancialDataManager with metadata pre-loaded, bypassing BQ/AI init."""
+    from unittest.mock import MagicMock, patch
+
     from app.financial_utils import FinancialDataManager
-    from unittest.mock import patch, MagicMock
 
     with (
         patch.object(FinancialDataManager, "_initialize_bigquery_client"),
@@ -676,7 +677,7 @@ def test_build_parse_query_system_instruction_contains_metadata():
 
 def test_parse_user_query_uses_cached_content_when_available():
     """parse_user_query passes cached_content= to generate_content when cache hits."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     mgr = _make_mgr_with_metadata()
     mock_resp = MagicMock()
@@ -698,7 +699,7 @@ def test_parse_user_query_uses_cached_content_when_available():
 
 def test_parse_user_query_falls_back_when_cache_none():
     """parse_user_query falls back to self.model when cache returns None."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     mgr = _make_mgr_with_metadata()
     mock_resp = MagicMock()
