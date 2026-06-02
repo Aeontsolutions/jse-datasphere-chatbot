@@ -220,3 +220,52 @@ def test_financial_no_records_falls_through_to_web(mock_genai_client):
     assert result["response"] == "web fallback answer"
     assert "query_financial_data" not in (result.get("tools_executed") or [])
     assert mock_genai_client.models.generate_content.call_count == 2
+
+
+def test_run_uses_cached_content_when_cache_hits(mock_genai_client):
+    """AgentV2.run() passes cached_content= instead of system_instruction= on cache hit."""
+    resp = MagicMock()
+    resp.text = "hello"
+    resp.candidates = []
+    resp.usage_metadata = None
+    mock_genai_client.models.generate_content.return_value = resp
+
+    with (
+        patch("app.agent_v2._SYSTEM_PROMPT_CACHE") as mock_cache,
+        patch("app.agent_v2._SYSTEM_PROMPT_NO_SEARCH_CACHE"),
+    ):
+        mock_cache.get_cache_name.return_value = "cachedContents/xyz"
+
+        agent = AgentV2()
+        asyncio.run(
+            agent.run("What is the JSE?", enable_financial_data=False, enable_web_search=True)
+        )
+
+    config = mock_genai_client.models.generate_content.call_args.kwargs["config"]
+    assert config.cached_content == "cachedContents/xyz"
+    # system_instruction must be absent (None or not set) when cached_content is used
+    assert not getattr(config, "system_instruction", None)
+
+
+def test_run_falls_back_to_system_instruction_when_cache_returns_none(mock_genai_client):
+    """AgentV2.run() uses system_instruction= when cache returns None."""
+    resp = MagicMock()
+    resp.text = "hello"
+    resp.candidates = []
+    resp.usage_metadata = None
+    mock_genai_client.models.generate_content.return_value = resp
+
+    with (
+        patch("app.agent_v2._SYSTEM_PROMPT_CACHE") as mock_cache,
+        patch("app.agent_v2._SYSTEM_PROMPT_NO_SEARCH_CACHE"),
+    ):
+        mock_cache.get_cache_name.return_value = None
+
+        agent = AgentV2()
+        asyncio.run(
+            agent.run("What is the JSE?", enable_financial_data=False, enable_web_search=True)
+        )
+
+    config = mock_genai_client.models.generate_content.call_args.kwargs["config"]
+    assert config.system_instruction is not None
+    assert not getattr(config, "cached_content", None)

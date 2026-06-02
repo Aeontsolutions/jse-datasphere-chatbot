@@ -622,3 +622,92 @@ def test_non_ratio_item_type_unaffected(monkeypatch):
     results = manager.query_data(FinancialDataFilters())
     # 1000 * 1_000_000 = 1_000_000_000 → "1.00B" (hits the >= 1e9 branch)
     assert "B" in results[0].formatted_value, results[0].formatted_value
+
+
+# ── helpers ────────────────────────────────────────────────────────────────
+
+
+def _make_mgr_with_metadata():
+    """Return a FinancialDataManager with metadata pre-loaded, bypassing BQ/AI init."""
+    from unittest.mock import MagicMock, patch
+
+    from app.financial_utils import FinancialDataManager
+
+    with (
+        patch.object(FinancialDataManager, "_initialize_bigquery_client"),
+        patch.object(FinancialDataManager, "load_metadata_from_bigquery"),
+        patch.object(FinancialDataManager, "_initialize_ai_model"),
+        patch.object(FinancialDataManager, "_initialize_dspy"),
+    ):
+        mgr = FinancialDataManager.__new__(FinancialDataManager)
+        mgr.model = MagicMock()  # sentinel: AI is available
+        mgr.use_dspy = False
+        mgr.dspy_query_parser = None
+        mgr.metadata = {
+            "companies": ["NCB Financial Group"],
+            "symbols": ["NCBFG"],
+            "years": ["2023", "2024"],
+            "standard_items": ["revenue", "net_profit"],
+            "associations": {
+                "symbol_to_company": {"NCBFG": ["NCB Financial Group"]},
+            },
+        }
+        return mgr
+
+
+# ── Task 3 tests ────────────────────────────────────────────────────────────
+
+
+def test_build_parse_query_system_instruction_is_stable():
+    """Calling _build_parse_query_system_instruction() twice returns identical text."""
+    mgr = _make_mgr_with_metadata()
+    assert (
+        mgr._build_parse_query_system_instruction() == mgr._build_parse_query_system_instruction()
+    )
+
+
+def test_build_parse_query_system_instruction_contains_metadata():
+    """System instruction must include symbols, companies, and parsing rules."""
+    mgr = _make_mgr_with_metadata()
+    instruction = mgr._build_parse_query_system_instruction()
+    assert "NCBFG" in instruction
+    assert "NCB Financial Group" in instruction
+    assert "Return a JSON object" in instruction
+
+
+def test_parse_user_query_uses_cached_content_when_available():
+    """parse_user_query passes cached_content= to generate_content when cache hits."""
+    from unittest.mock import MagicMock, patch
+
+    mgr = _make_mgr_with_metadata()
+    mock_resp = MagicMock()
+    mock_resp.text = '{"companies":[],"symbols":["NCBFG"],"years":[],"standard_items":["revenue"],"interpretation":"test","data_availability_note":"","is_follow_up":false,"context_used":""}'
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = mock_resp
+
+    with (
+        patch("app.financial_utils._PARSE_QUERY_CACHE") as mock_cache,
+        patch("app.financial_utils.get_genai_client", return_value=mock_client),
+    ):
+        mock_cache.get_cache_name.return_value = "cachedContents/parse123"
+        mgr.parse_user_query("What is NCBFG revenue?")
+
+    config = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert config.cached_content == "cachedContents/parse123"
+
+
+def test_parse_user_query_falls_back_when_cache_none():
+    """parse_user_query falls back to self.model when cache returns None."""
+    from unittest.mock import MagicMock, patch
+
+    mgr = _make_mgr_with_metadata()
+    mock_resp = MagicMock()
+    mock_resp.text = '{"companies":[],"symbols":["NCBFG"],"years":[],"standard_items":["revenue"],"interpretation":"test","data_availability_note":"","is_follow_up":false,"context_used":""}'
+    mgr.model.generate_content.return_value = mock_resp
+
+    with patch("app.financial_utils._PARSE_QUERY_CACHE") as mock_cache:
+        mock_cache.get_cache_name.return_value = None
+        mgr.parse_user_query("What is NCBFG revenue?")
+
+    mgr.model.generate_content.assert_called_once()

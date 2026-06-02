@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
 from google.cloud import bigquery
+from google.genai import types as genai_types
 from google.oauth2 import service_account
 
 # DSPy integration (optional, graceful fallback)
@@ -14,9 +15,11 @@ from app.dspy_modules import (
     get_query_parser,
     get_response_formatter,
 )
+from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.models import FinancialDataFilters, FinancialDataRecord
 from app.utils.monitoring import record_ai_request, record_bigquery_query
+from app.utils.prompt_cache import PromptCache
 
 logger = get_logger(__name__)
 
@@ -36,6 +39,12 @@ _FRACTIONAL_PERCENT_ITEMS = frozenset({"dividend_payout_ratio"})
 # Dimensionless ratios — display as plain decimal, no % suffix.
 # BQ data: current_ratio 0.59–14.85; debt_to_equity_ratio -3.14–49.8.
 _PURE_RATIO_ITEMS = frozenset({"current_ratio", "debt_to_equity_ratio"})
+
+# Module-level cache for the stable parse_user_query system instruction.
+_PARSE_QUERY_CACHE = PromptCache(
+    model_name=os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash"),
+    display_name="parse-query-system-instruction",
+)
 
 
 def get_row_attr(row, attr):
@@ -366,6 +375,69 @@ class FinancialDataManager:
 
         return "\n".join(parts)
 
+    def _build_parse_query_system_instruction(self) -> str:
+        """Build the stable system instruction for parse_user_query.
+
+        Contains metadata lists and symbol-company mappings (the ~5-20KB stable
+        block). Conversation history and the current query are passed separately
+        as user content so this part can be cached by Gemini.
+        """
+        companies = self.metadata.get("companies", []) if self.metadata else []
+        symbols = self.metadata.get("symbols", []) if self.metadata else []
+        years = self.metadata.get("years", []) if self.metadata else []
+        standard_items = self.metadata.get("standard_items", []) if self.metadata else []
+
+        associations_context = ""
+        if self.metadata and "associations" in self.metadata:
+            symbol_to_company = self.metadata["associations"].get("symbol_to_company", {})
+            symbol_mappings = [
+                f"{symbol}: {', '.join(companies_)}"
+                for symbol, companies_ in symbol_to_company.items()
+            ]
+            if symbol_mappings:
+                associations_context = "Symbol-Company Mappings:\n" + "\n".join(symbol_mappings)
+
+        extra_count = max(0, len(companies) - 10)
+        companies_preview = ", ".join(companies[:10])
+        companies_str = (
+            f"{companies_preview}... (and {extra_count} more)" if extra_count else companies_preview
+        )
+
+        return f"""You are a financial data query parser. Given a user query and metadata about available financial data,
+extract the relevant filter parameters. Consider the conversation history for context.
+
+Available metadata:
+- Companies: {companies_str}
+- Symbols: {', '.join(symbols)}
+- Years: {', '.join(years)}
+- Standard Items: {', '.join(standard_items)}
+
+{associations_context}
+
+CRITICAL PARSING RULES:
+1. If user mentions a trading symbol (like MDS, SOS, JBG, etc.), put it in the "symbols" array
+2. If user mentions a full company name, put it in the "companies" array
+3. Symbols are typically 2-5 uppercase letters
+4. Empty list [] means "ALL" - return data for all items in that category
+5. Match symbols case-insensitively (sos = SOS, mds = MDS)
+6. CONTEXT AWARENESS: If the user asks follow-up questions like "what about 2022?" or "show me their revenue",
+refer to the conversation history to understand which companies/symbols/items they're referring to
+7. For pronouns like "it", "them", "their", "this company" - refer to the most recent companies/symbols discussed
+
+Return a JSON object with this EXACT structure:
+{{
+    "companies": [],
+    "symbols": [],
+    "years": [],
+    "standard_items": [],
+    "interpretation": "",
+    "data_availability_note": "",
+    "is_follow_up": true/false,
+    "context_used": ""
+}}
+
+Return ONLY the JSON object, no markdown formatting, no code blocks, no additional text."""
+
     def _parse_with_dspy(
         self,
         query: str,
@@ -462,63 +534,36 @@ class FinancialDataManager:
         # Get conversation context
         conversation_context = self.get_conversation_context(conversation_history)
 
-        # Create a detailed context with associations
-        associations_context = ""
-        if self.metadata and "associations" in self.metadata:
-            # Show symbol-company mappings
-            symbol_mappings = []
-            symbol_to_company = self.metadata["associations"].get("symbol_to_company", {})
-            for symbol, companies in symbol_to_company.items():
-                symbol_mappings.append(f"{symbol}: {', '.join(companies)}")
-            associations_context = f"""
-                Symbol-Company Mappings:
-                {chr(10).join(symbol_mappings)}
-                """
-
-        prompt = f"""
-            You are a financial data query parser. Given a user query and metadata about available financial data,
-            extract the relevant filter parameters. Consider the conversation history for context.
-
-            CONVERSATION HISTORY:
-            {conversation_context}
-
-            Available metadata:
-            - Companies: {', '.join(self.metadata['companies'][:10])}... (and {len(self.metadata['companies'])-10} more)
-            - Symbols: {', '.join(self.metadata['symbols'])}
-            - Years: {', '.join(self.metadata['years'])}
-            - Standard Items: {', '.join(self.metadata['standard_items'])}
-
-            {associations_context}
-
-            Current User Query: "{query}"
-
-            CRITICAL PARSING RULES:
-            1. If user mentions a trading symbol (like MDS, SOS, JBG, etc.), put it in the "symbols" array
-            2. If user mentions a full company name, put it in the "companies" array
-            3. Symbols are typically 2-5 uppercase letters
-            4. Empty list [] means "ALL" - return data for all items in that category
-            5. Match symbols case-insensitively (sos = SOS, mds = MDS)
-            6. CONTEXT AWARENESS: If the user asks follow-up questions like "what about 2022?" or "show me their revenue",
-            refer to the conversation history to understand which companies/symbols/items they're referring to
-            7. For pronouns like "it", "them", "their", "this company" - refer to the most recent companies/symbols discussed
-
-            Return a JSON object with this EXACT structure:
-            {{
-                "companies": [],
-                "symbols": [],
-                "years": [],
-                "standard_items": [],
-                "interpretation": "",
-                "data_availability_note": "",
-                "is_follow_up": true/false,
-                "context_used": ""
-            }}
-
-            Return ONLY the JSON object, no markdown formatting, no code blocks, no additional text.
-        """
+        system_instruction = self._build_parse_query_system_instruction()
+        dynamic_content = (
+            f"CONVERSATION HISTORY:\n{conversation_context}\n\n" f'Current User Query: "{query}"'
+        )
 
         try:
-            response = self.model.generate_content(prompt)
+            response = None
+            cache_name = _PARSE_QUERY_CACHE.get_cache_name(system_instruction)
+            if cache_name:
+                try:
+                    client = get_genai_client()
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[
+                            genai_types.Content(
+                                role="user",
+                                parts=[genai_types.Part.from_text(text=dynamic_content)],
+                            )
+                        ],
+                        config=genai_types.GenerateContentConfig(cached_content=cache_name),
+                    )
+                except Exception as cache_exc:
+                    logger.warning(
+                        "cached_query_parsing_failed_falling_back",
+                        extra={"error": str(cache_exc)},
+                    )
+            if not response:
+                # Fallback: combine into one prompt and use the legacy model
+                prompt = f"{system_instruction}\n\n{dynamic_content}"
+                response = self.model.generate_content(prompt)
             response_text = response.text.strip()
             duration = time.time() - start_time
 
