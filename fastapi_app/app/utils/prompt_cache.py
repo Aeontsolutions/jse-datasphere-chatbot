@@ -1,6 +1,6 @@
 """Manages a Gemini cached content entry with hash-based invalidation."""
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from google.genai import types
@@ -35,7 +35,7 @@ class PromptCache:
             self._cache is not None
             and self._cache_hash == content_hash
             and self._expires_at is not None
-            and datetime.utcnow() < self._expires_at
+            and datetime.now(timezone.utc) < self._expires_at
         )
 
     def get_cache_name(self, system_instruction: str) -> Optional[str]:
@@ -48,8 +48,8 @@ class PromptCache:
         if self._is_valid(content_hash):
             return self._cache.name
 
+        client = get_genai_client()
         try:
-            client = get_genai_client()
             cache = client.caches.create(
                 model=self._model_name,
                 config=types.CreateCachedContentConfig(
@@ -61,7 +61,7 @@ class PromptCache:
             self._cache = cache
             self._cache_hash = content_hash
             # Expire 60 s before real TTL so we renew before the server drops it
-            self._expires_at = datetime.utcnow() + timedelta(seconds=self._ttl_seconds - 60)
+            self._expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(self._ttl_seconds - 60, 0))
             logger.info(
                 "prompt_cache_created",
                 extra={"display_name": self._display_name, "cache_name": cache.name},
