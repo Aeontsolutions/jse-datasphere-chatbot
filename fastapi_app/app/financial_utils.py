@@ -396,9 +396,7 @@ class FinancialDataManager:
                 for symbol, companies_ in symbol_to_company.items()
             ]
             if symbol_mappings:
-                associations_context = (
-                    "Symbol-Company Mappings:\n" + "\n".join(symbol_mappings)
-                )
+                associations_context = "Symbol-Company Mappings:\n" + "\n".join(symbol_mappings)
 
         extra_count = max(0, len(companies) - 10)
         companies_preview = ", ".join(companies[:10])
@@ -539,25 +537,31 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
 
         system_instruction = self._build_parse_query_system_instruction()
         dynamic_content = (
-            f"CONVERSATION HISTORY:\n{conversation_context}\n\n"
-            f'Current User Query: "{query}"'
+            f"CONVERSATION HISTORY:\n{conversation_context}\n\n" f'Current User Query: "{query}"'
         )
 
         try:
+            response = None
             cache_name = _PARSE_QUERY_CACHE.get_cache_name(system_instruction)
             if cache_name:
-                client = get_genai_client()
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=[
-                        genai_types.Content(
-                            role="user",
-                            parts=[genai_types.Part.from_text(text=dynamic_content)],
-                        )
-                    ],
-                    config=genai_types.GenerateContentConfig(cached_content=cache_name),
-                )
-            else:
+                try:
+                    client = get_genai_client()
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[
+                            genai_types.Content(
+                                role="user",
+                                parts=[genai_types.Part.from_text(text=dynamic_content)],
+                            )
+                        ],
+                        config=genai_types.GenerateContentConfig(cached_content=cache_name),
+                    )
+                except Exception as cache_exc:
+                    logger.warning(
+                        "cached_query_parsing_failed_falling_back",
+                        extra={"error": str(cache_exc)},
+                    )
+            if not response:
                 # Fallback: combine into one prompt and use the legacy model
                 prompt = f"{system_instruction}\n\n{dynamic_content}"
                 response = self.model.generate_content(prompt)

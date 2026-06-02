@@ -230,8 +230,10 @@ def test_run_uses_cached_content_when_cache_hits(mock_genai_client):
     resp.usage_metadata = None
     mock_genai_client.models.generate_content.return_value = resp
 
-    with patch("app.agent_v2._SYSTEM_PROMPT_CACHE") as mock_cache, \
-         patch("app.agent_v2._SYSTEM_PROMPT_NO_SEARCH_CACHE"):
+    with (
+        patch("app.agent_v2._SYSTEM_PROMPT_CACHE") as mock_cache,
+        patch("app.agent_v2._SYSTEM_PROMPT_NO_SEARCH_CACHE"),
+    ):
         mock_cache.get_cache_name.return_value = "cachedContents/xyz"
 
         agent = AgentV2()
@@ -253,8 +255,10 @@ def test_run_falls_back_to_system_instruction_when_cache_returns_none(mock_genai
     resp.usage_metadata = None
     mock_genai_client.models.generate_content.return_value = resp
 
-    with patch("app.agent_v2._SYSTEM_PROMPT_CACHE") as mock_cache, \
-         patch("app.agent_v2._SYSTEM_PROMPT_NO_SEARCH_CACHE"):
+    with (
+        patch("app.agent_v2._SYSTEM_PROMPT_CACHE") as mock_cache,
+        patch("app.agent_v2._SYSTEM_PROMPT_NO_SEARCH_CACHE"),
+    ):
         mock_cache.get_cache_name.return_value = None
 
         agent = AgentV2()

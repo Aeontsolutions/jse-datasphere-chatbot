@@ -626,14 +626,18 @@ def test_non_ratio_item_type_unaffected(monkeypatch):
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
+
 def _make_mgr_with_metadata():
     """Return a FinancialDataManager with metadata pre-loaded, bypassing BQ/AI init."""
     from app.financial_utils import FinancialDataManager
     from unittest.mock import patch, MagicMock
-    with patch.object(FinancialDataManager, '_initialize_bigquery_client'), \
-         patch.object(FinancialDataManager, 'load_metadata_from_bigquery'), \
-         patch.object(FinancialDataManager, '_initialize_ai_model'), \
-         patch.object(FinancialDataManager, '_initialize_dspy'):
+
+    with (
+        patch.object(FinancialDataManager, "_initialize_bigquery_client"),
+        patch.object(FinancialDataManager, "load_metadata_from_bigquery"),
+        patch.object(FinancialDataManager, "_initialize_ai_model"),
+        patch.object(FinancialDataManager, "_initialize_dspy"),
+    ):
         mgr = FinancialDataManager.__new__(FinancialDataManager)
         mgr.model = MagicMock()  # sentinel: AI is available
         mgr.use_dspy = False
@@ -652,10 +656,13 @@ def _make_mgr_with_metadata():
 
 # ── Task 3 tests ────────────────────────────────────────────────────────────
 
+
 def test_build_parse_query_system_instruction_is_stable():
     """Calling _build_parse_query_system_instruction() twice returns identical text."""
     mgr = _make_mgr_with_metadata()
-    assert mgr._build_parse_query_system_instruction() == mgr._build_parse_query_system_instruction()
+    assert (
+        mgr._build_parse_query_system_instruction() == mgr._build_parse_query_system_instruction()
+    )
 
 
 def test_build_parse_query_system_instruction_contains_metadata():
@@ -670,6 +677,7 @@ def test_build_parse_query_system_instruction_contains_metadata():
 def test_parse_user_query_uses_cached_content_when_available():
     """parse_user_query passes cached_content= to generate_content when cache hits."""
     from unittest.mock import patch, MagicMock
+
     mgr = _make_mgr_with_metadata()
     mock_resp = MagicMock()
     mock_resp.text = '{"companies":[],"symbols":["NCBFG"],"years":[],"standard_items":["revenue"],"interpretation":"test","data_availability_note":"","is_follow_up":false,"context_used":""}'
@@ -677,8 +685,10 @@ def test_parse_user_query_uses_cached_content_when_available():
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_resp
 
-    with patch("app.financial_utils._PARSE_QUERY_CACHE") as mock_cache, \
-         patch("app.financial_utils.get_genai_client", return_value=mock_client):
+    with (
+        patch("app.financial_utils._PARSE_QUERY_CACHE") as mock_cache,
+        patch("app.financial_utils.get_genai_client", return_value=mock_client),
+    ):
         mock_cache.get_cache_name.return_value = "cachedContents/parse123"
         mgr.parse_user_query("What is NCBFG revenue?")
 
@@ -689,6 +699,7 @@ def test_parse_user_query_uses_cached_content_when_available():
 def test_parse_user_query_falls_back_when_cache_none():
     """parse_user_query falls back to self.model when cache returns None."""
     from unittest.mock import patch, MagicMock
+
     mgr = _make_mgr_with_metadata()
     mock_resp = MagicMock()
     mock_resp.text = '{"companies":[],"symbols":["NCBFG"],"years":[],"standard_items":["revenue"],"interpretation":"test","data_availability_note":"","is_follow_up":false,"context_used":""}'

@@ -1,4 +1,5 @@
 """Unit tests for PromptCache."""
+
 import hashlib
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -65,16 +66,15 @@ def test_get_cache_name_returns_none_on_exception(mock_client):
     assert result is None
 
 
-def test_get_cache_name_propagates_http_exception_from_client_init():
-    """HTTPException raised by get_genai_client() must not be swallowed."""
+def test_get_cache_name_returns_none_on_http_exception_from_client_init():
+    """HTTPException from get_genai_client() is caught and returns None per the contract."""
     pc = PromptCache(model_name="gemini-2.5-pro", display_name="test-cache")
     with patch(
         "app.utils.prompt_cache.get_genai_client",
         side_effect=HTTPException(status_code=503, detail="no key"),
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            pc.get_cache_name("stable system instruction")
-    assert exc_info.value.status_code == 503
+        result = pc.get_cache_name("stable system instruction")
+    assert result is None
 
 
 def test_get_cache_name_retries_after_create_failure(mock_client):
