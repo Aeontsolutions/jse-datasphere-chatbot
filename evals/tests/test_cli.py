@@ -45,3 +45,15 @@ def test_invalid_endpoint_rejected():
     parser = build_arg_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["--endpoint", "bogus"])
+
+
+def test_parser_accepts_resume_flag():
+    parser = build_arg_parser()
+    ns = parser.parse_args(["--resume", "2026-06-01T10-00-00"])
+    assert ns.resume_run_id == "2026-06-01T10-00-00"
+
+
+def test_resume_flag_defaults_to_none():
+    parser = build_arg_parser()
+    ns = parser.parse_args([])
+    assert ns.resume_run_id is None

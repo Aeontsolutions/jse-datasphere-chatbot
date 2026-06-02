@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -19,8 +20,8 @@ from evals.config import load_config
 from evals.judge import Judge
 from evals.persona import PersonaSpec, load_personas
 from evals.persona_actor import PersonaActor
-from evals.report import write_run
-from evals.runner import run_simulation
+from evals.report import load_conversation_artifacts, write_conversation, write_initial_manifest, write_run
+from evals.runner import ConversationArtifact, RunArtifacts, run_simulation
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -36,6 +37,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", dest="config_path", default=None)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--output-dir", default=None)
+    parser.add_argument(
+        "--resume",
+        dest="resume_run_id",
+        default=None,
+        metavar="RUN_ID",
+        help="Resume a crashed run; skips conversations already written to output-dir/RUN_ID/",
+    )
     parser.add_argument(
         "--personas-dir",
         default=str(Path(__file__).parent / "personas"),
@@ -119,7 +127,45 @@ async def _amain(ns: argparse.Namespace) -> int:
             return FinancialClient(base_url=config.base_url, timeout_s=config.request_timeout_s)
         return AgentStreamClient(base_url=config.base_url, timeout_s=config.request_timeout_s)
 
+    run_id = ns.resume_run_id or ns.run_id or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    output_root = Path(ns.output_dir) if ns.output_dir else Path(__file__).parent / "runs"
+    run_dir = output_root / run_id
+    if ns.resume_run_id and not run_dir.exists():
+        print(f"ERROR: run directory {run_dir} does not exist. Cannot resume.")
+        return 2
+    (run_dir / "conversations").mkdir(parents=True, exist_ok=True)
+
+    git_sha = _git_sha()
     started_at = datetime.now(timezone.utc).isoformat()
+
+    existing_artifacts: list[ConversationArtifact] = []
+    skip_ids: set[str] | None = None
+    if ns.resume_run_id:
+        existing_artifacts, skip_ids = load_conversation_artifacts(run_dir)
+        print(f"Resuming {run_id}: {len(existing_artifacts)} conversation(s) already complete, skipping.")
+        manifest_path = run_dir / "manifest.json"
+        if manifest_path.exists():
+            try:
+                old_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if "started_at" in old_manifest:
+                    started_at = old_manifest["started_at"]
+            except Exception:
+                pass
+
+    write_initial_manifest(
+        run_dir=run_dir,
+        run_id=run_id,
+        git_sha=git_sha,
+        config=config.model_dump(),
+        personas=personas,
+        started_at=started_at,
+    )
+
+    persona_by_id = {p.id: p for p in personas}
+
+    async def _on_artifact(artifact: ConversationArtifact) -> None:
+        write_conversation(run_dir, artifact, persona_by_id.get(artifact.transcript.persona_id))
+
     print(
         f"Running {len(personas)} persona(s) × {config.replicates} replicate(s) "
         f"= {len(personas) * config.replicates} conversation(s) "
@@ -134,23 +180,27 @@ async def _amain(ns: argparse.Namespace) -> int:
         chat_client_factory=client_factory,
         persona_actor=persona_actor,
         judge=judge,
+        on_artifact=_on_artifact,
+        skip_ids=skip_ids,
     )
     ended_at = datetime.now(timezone.utc).isoformat()
 
-    run_id = ns.run_id or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-    output_root = Path(ns.output_dir) if ns.output_dir else Path(__file__).parent / "runs"
+    merged = RunArtifacts(
+        conversations=existing_artifacts + artifacts.conversations,
+        cost_capped=artifacts.cost_capped,
+    )
     run_dir = write_run(
-        artifacts=artifacts,
+        artifacts=merged,
         personas=personas,
         config=config.model_dump(),
         run_id=run_id,
-        git_sha=_git_sha(),
+        git_sha=git_sha,
         output_root=output_root,
         started_at=started_at,
         ended_at=ended_at,
     )
     print(f"Wrote run to {run_dir}")
-    if artifacts.cost_capped:
+    if merged.cost_capped:
         print("WARNING: cost cap reached; run is partial")
     return 0
 

@@ -149,9 +149,15 @@ async def run_simulation(
     chat_client_factory: Callable[[str], ChatClient],
     persona_actor: PersonaActor,
     judge: Judge,
+    on_artifact: Callable[[ConversationArtifact], Awaitable[None]] | None = None,
+    skip_ids: set[str] | None = None,
 ) -> RunArtifacts:
     """Run all personas × replicates concurrently with a global cost cap."""
     semaphore = asyncio.Semaphore(concurrency)
+    # judge_semaphore is intentionally wider than semaphore: once a conversation
+    # finishes its semaphore slot is released, so up to concurrency new convos can
+    # start while up to concurrency*2 judge calls run concurrently. This keeps the
+    # judge pipeline full without blocking new conversations.
     judge_semaphore = asyncio.Semaphore(concurrency * 2)
 
     running_cost = 0.0
@@ -161,6 +167,9 @@ async def run_simulation(
 
     async def one(persona: PersonaSpec, rep: int) -> ConversationArtifact | None:
         nonlocal running_cost, cost_capped
+        conversation_id = f"{persona.id}__rep{rep + 1:02d}"
+        if skip_ids and conversation_id in skip_ids:
+            return None
         if cancel_event.is_set():
             return None
         async with semaphore:
@@ -186,9 +195,15 @@ async def run_simulation(
             try:
                 output = await judge.evaluate(persona=persona, transcript=transcript)
                 print(f"  {persona.id} rep{rep+1}: {output.verdict} (turns={len(transcript.turns)}, ${convo_cost:.3f})")
-                return ConversationArtifact(transcript, output, False, None)
+                artifact: ConversationArtifact = ConversationArtifact(transcript, output, False, None)
             except Exception as exc:
-                return ConversationArtifact(transcript, None, True, f"{type(exc).__name__}: {exc}")
+                artifact = ConversationArtifact(transcript, None, True, f"{type(exc).__name__}: {exc}")
+            if on_artifact is not None:
+                try:
+                    await on_artifact(artifact)
+                except Exception as exc:
+                    print(f"WARNING: on_artifact callback failed for {artifact.transcript.conversation_id}: {exc}")
+            return artifact
 
     tasks = [
         asyncio.create_task(one(persona, rep))
@@ -206,6 +221,6 @@ async def run_simulation(
             conversations.append(r)
         elif isinstance(r, BaseException):
             print(f"ERROR: task crashed: {type(r).__name__}: {r}")
-        # r is None when the task was cancelled by the cost cap
+        # r is None when the task was cancelled by the cost cap or skip_ids
 
     return RunArtifacts(conversations=conversations, cost_capped=cost_capped)
