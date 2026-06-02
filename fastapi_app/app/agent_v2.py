@@ -22,6 +22,7 @@ from app.logging_config import get_logger
 from app.models import CostSummary, PhaseCost
 from app.utils.cost_tracking import calculate_cost_from_response
 from app.utils.monitoring import record_ai_cost
+from app.utils.prompt_cache import PromptCache
 
 logger = get_logger(__name__)
 
@@ -93,6 +94,17 @@ OTHER — anything else: news, announcements, current stock prices, IPO timeline
 When in doubt between FINANCIAL and OTHER for a question that names a JSE company and a financial metric, choose FINANCIAL.
 
 Output only: FINANCIAL or OTHER"""
+
+# Module-level caches — shared across per-request AgentV2 instances.
+# FINANCIAL_ROUTER_PROMPT is not cached: ~300 tokens, below Gemini's 1024-token minimum.
+_SYSTEM_PROMPT_CACHE = PromptCache(
+    model_name="gemini-2.5-pro",
+    display_name="agent-v2-system-prompt",
+)
+_SYSTEM_PROMPT_NO_SEARCH_CACHE = PromptCache(
+    model_name="gemini-2.5-pro",
+    display_name="agent-v2-system-prompt-no-search",
+)
 
 # ==============================================================================
 # AGENT V2 - Simple Google Search Grounding
@@ -244,6 +256,18 @@ class AgentV2:
             parts.append(f"Available years: {', '.join(metadata['years'])}")
         return "\n".join(parts)
 
+    def _make_config(
+        self,
+        system_prompt: str,
+        cache: PromptCache,
+        **kwargs: Any,
+    ) -> types.GenerateContentConfig:
+        """Build GenerateContentConfig using cached_content when available, else system_instruction."""
+        cache_name = cache.get_cache_name(system_prompt)
+        if cache_name:
+            return types.GenerateContentConfig(cached_content=cache_name, **kwargs)
+        return types.GenerateContentConfig(system_instruction=system_prompt, **kwargs)
+
     def _extract_grounding_metadata(self, response: Any) -> Dict[str, Any]:
         """
         Extract grounding metadata from Gemini response.
@@ -389,8 +413,9 @@ class AgentV2:
             synthesis = self.client.models.generate_content(
                 model=self.model_name,
                 contents=synth_contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT_NO_SEARCH,
+                config=self._make_config(
+                    SYSTEM_PROMPT_NO_SEARCH,
+                    _SYSTEM_PROMPT_NO_SEARCH_CACHE,
                     temperature=0.3,
                     max_output_tokens=8192,
                 ),
@@ -475,11 +500,13 @@ class AgentV2:
             system_prompt = SYSTEM_PROMPT if enable_web_search else SYSTEM_PROMPT_NO_SEARCH
 
             # Single generate_content call with optional grounding
+            _cache = _SYSTEM_PROMPT_CACHE if enable_web_search else _SYSTEM_PROMPT_NO_SEARCH_CACHE
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
+                config=self._make_config(
+                    system_prompt,
+                    _cache,
                     temperature=0.7,
                     top_p=0.95,
                     max_output_tokens=8192,
