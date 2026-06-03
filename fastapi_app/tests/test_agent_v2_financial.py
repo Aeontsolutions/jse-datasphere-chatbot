@@ -331,3 +331,17 @@ def test_refuse_path_no_tools_on_refusal_call(mock_genai_client):
     # calls[0] = route call, calls[1] = refusal generation call
     refusal_cfg = calls[1].kwargs["config"]
     assert refusal_cfg.tools is None
+
+
+def test_refuse_path_conversation_history_none(mock_genai_client):
+    """REFUSE path correctly handles conversation_history=None (no crash, history built fresh)."""
+    mock_genai_client.models.generate_content.side_effect = [
+        _route_response("REFUSE"),
+        _text_response("JSE topics only."),
+    ]
+    agent = AgentV2()
+    result = asyncio.run(agent.run(query="Buy me Tesla stock.", conversation_history=None))
+    assert result["conversation_history"] == [
+        {"role": "user", "content": "Buy me Tesla stock."},
+        {"role": "assistant", "content": "JSE topics only."},
+    ]
