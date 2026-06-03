@@ -286,6 +286,7 @@ def test_run_falls_back_to_system_instruction_when_cache_returns_none(mock_genai
 # REFUSE path (AEO-23)
 # ---------------------------------------------------------------------------
 
+
 def test_refuse_path_uses_flash_only_no_pro(mock_genai_client):
     """REFUSE route: 2 Flash calls (route + refusal), zero Pro calls."""
     mock_genai_client.models.generate_content.side_effect = [

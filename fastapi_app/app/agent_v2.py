@@ -494,9 +494,7 @@ class AgentV2:
                 }
 
             # GROUNDING (or FINANCIAL with financial disabled / no manager): fall through
-            logger.info(
-                f"AgentV2 fast_path: '{route_label}' → falling through to web/plain path"
-            )
+            logger.info(f"AgentV2 fast_path: '{route_label}' → falling through to web/plain path")
             return None
 
         except Exception as e:
@@ -535,8 +533,7 @@ class AgentV2:
         fast_result = await self._fast_path(query, conversation_history, enable_financial_data)
         if fast_result is not None:
             logger.info(
-                f"AgentV2 fast_path used. "
-                f"record_count={fast_result.get('record_count', 0)}"
+                f"AgentV2 fast_path used. " f"record_count={fast_result.get('record_count', 0)}"
             )
             return fast_result
 
