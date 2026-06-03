@@ -133,10 +133,10 @@ def test_financial_path_routes_parses_and_synthesizes(mock_genai_client):
     assert mock_genai_client.models.generate_content.call_count == 2
 
 
-def test_route_other_skips_parse_and_falls_through_to_web(mock_genai_client):
-    # route=OTHER -> NO parse_user_query, NO query_data; web path runs (route + web).
+def test_route_grounding_skips_parse_and_falls_through_to_web(mock_genai_client):
+    # route=GROUNDING -> NO parse_user_query, NO query_data; web path runs (route + web).
     mock_genai_client.models.generate_content.side_effect = [
-        _route_response("OTHER"),
+        _route_response("GROUNDING"),
         _text_response("Here is some recent JSE news."),
     ]
     agent = AgentV2(financial_manager=_mock_manager([]))
@@ -166,24 +166,35 @@ def test_route_call_uses_flash_and_no_tools(mock_genai_client):
 
 
 def test_enable_financial_false_skips_financial(mock_genai_client):
-    mock_genai_client.models.generate_content.return_value = _text_response("web answer")
+    # Router always runs (catches refusals). The route call returns GROUNDING so
+    # the financial branch is skipped, but the router itself still fires (1 Flash
+    # call for route, 1 Pro call for web = 2 total).
+    mock_genai_client.models.generate_content.side_effect = [
+        _route_response("GROUNDING"),  # router returns GROUNDING
+        _text_response("web answer"),  # Pro web path
+    ]
     mgr = _mock_manager([_record()])
     agent = AgentV2(financial_manager=mgr)
     result = asyncio.run(agent.run(query="What was NCB revenue?", enable_financial_data=False))
 
     mgr.parse_user_query.assert_not_called()
     mgr.query_data.assert_not_called()
-    # No route call either — financial path never entered.
-    assert mock_genai_client.models.generate_content.call_count == 1
+    # route call + web call = 2
+    assert mock_genai_client.models.generate_content.call_count == 2
     assert result["response"] == "web answer"
 
 
 def test_no_manager_skips_financial(mock_genai_client):
-    mock_genai_client.models.generate_content.return_value = _text_response("web answer")
+    # No manager: router fires (1 Flash route call), FINANCIAL branch skipped,
+    # falls through to Pro web path (1 Pro call). Total = 2 calls.
+    mock_genai_client.models.generate_content.side_effect = [
+        _route_response("FINANCIAL"),  # router says FINANCIAL but no manager to call
+        _text_response("web answer"),  # Pro web path
+    ]
     agent = AgentV2()  # financial_manager=None
     result = asyncio.run(agent.run(query="What was NCB revenue?"))
     assert result["response"] == "web answer"
-    assert mock_genai_client.models.generate_content.call_count == 1
+    assert mock_genai_client.models.generate_content.call_count == 2
 
 
 def test_financial_error_falls_through_to_web(mock_genai_client):
@@ -269,3 +280,69 @@ def test_run_falls_back_to_system_instruction_when_cache_returns_none(mock_genai
     config = mock_genai_client.models.generate_content.call_args.kwargs["config"]
     assert config.system_instruction is not None
     assert not getattr(config, "cached_content", None)
+
+
+# ---------------------------------------------------------------------------
+# REFUSE path (AEO-23)
+# ---------------------------------------------------------------------------
+
+
+def test_refuse_path_uses_flash_only_no_pro(mock_genai_client):
+    """REFUSE route: 2 Flash calls (route + refusal), zero Pro calls."""
+    mock_genai_client.models.generate_content.side_effect = [
+        _route_response("REFUSE"),
+        _text_response("Sorry, I can only help with JSE topics."),
+    ]
+    agent = AgentV2(financial_manager=_mock_manager([]))
+    result = asyncio.run(agent.run(query="Write me a poem about mangoes."))
+
+    assert result["response"] == "Sorry, I can only help with JSE topics."
+    assert result["record_count"] == 0
+    assert result["data_found"] is False
+    # Both calls must use Flash, not Pro
+    calls = mock_genai_client.models.generate_content.call_args_list
+    assert len(calls) == 2
+    assert all(c.kwargs["model"] == "gemini-2.5-flash" for c in calls)
+
+
+def test_refuse_path_skips_financial_manager(mock_genai_client):
+    """On REFUSE the financial manager is never touched."""
+    mock_genai_client.models.generate_content.side_effect = [
+        _route_response("REFUSE"),
+        _text_response("I only assist with JSE topics."),
+    ]
+    mgr = _mock_manager([])
+    agent = AgentV2(financial_manager=mgr)
+    asyncio.run(agent.run(query="Tell me about US stock market."))
+
+    mgr.parse_user_query.assert_not_called()
+    mgr.query_data.assert_not_called()
+
+
+def test_refuse_path_no_tools_on_refusal_call(mock_genai_client):
+    """The refusal Flash call must have no tools attached (no grounding)."""
+    mock_genai_client.models.generate_content.side_effect = [
+        _route_response("REFUSE"),
+        _text_response("I can only help with JSE-related topics."),
+    ]
+    agent = AgentV2(financial_manager=_mock_manager([]))
+    asyncio.run(agent.run(query="What is bitcoin?"))
+
+    calls = mock_genai_client.models.generate_content.call_args_list
+    # calls[0] = route call, calls[1] = refusal generation call
+    refusal_cfg = calls[1].kwargs["config"]
+    assert refusal_cfg.tools is None
+
+
+def test_refuse_path_conversation_history_none(mock_genai_client):
+    """REFUSE path correctly handles conversation_history=None (no crash, history built fresh)."""
+    mock_genai_client.models.generate_content.side_effect = [
+        _route_response("REFUSE"),
+        _text_response("JSE topics only."),
+    ]
+    agent = AgentV2()
+    result = asyncio.run(agent.run(query="Buy me Tesla stock.", conversation_history=None))
+    assert result["conversation_history"] == [
+        {"role": "user", "content": "Buy me Tesla stock."},
+        {"role": "assistant", "content": "JSE topics only."},
+    ]
