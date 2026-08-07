@@ -1,0 +1,100 @@
+version: '3'
+
+vars:
+  AWS_PROFILE: 'ats-elroy'
+  APP_NAME: 'jse-datasphere-chatbot'
+
+tasks:
+  default:
+    desc: List all available tasks
+    cmds:
+      - task --list
+
+  # ---------------------------------------------------------------------------
+  # Secrets Management
+  # ---------------------------------------------------------------------------
+  secrets:push:  # pragma: allowlist secret
+    desc: "Push secrets from .env to AWS SSM Parameter Store for an environment (e.g. task secrets:push ENV=dev)"
+    vars:
+      ENV: '{{.ENV | default "dev"}}'
+    cmds:
+      - ./venv/bin/python3 scripts/push_copilot_secrets.py --env {{.ENV}} --app {{.APP_NAME}} --profile {{.AWS_PROFILE}}
+
+  secrets:dev:  # pragma: allowlist secret
+    desc: Push secrets to dev environment
+    cmds:
+      - task: secrets:push
+        vars: {ENV: dev}
+
+  secrets:prod:  # pragma: allowlist secret
+    desc: Push secrets to prod environment
+    cmds:
+      - task: secrets:push
+        vars: {ENV: prod}
+
+  # ---------------------------------------------------------------------------
+  # Copilot Environment Management
+  # ---------------------------------------------------------------------------
+  env:init:
+    desc: "Initialize a Copilot environment (e.g. task env:init ENV=dev)"
+    vars:
+      ENV: '{{.ENV | default "dev"}}'
+    dir: fastapi_app
+    cmds:
+      - AWS_PROFILE={{.AWS_PROFILE}} copilot env init --name {{.ENV}} --profile {{.AWS_PROFILE}} --default-config
+
+  env:deploy:
+    desc: "Deploy a Copilot environment (e.g. task env:deploy ENV=dev)"
+    vars:
+      ENV: '{{.ENV | default "dev"}}'
+    dir: fastapi_app
+    cmds:
+      - AWS_PROFILE={{.AWS_PROFILE}} copilot env deploy --name {{.ENV}}
+
+  # ---------------------------------------------------------------------------
+  # Service Deployment Tasks
+  # ---------------------------------------------------------------------------
+  deploy:
+    desc: "Deploy service to a specified environment, pushing secrets first (e.g. task deploy ENV=dev)"
+    vars:
+      ENV: '{{.ENV | default "dev"}}'
+      SERVICE: '{{.SERVICE | default "api"}}'
+    cmds:
+      - ./venv/bin/python3 scripts/push_copilot_secrets.py --env {{.ENV}} --app {{.APP_NAME}} --profile {{.AWS_PROFILE}}
+      - cd fastapi_app && AWS_PROFILE={{.AWS_PROFILE}} copilot svc deploy --name {{.SERVICE}} --env {{.ENV}}
+
+  deploy:dev:
+    desc: Deploy api service to dev environment (pushes secrets automatically)
+    cmds:
+      - task: deploy
+        vars: {ENV: dev, SERVICE: api}
+
+  deploy:prod:
+    desc: Deploy api service to prod environment (pushes secrets automatically)
+    cmds:
+      - task: deploy
+        vars: {ENV: prod, SERVICE: api}
+
+  # ---------------------------------------------------------------------------
+  # Status and Info
+  # ---------------------------------------------------------------------------
+  status:
+    desc: "Show Copilot service status (e.g. task status ENV=dev)"
+    vars:
+      ENV: '{{.ENV | default "dev"}}'
+      SERVICE: '{{.SERVICE | default "api"}}'
+    dir: fastapi_app
+    cmds:
+      - AWS_PROFILE={{.AWS_PROFILE}} copilot svc show --name {{.SERVICE}}
+
+  status:dev:
+    desc: Show dev service status and endpoint
+    cmds:
+      - task: status
+        vars: {ENV: dev, SERVICE: api}
+
+  status:prod:
+    desc: Show prod service status and endpoint
+    cmds:
+      - task: status
+        vars: {ENV: prod, SERVICE: api}
