@@ -286,32 +286,30 @@ async def health_check():
         # Check S3 connectivity
         s3_health = await _check_s3_health()
         health_status["components"]["s3"] = s3_health
-        if s3_health["status"] == "unhealthy":
+        if s3_health["status"] != "healthy":
             all_healthy = False
 
         # Check BigQuery connectivity
-        # Only "unhealthy" (client crashed) blocks overall health.
-        # "unavailable" or "degraded" means a graceful partial failure — service still runs.
         bigquery_health = await _check_bigquery_health()
         health_status["components"]["bigquery"] = bigquery_health
-        if bigquery_health["status"] == "unhealthy":
+        if bigquery_health["status"] != "healthy":
             all_healthy = False
 
-        # Check Redis connectivity (optional — never blocks health)
+        # Check Redis connectivity
         redis_health = await _check_redis_health()
         health_status["components"]["redis"] = redis_health
+        # Redis is optional, so don't mark overall health as unhealthy if Redis is down
 
         # Check Gemini AI availability
         gemini_health = await _check_gemini_health()
         health_status["components"]["gemini"] = gemini_health
-        if gemini_health["status"] == "unhealthy":
+        if gemini_health["status"] != "healthy":
             all_healthy = False
 
         # Check metadata availability
-        # "unavailable" means S3 metadata load failed — degraded but not critical.
         metadata_health = _check_metadata_health()
         health_status["components"]["metadata"] = metadata_health
-        if metadata_health["status"] == "unhealthy":
+        if metadata_health["status"] != "healthy":
             all_healthy = False
 
         # Set overall status
