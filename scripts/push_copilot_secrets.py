@@ -77,7 +77,15 @@ def main():
                 Type="SecureString",
                 Overwrite=True,
             )
-            print(f"✅ Successfully pushed {key}")
+            ssm.add_tags_to_resource(
+                ResourceType="Parameter",
+                ResourceId=param_name,
+                Tags=[
+                    {"Key": "copilot-application", "Value": args.app},
+                    {"Key": "copilot-environment", "Value": args.env},
+                ],
+            )
+            print(f"✅ Successfully pushed and tagged {key}")
             pushed_count += 1
         except Exception as e:
             print(f"❌ Failed to push {key}: {e}", file=sys.stderr)
