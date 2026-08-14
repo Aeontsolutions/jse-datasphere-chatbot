@@ -27,8 +27,8 @@ def main():
     )
     parser.add_argument(
         "--profile",
-        default=os.environ.get("AWS_PROFILE", "ats-elroy"),
-        help="AWS CLI Profile name to use. Default: $AWS_PROFILE or 'ats-elroy'",
+        default=os.environ.get("AWS_PROFILE", "ats-jse-elroy"),
+        help="AWS CLI Profile name to use. Default: $AWS_PROFILE or 'ats-jse-elroy'",
     )
     parser.add_argument(
         "--region",

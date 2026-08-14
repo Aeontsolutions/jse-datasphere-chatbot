@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  AWS_PROFILE: 'ats-elroy'
+  AWS_PROFILE: 'ats-jse-elroy'
   APP_NAME: 'jse-datasphere-chatbot'
 
 tasks:

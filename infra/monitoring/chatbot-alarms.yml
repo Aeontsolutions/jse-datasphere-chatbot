@@ -1,0 +1,312 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudWatch alarms, log-based metric filters, and a dashboard for the
+  jse-datasphere-chatbot "api" service (deployed independently of Copilot,
+  since fastapi_app/copilot/api/addons/*.yml is gitignored in this repo).
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues: [dev, staging, prod, test]
+    Description: Copilot environment name this stack monitors.
+  ClusterName:
+    Type: String
+    Description: ECS cluster name (no ARN).
+  ServiceName:
+    Type: String
+    Description: ECS service name (no ARN).
+  LogGroupName:
+    Type: String
+    Description: CloudWatch log group for the api container, e.g. /copilot/jse-datasphere-chatbot-dev-api.
+  LoadBalancerArnSuffix:
+    Type: String
+    Description: 'ALB dimension value, e.g. app/jse-da-Publi-xxxx/yyyy (from the ALB ARN, everything after :loadbalancer/).'
+  TargetGroupArnSuffix:
+    Type: String
+    Description: 'Target group dimension value, e.g. targetgroup/jse-da-Targe-xxxx/yyyy (from the TG ARN, everything after :targetgroup/).'
+  AlertEmail:
+    Type: String
+    Description: Email address subscribed to the alert SNS topic (AWS will send a confirmation email that must be clicked).
+  ErrorCountThreshold:
+    Type: Number
+    Default: 3
+    Description: Number of app-level "level=error" log lines within 5 minutes that trips the generic error alarm.
+  LatencyThresholdSeconds:
+    Type: Number
+    Default: 60
+    Description: ALB p99 TargetResponseTime (seconds) that trips the latency alarm. Normal chat/synthesis calls run 7-40s; Aug 11 saw a 180s outlier.
+
+Resources:
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub jse-datasphere-chatbot-${Env}-alerts
+      DisplayName: !Sub 'jse-datasphere-chatbot ${Env} alerts'
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # --- Log-based metric filters -------------------------------------------
+  # The app logs structured JSON (structlog) with a "level" field, so these
+  # match on parsed JSON fields rather than raw substrings where possible.
+
+  ErrorLogMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ $.level = "error" }'
+      MetricTransformations:
+        - MetricName: ErrorCount
+          MetricNamespace: !Sub JSEChatbot/${Env}
+          MetricValue: '1'
+          DefaultValue: 0
+
+  GeminiQuotaMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '?"RESOURCE_EXHAUSTED" ?"prepayment credits"'
+      MetricTransformations:
+        - MetricName: GeminiQuotaExhaustedCount
+          MetricNamespace: !Sub JSEChatbot/${Env}
+          MetricValue: '1'
+          DefaultValue: 0
+
+  MetadataLoadFailureMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '"metadata_load_startup_failed"'
+      MetricTransformations:
+        - MetricName: MetadataLoadFailureCount
+          MetricNamespace: !Sub JSEChatbot/${Env}
+          MetricValue: '1'
+          DefaultValue: 0
+
+  # --- Log-based alarms -----------------------------------------------------
+
+  ErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub jse-datasphere-chatbot-${Env}-error-rate
+      AlarmDescription: !Sub '${ErrorCountThreshold}+ app-level errors logged within 5 minutes on ${Env}.'
+      Namespace: !Sub JSEChatbot/${Env}
+      MetricName: ErrorCount
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: !Ref ErrorCountThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  GeminiQuotaAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub jse-datasphere-chatbot-${Env}-gemini-quota-exhausted
+      AlarmDescription: 'Gemini API returned RESOURCE_EXHAUSTED / prepayment credits depleted. Chat requests are failing.'
+      Namespace: !Sub JSEChatbot/${Env}
+      MetricName: GeminiQuotaExhaustedCount
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  MetadataLoadFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub jse-datasphere-chatbot-${Env}-metadata-load-failure
+      AlarmDescription: 'Container failed to download document metadata from S3 at startup (e.g. stale/invalid credentials, missing key).'
+      Namespace: !Sub JSEChatbot/${Env}
+      MetricName: MetadataLoadFailureCount
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  # --- ALB / ECS alarms -------------------------------------------------
+
+  NoHealthyHostsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub jse-datasphere-chatbot-${Env}-no-healthy-hosts
+      AlarmDescription: 'Zero healthy ECS tasks behind the ALB target group - the service is effectively down.'
+      Namespace: AWS/ApplicationELB
+      MetricName: HealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerArnSuffix
+        - Name: TargetGroup
+          Value: !Ref TargetGroupArnSuffix
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  UnhealthyHostAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub jse-datasphere-chatbot-${Env}-unhealthy-hosts
+      AlarmDescription: 'At least one ECS task is failing ALB health checks (early warning before it gets killed).'
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerArnSuffix
+        - Name: TargetGroup
+          Value: !Ref TargetGroupArnSuffix
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  Alb5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub jse-datasphere-chatbot-${Env}-alb-5xx
+      AlarmDescription: 'ALB is seeing 5xx responses from the api targets.'
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerArnSuffix
+        - Name: TargetGroup
+          Value: !Ref TargetGroupArnSuffix
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  LatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub jse-datasphere-chatbot-${Env}-p99-latency
+      AlarmDescription: !Sub 'p99 target response time exceeded ${LatencyThresholdSeconds}s (a normal chat/synthesis call runs 7-40s; this catches genuine hangs like the 180s Aug 11 outlier).'
+      Namespace: AWS/ApplicationELB
+      MetricName: TargetResponseTime
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerArnSuffix
+        - Name: TargetGroup
+          Value: !Ref TargetGroupArnSuffix
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: !Ref LatencyThresholdSeconds
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  # --- Dashboard -----------------------------------------------------------
+
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub jse-datasphere-chatbot-${Env}
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            { "type": "text", "x": 0, "y": 0, "width": 24, "height": 1,
+              "properties": { "markdown": "# jse-datasphere-chatbot - ${Env}" } },
+
+            { "type": "metric", "x": 0, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "Healthy / unhealthy targets",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  [ "AWS/ApplicationELB", "HealthyHostCount", "LoadBalancer", "${LoadBalancerArnSuffix}", "TargetGroup", "${TargetGroupArnSuffix}", { "stat": "Minimum", "label": "Healthy (min)" } ],
+                  [ "AWS/ApplicationELB", "UnHealthyHostCount", "LoadBalancer", "${LoadBalancerArnSuffix}", "TargetGroup", "${TargetGroupArnSuffix}", { "stat": "Maximum", "label": "Unhealthy (max)" } ]
+                ]
+              } },
+
+            { "type": "metric", "x": 8, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "Request volume (includes health checks + internet scanner noise)",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  [ "AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${LoadBalancerArnSuffix}", { "stat": "Sum" } ]
+                ]
+              } },
+
+            { "type": "metric", "x": 16, "y": 1, "width": 8, "height": 6,
+              "properties": {
+                "title": "Target response time (p50 / p95 / p99)",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  [ "AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${LoadBalancerArnSuffix}", "TargetGroup", "${TargetGroupArnSuffix}", { "stat": "p50", "label": "p50" } ],
+                  [ "...", { "stat": "p95", "label": "p95" } ],
+                  [ "...", { "stat": "p99", "label": "p99" } ]
+                ]
+              } },
+
+            { "type": "metric", "x": 0, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "App-level errors (log metric filters)",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  [ "JSEChatbot/${Env}", "ErrorCount", { "stat": "Sum", "label": "All errors" } ],
+                  [ "JSEChatbot/${Env}", "GeminiQuotaExhaustedCount", { "stat": "Sum", "label": "Gemini quota exhausted" } ],
+                  [ "JSEChatbot/${Env}", "MetadataLoadFailureCount", { "stat": "Sum", "label": "Metadata load failure" } ]
+                ]
+              } },
+
+            { "type": "metric", "x": 8, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "ALB 5xx",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  [ "AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", "${LoadBalancerArnSuffix}", "TargetGroup", "${TargetGroupArnSuffix}", { "stat": "Sum" } ]
+                ]
+              } },
+
+            { "type": "metric", "x": 16, "y": 7, "width": 8, "height": 6,
+              "properties": {
+                "title": "ECS CPU / memory utilization",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  [ "AWS/ECS", "CPUUtilization", "ClusterName", "${ClusterName}", "ServiceName", "${ServiceName}", { "stat": "Average", "label": "CPU %" } ],
+                  [ "AWS/ECS", "MemoryUtilization", "ClusterName", "${ClusterName}", "ServiceName", "${ServiceName}", { "stat": "Average", "label": "Memory %" } ]
+                ]
+              } },
+
+            { "type": "log", "x": 0, "y": 13, "width": 24, "height": 6,
+              "properties": {
+                "title": "Real chat completions (/chat/stream + /fast_chat_v2), last 3 days",
+                "region": "${AWS::Region}",
+                "view": "table",
+                "query": "SOURCE '${LogGroupName}' | filter @message like /Completed in/ and (@message like /\\/chat\\/stream/ or @message like /fast_chat_v2/) | parse @message /Completed in (?<duration_ms>[0-9.]+)ms with status (?<status>\\d+)/ | stats count() as requests, avg(duration_ms) as avg_ms, max(duration_ms) as max_ms by bin(1h) as hour | sort hour desc"
+              } }
+          ]
+        }
+
+Outputs:
+  AlertTopicArn:
+    Value: !Ref AlertTopic
+  DashboardUrl:
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=jse-datasphere-chatbot-${Env}
