@@ -16,10 +16,11 @@ covered.
   if Redis isn't configured.
 - **Interaction logging** (`fastapi_app/app/interaction_log.py`, BigQuery):
   the permanent record of every call (success and failure) — query,
-  response, tokens, cost, latency, cache hit/miss — used for
-  regression/behavior monitoring. Chosen over relying on Langfuse's own
-  (time-limited) trace retention. Fires via `asyncio.create_task(...)` so a
-  logging failure never affects the user-facing request or its latency.
+  response, tokens, cost, latency, cache hit/miss, and which deploy
+  `environment` produced it — used for regression/behavior monitoring.
+  Chosen over relying on Langfuse's own (time-limited) trace retention.
+  Fires via `asyncio.create_task(...)` so a logging failure never affects
+  the user-facing request or its latency.
 - **Langfuse tracing** (`fastapi_app/app/tracing.py`): trace-level
   observability and cost dashboards only — not used for caching (Langfuse
   doesn't do response caching) and not the permanent log (BigQuery is). No-ops
@@ -32,6 +33,27 @@ See `fastapi_app/.env.example` for the full list with defaults
 `LANGFUSE_*`). `REDIS_URL` is already handled by the existing ElastiCache
 Copilot addon (`fastapi_app/copilot/examples/api/addons/redis.yml.example`) —
 no new Redis-specific env var was added.
+
+## Distinguishing environments in BigQuery
+
+`GCP_PROJECT_ID`/`BIGQUERY_DATASET`/`BIGQUERY_INTERACTIONS_TABLE` are declared
+in the Copilot manifest's top-level `variables:` block, not per-environment
+overrides — so unless a project/dataset is deliberately split out per AWS
+environment, dev/staging/prod all write to the same BigQuery table. Every row
+now carries an `environment` column, sourced from `COPILOT_ENVIRONMENT_NAME`
+(injected automatically by AWS Copilot into every container — no new secret
+or config needed). Locally, it falls back to a plain `ENVIRONMENT` env var if
+set, otherwise `NULL`.
+
+**If you already have an `interactions` table without this column** (e.g. the
+dev table from before this change), add it with a lightweight ALTER — BigQuery
+supports adding a NULLABLE column without rewriting existing rows:
+```bash
+bq query --use_legacy_sql=false \
+  'ALTER TABLE `<PROJECT>.<DATASET>.interactions` ADD COLUMN environment STRING'
+```
+Existing rows will show `NULL` for `environment` — safe to treat as "dev"
+if that's the only environment that's been live so far.
 
 ## One-time setup a human needs to do (cannot be run from a sandboxed session)
 

@@ -243,6 +243,16 @@ class AppConfig(BaseSettings):
     metadata_key: str = Field(
         default="metadata_2025-11-26.json", description="S3 key for metadata file"
     )
+    environment: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("COPILOT_ENVIRONMENT_NAME", "ENVIRONMENT"),
+        description=(
+            "Deploy environment name (dev/staging/prod/test), used to tag permanent "
+            "logs (e.g. BigQuery interactions) so they can be distinguished across "
+            "environments that otherwise share the same BigQuery project/dataset. "
+            "AWS Copilot auto-injects COPILOT_ENVIRONMENT_NAME into every container."
+        ),
+    )
 
     # Sub-configurations (loaded from environment)
     aws: AWSConfig = Field(default_factory=AWSConfig)

@@ -58,7 +58,19 @@ async def test_log_calls_insert_rows_json():
     client.insert_rows_json.assert_called_once()
     args, _ = client.insert_rows_json.call_args
     assert args[0] == "ds.interactions"
-    assert args[1] == [{"query": "x"}]
+    assert args[1] == [{"query": "x", "environment": None}]
+
+
+@pytest.mark.asyncio
+async def test_log_stamps_configured_environment_onto_every_row():
+    client = MagicMock()
+    client.insert_rows_json.return_value = []
+    logger_ = InteractionLogger(
+        bq_client=client, dataset="ds", table="interactions", enabled=True, environment="dev"
+    )
+    await logger_.log({"query": "x"})
+    args, _ = client.insert_rows_json.call_args
+    assert args[1] == [{"query": "x", "environment": "dev"}]
 
 
 @pytest.mark.asyncio
@@ -83,6 +95,19 @@ def test_build_interaction_logger_disabled_when_logging_disabled():
     mock_config.bigquery.resolved_interactions_dataset = "ds"
     mock_config.bigquery.interactions_table = "interactions"
     mock_config.gcp.project_id = "proj"
+    mock_config.environment = None
     with patch("app.config.get_config", return_value=mock_config):
         logger_ = build_interaction_logger()
     assert logger_.enabled is False
+
+
+def test_build_interaction_logger_passes_environment_through():
+    mock_config = MagicMock()
+    mock_config.bigquery.logging_enabled = False
+    mock_config.bigquery.resolved_interactions_dataset = "ds"
+    mock_config.bigquery.interactions_table = "interactions"
+    mock_config.gcp.project_id = "proj"
+    mock_config.environment = "staging"
+    with patch("app.config.get_config", return_value=mock_config):
+        logger_ = build_interaction_logger()
+    assert logger_._environment == "staging"

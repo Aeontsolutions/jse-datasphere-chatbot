@@ -79,7 +79,17 @@ def mock_config():
     config.gcp.api_key = "test-api-key"
     config.bigquery.dataset = "test-dataset"
     config.bigquery.table = "test-table"
+    config.bigquery.interactions_table = "test_interactions"
+    config.bigquery.resolved_interactions_dataset = "test-dataset"
+    config.bigquery.logging_enabled = False
     config.redis.url = None
+    config.redis.response_cache_enabled = True
+    config.redis.response_cache_ttl_seconds = 3600
+    config.langfuse.public_key = None
+    config.langfuse.secret_key = None
+    config.langfuse.enabled = True
+    config.langfuse.configured = False
+    config.environment = None
     config.log_level = "INFO"
     return config
 
