@@ -842,7 +842,6 @@ def _jsonable(value):
 async def chat_stream(
     request: AgentChatRequest,
     http_request: Request,
-    financial_manager: Any = Depends(get_financial_manager),
     response_cache: Any = Depends(get_response_cache_dep),
     interaction_logger: Any = Depends(get_interaction_logger_dep),
 ):
@@ -944,8 +943,7 @@ async def chat_stream(
                 cost_summary=None,
             )
 
-        # Create agent with the financial manager so query_financial_data is available
-        agent = AgentV2(financial_manager=financial_manager)
+        agent = AgentV2()
 
         with traced_observation(
             "chat_stream",
@@ -953,7 +951,6 @@ async def chat_stream(
             input={
                 "query": request.query,
                 "enable_web_search": request.enable_web_search,
-                "enable_financial_data": request.enable_financial_data,
             },
         ) as trace_obs:
             # Run the agent
@@ -961,7 +958,6 @@ async def chat_stream(
                 query=request.query,
                 conversation_history=request.conversation_history,
                 enable_web_search=request.enable_web_search,
-                enable_financial_data=request.enable_financial_data,
             )
 
             # Build response (compatible with AgentChatResponse)

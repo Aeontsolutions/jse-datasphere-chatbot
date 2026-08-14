@@ -411,7 +411,7 @@ extract the relevant filter parameters. Consider the conversation history for co
 Available metadata:
 - Companies: {companies_str}
 - Symbols: {', '.join(symbols)}
-- Years: {', '.join(years)}
+- Years currently in the database (for reference only, NOT a whitelist): {', '.join(years)}
 - Standard Items: {', '.join(standard_items)}
 
 {associations_context}
@@ -425,6 +425,10 @@ CRITICAL PARSING RULES:
 6. CONTEXT AWARENESS: If the user asks follow-up questions like "what about 2022?" or "show me their revenue",
 refer to the conversation history to understand which companies/symbols/items they're referring to
 7. For pronouns like "it", "them", "their", "this company" - refer to the most recent companies/symbols discussed
+8. YEARS ARE LITERAL: Extract every year the user states exactly as written, even if it does not appear in
+the "Years currently in the database" list above (e.g. a future year like 2025 when the database only goes
+up to 2024). Never omit, substitute, or "correct" a year because it looks unavailable — an out-of-range year
+should still be returned in "years" so the database query can correctly report that no data exists for it.
 
 Return a JSON object with this EXACT structure:
 {{

@@ -30,6 +30,17 @@ relative imports, matching the style of the rest of the app package.
 > was **not** restored (Option 1, PR #32, was closed in favor of the smaller
 > AgentV2 path). This file remains archived for reference only.
 
+> **2026-08-15 update:** `/chat/stream` no longer routes to BigQuery at all —
+> a parsing bug in `FinancialDataManager.parse_user_query` (out-of-range years
+> silently dropped, e.g. "2025") caused it to synthesize answers from the wrong
+> years' data instead of falling through to web search. Rather than trust the
+> financial-routing branch again, `/chat/stream` now always answers via Gemini
+> 2.5 Pro + Google Search grounding; only the REFUSE safety pre-check remains
+> in `AgentV2`'s router. `app/financial_tool.py` (the module referenced just
+> above) had no other callers once that branch was removed, so it was deleted
+> along with its test file. `/fast_chat_v2` is unaffected — it still calls
+> `FinancialDataManager` directly, and got the year-parsing fix too.
+
 To wire `AgentOrchestrator` back up (ticket R10):
 1. Move `agent_orchestrator.py` back to `app/agent.py` and remove the `ARCHIVED` header from the module docstring
 2. Re-add `from app.agent import AgentOrchestrator` in `main.py`
