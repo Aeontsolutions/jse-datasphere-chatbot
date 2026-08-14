@@ -18,6 +18,8 @@ from app.dspy_modules import (
 from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.models import FinancialDataFilters, FinancialDataRecord
+from app.tracing import traced_observation
+from app.utils.cost_tracking import CostResult, calculate_cost_from_response
 from app.utils.monitoring import record_ai_request, record_bigquery_query
 from app.utils.prompt_cache import PromptCache
 
@@ -518,6 +520,7 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         last_query_data: Optional[Dict] = None,
+        cost_sink: Optional[List[CostResult]] = None,
     ) -> FinancialDataFilters:
         """Use DSPy or Gemini to parse user query and extract filter parameters with conversation context"""
 
@@ -546,30 +549,47 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
         try:
             response = None
             cache_name = _PARSE_QUERY_CACHE.get_cache_name(system_instruction)
-            if cache_name:
-                try:
-                    client = get_genai_client()
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=[
-                            genai_types.Content(
-                                role="user",
-                                parts=[genai_types.Part.from_text(text=dynamic_content)],
-                            )
-                        ],
-                        config=genai_types.GenerateContentConfig(cached_content=cache_name),
+            with traced_observation(
+                "parse_user_query", as_type="generation", model=model_name, input=dynamic_content
+            ) as gen:
+                if cache_name:
+                    try:
+                        client = get_genai_client()
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=[
+                                genai_types.Content(
+                                    role="user",
+                                    parts=[genai_types.Part.from_text(text=dynamic_content)],
+                                )
+                            ],
+                            config=genai_types.GenerateContentConfig(cached_content=cache_name),
+                        )
+                    except Exception as cache_exc:
+                        logger.warning(
+                            "cached_query_parsing_failed_falling_back",
+                            extra={"error": str(cache_exc)},
+                        )
+                if not response:
+                    # Fallback: combine into one prompt and use the legacy model
+                    prompt = f"{system_instruction}\n\n{dynamic_content}"
+                    response = self.model.generate_content(prompt)
+                response_text = response.text.strip()
+                duration = time.time() - start_time
+
+                cost_result = calculate_cost_from_response(
+                    model_name, response, phase="parse_user_query"
+                )
+                if cost_sink is not None:
+                    cost_sink.append(cost_result)
+                if gen is not None:
+                    gen.update(
+                        output=response_text,
+                        usage_details={
+                            "input": cost_result.token_usage.input_tokens,
+                            "output": cost_result.token_usage.output_tokens,
+                        },
                     )
-                except Exception as cache_exc:
-                    logger.warning(
-                        "cached_query_parsing_failed_falling_back",
-                        extra={"error": str(cache_exc)},
-                    )
-            if not response:
-                # Fallback: combine into one prompt and use the legacy model
-                prompt = f"{system_instruction}\n\n{dynamic_content}"
-                response = self.model.generate_content(prompt)
-            response_text = response.text.strip()
-            duration = time.time() - start_time
 
             # Clean up the response - remove markdown code blocks if present
             if response_text.startswith("```json"):
@@ -655,8 +675,8 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
                 model=model_name,
                 duration=duration,
                 success=True,
-                input_tokens=None,
-                output_tokens=None,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
             )
 
             return FinancialDataFilters(**result)
@@ -1193,6 +1213,7 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
         is_follow_up: bool = False,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         unrecognized_items: Optional[List[str]] = None,
+        cost_sink: Optional[List[CostResult]] = None,
     ) -> str:
         """Format the query results into a readable response with conversation awareness"""
 
@@ -1283,11 +1304,39 @@ Do NOT provide any analysis, data, or commentary regarding share prices, dividen
 
             Keep the response concise but informative. Be conversational and natural.
         """
+        model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+        start_time = time.time()
         try:
-            response = self.model.generate_content(prompt)
+            with traced_observation(
+                "format_response", as_type="generation", model=model_name, input=prompt
+            ) as gen:
+                response = self.model.generate_content(prompt)
+                duration = time.time() - start_time
+                cost_result = calculate_cost_from_response(
+                    model_name, response, phase="format_response"
+                )
+                if cost_sink is not None:
+                    cost_sink.append(cost_result)
+                if gen is not None:
+                    gen.update(
+                        output=response.text,
+                        usage_details={
+                            "input": cost_result.token_usage.input_tokens,
+                            "output": cost_result.token_usage.output_tokens,
+                        },
+                    )
+            record_ai_request(
+                model=model_name,
+                duration=duration,
+                success=True,
+                input_tokens=cost_result.token_usage.input_tokens,
+                output_tokens=cost_result.token_usage.output_tokens,
+            )
             return response.text
         except Exception as e:
+            duration = time.time() - start_time
             logger.error(f"Error generating AI response: {e}")
+            record_ai_request(model=model_name, duration=duration, success=False)
             # Fallback to basic formatting
             return (
                 f"Found {len(records)} records matching your query. Here's a summary of the data."

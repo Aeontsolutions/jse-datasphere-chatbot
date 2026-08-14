@@ -4,6 +4,7 @@ from fastapi.responses import StreamingResponse, JSONResponse, Response
 import time
 import uuid
 import asyncio
+from datetime import datetime, timezone
 from typing import Dict, Any
 from contextlib import asynccontextmanager
 
@@ -29,6 +30,9 @@ from app.document_selector import auto_load_relevant_documents
 from app.financial_utils import FinancialDataManager
 from app.agent_v2 import AgentV2
 from app.config import get_config
+from app.response_cache import ResponseCache, build_response_cache
+from app.interaction_log import InteractionLogger, build_interaction_logger
+from app.tracing import get_langfuse_client, traced_observation
 from app.logging_config import configure_logging, get_logger
 from app.middleware.request_id import RequestIDMiddleware
 from app.middleware.metrics import (
@@ -88,11 +92,39 @@ async def lifespan(app: FastAPI):
             logger.error(f"Failed to initialize financial data manager: {financial_err}")
             app.state.financial_manager = None
 
+        # -----------------------
+        # Response cache (Redis), interaction logger (BigQuery), tracing (Langfuse)
+        # -----------------------
+        app.state.response_cache = build_response_cache()
+        logger.info(
+            "response_cache_initialized",
+            extra={"enabled": app.state.response_cache.enabled},
+        )
+
+        app.state.interaction_logger = build_interaction_logger()
+        logger.info(
+            "interaction_logger_initialized",
+            extra={"enabled": app.state.interaction_logger.enabled},
+        )
+
+        langfuse_client = get_langfuse_client()
+        logger.info("langfuse_client_initialized", extra={"enabled": langfuse_client is not None})
+
         yield
 
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
         # We'll continue and let individual endpoints handle errors
+    finally:
+        cache = getattr(app.state, "response_cache", None)
+        if cache is not None:
+            await cache.close()
+        langfuse_client = get_langfuse_client()
+        if langfuse_client is not None:
+            try:
+                langfuse_client.flush()
+            except Exception as exc:
+                logger.warning("langfuse_flush_failed", extra={"error": str(exc)})
 
 
 # Initialize FastAPI app
@@ -188,6 +220,16 @@ def get_metadata():
 # Dependency to get financial data manager
 def get_financial_manager():
     return getattr(app.state, "financial_manager", None)
+
+
+# Dependency to get the response cache
+def get_response_cache_dep():
+    return getattr(app.state, "response_cache", None)
+
+
+# Dependency to get the interaction logger
+def get_interaction_logger_dep():
+    return getattr(app.state, "interaction_logger", None)
 
 
 @app.get("/")
@@ -490,7 +532,10 @@ async def chat(
 @app.post("/fast_chat_v2", response_model=FinancialDataResponse)
 async def fast_chat_v2(
     request: FinancialDataRequest,
+    http_request: Request,
     financial_manager: Any = Depends(get_financial_manager),
+    response_cache: Any = Depends(get_response_cache_dep),
+    interaction_logger: Any = Depends(get_interaction_logger_dep),
 ):
     """
     Natural language financial data query endpoint
@@ -503,6 +548,11 @@ async def fast_chat_v2(
 
     The endpoint uses AI to parse natural language queries into structured filters,
     queries the financial database, and returns formatted responses with data insights.
+
+    Repeated queries with no conversation history are served from a Redis
+    response cache (skipped whenever history is present, since a follow-up's
+    correct answer depends on that context). Every call is logged to BigQuery
+    for regression/behavior monitoring, and traced via Langfuse if configured.
     """
     logger.info(
         f"/fast_chat_v2 called. query='{request.query[:200]}', memory_enabled={request.memory_enabled}"
@@ -519,54 +569,160 @@ async def fast_chat_v2(
     else:
         logger.info("📜 No conversation history received")
 
+    start_time = time.time()
+    request_id = getattr(http_request.state, "request_id", None)
+    cache_eligible = not request.conversation_history
+    cache_key = (
+        ResponseCache.build_key("fast_chat_v2", ResponseCache.normalize_query(request.query))
+        if cache_eligible
+        else None
+    )
+
+    def schedule_log(**kwargs):
+        if interaction_logger is None:
+            return
+        row = InteractionLogger.build_row(
+            endpoint="fast_chat_v2",
+            query=request.query,
+            request_id=request_id,
+            conversation_history=request.conversation_history,
+            memory_enabled=request.memory_enabled,
+            latency_ms=(time.time() - start_time) * 1000,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            **kwargs,
+        )
+        asyncio.create_task(interaction_logger.log(row))
+
     try:
         if not financial_manager:
             raise HTTPException(
                 status_code=503,
                 detail="Financial data service is not available. Please ensure BigQuery is configured.",
             )
+
+        cached = await response_cache.get(cache_key) if cache_key and response_cache else None
+        if cached is not None:
+            ai_response = cached["response"]
+            data_found = cached["data_found"]
+            record_count = cached["record_count"]
+            filters = FinancialDataFilters(**cached["filters_used"])
+            data_preview = (
+                [FinancialDataRecord(**r) for r in cached["data_preview"]]
+                if cached.get("data_preview")
+                else None
+            )
+            chart_spec = ChartSpec(**cached["chart"]) if cached.get("chart") else None
+
+            updated_conversation_history = None
+            if request.memory_enabled:
+                updated_conversation_history = [
+                    {"role": "user", "content": request.query},
+                    {"role": "assistant", "content": ai_response},
+                ]
+
+            logger.info(f"/fast_chat_v2 cache hit. data_found={data_found}")
+            schedule_log(
+                response=ai_response,
+                cache_hit=True,
+                success=True,
+                data_found=data_found,
+                record_count=record_count,
+            )
+            return FinancialDataResponse(
+                response=ai_response,
+                data_found=data_found,
+                record_count=record_count,
+                filters_used=filters,
+                data_preview=data_preview,
+                conversation_history=updated_conversation_history,
+                warnings=cached.get("warnings"),
+                suggestions=cached.get("suggestions"),
+                chart=chart_spec,
+            )
+
         last_query_data = getattr(request, "_last_query_data", None)
-        filters = financial_manager.parse_user_query(
-            request.query, request.conversation_history, last_query_data
-        )
-        logger.info(f"Parsed filters: {filters}")
-        logger.info(f"filters type: {type(filters)}, filters: {filters}")
-        availability = financial_manager.validate_data_availability(filters)
-        # logger.info(f"availability type: {type(availability)}, availability: {availability}")
-        warnings = availability.get("warnings", [])
-        suggestions = availability.get("suggestions", [])
-        results = financial_manager.query_data(filters)
-        logger.info(f"results type: {type(results)}, results: {results}")
-        ai_response = financial_manager.format_response(
-            results,
-            request.query,
-            filters.interpretation,
-            filters.is_follow_up,
-            request.conversation_history,
-            unrecognized_items=filters.unrecognized_items or None,
-        )
-        # logger.info(f"ai_response type: {type(ai_response)}, ai_response: {ai_response}")
-        data_preview = results if results else None
-        updated_conversation_history = None
-        if request.memory_enabled:
-            if request.conversation_history:
-                updated_conversation_history = request.conversation_history.copy()
-            else:
-                updated_conversation_history = []
-            updated_conversation_history.append({"role": "user", "content": request.query})
-            updated_conversation_history.append({"role": "assistant", "content": ai_response})
-            if len(updated_conversation_history) > 20:
-                updated_conversation_history = updated_conversation_history[-20:]
-        # Generate chart if data is chartable
-        chart_spec = None
-        if results:
-            chart_data = generate_chart(results, request.query)
-            if chart_data:
-                chart_spec = ChartSpec(**chart_data)
-                logger.info(f"Generated {chart_data['chart_type']} chart: {chart_data['title']}")
+        request_costs = []
+        with traced_observation(
+            "fast_chat_v2", as_type="span", input={"query": request.query}
+        ) as trace_obs:
+            filters = financial_manager.parse_user_query(
+                request.query,
+                request.conversation_history,
+                last_query_data,
+                cost_sink=request_costs,
+            )
+            logger.info(f"Parsed filters: {filters}")
+            logger.info(f"filters type: {type(filters)}, filters: {filters}")
+            availability = financial_manager.validate_data_availability(filters)
+            # logger.info(f"availability type: {type(availability)}, availability: {availability}")
+            warnings = availability.get("warnings", [])
+            suggestions = availability.get("suggestions", [])
+            results = financial_manager.query_data(filters)
+            logger.info(f"results type: {type(results)}, results: {results}")
+            ai_response = financial_manager.format_response(
+                results,
+                request.query,
+                filters.interpretation,
+                filters.is_follow_up,
+                request.conversation_history,
+                unrecognized_items=filters.unrecognized_items or None,
+                cost_sink=request_costs,
+            )
+            # logger.info(f"ai_response type: {type(ai_response)}, ai_response: {ai_response}")
+            data_preview = results if results else None
+            updated_conversation_history = None
+            if request.memory_enabled:
+                if request.conversation_history:
+                    updated_conversation_history = request.conversation_history.copy()
+                else:
+                    updated_conversation_history = []
+                updated_conversation_history.append({"role": "user", "content": request.query})
+                updated_conversation_history.append({"role": "assistant", "content": ai_response})
+                if len(updated_conversation_history) > 20:
+                    updated_conversation_history = updated_conversation_history[-20:]
+            # Generate chart if data is chartable
+            chart_spec = None
+            if results:
+                chart_data = generate_chart(results, request.query)
+                if chart_data:
+                    chart_spec = ChartSpec(**chart_data)
+                    logger.info(
+                        f"Generated {chart_data['chart_type']} chart: {chart_data['title']}"
+                    )
+
+            if trace_obs is not None:
+                trace_obs.update(output=ai_response, metadata={"cache_hit": False})
 
         logger.info(
             f"/fast_chat_v2 completed. data_found={bool(results)}, record_count={len(results) if results else 0}, has_chart={chart_spec is not None}"
+        )
+
+        if cache_key and response_cache:
+            await response_cache.set(
+                cache_key,
+                {
+                    "response": ai_response,
+                    "data_found": bool(results),
+                    "record_count": len(results) if results else 0,
+                    "filters_used": filters.model_dump(),
+                    "data_preview": [r.model_dump() for r in results] if results else None,
+                    "warnings": warnings if warnings else None,
+                    "suggestions": suggestions if suggestions else None,
+                    "chart": chart_spec.model_dump() if chart_spec else None,
+                },
+            )
+
+        schedule_log(
+            response=ai_response,
+            cache_hit=False,
+            success=True,
+            data_found=bool(results),
+            record_count=len(results) if results else 0,
+            model=request_costs[0].model if request_costs else None,
+            input_tokens=sum(c.token_usage.input_tokens for c in request_costs),
+            output_tokens=sum(c.token_usage.output_tokens for c in request_costs),
+            cost_usd=sum(c.total_cost for c in request_costs),
+            phase_costs=[c.phase for c in request_costs],
         )
         return FinancialDataResponse(
             response=ai_response,
@@ -579,10 +735,12 @@ async def fast_chat_v2(
             suggestions=suggestions if suggestions else None,
             chart=chart_spec,
         )
-    except HTTPException:
+    except HTTPException as e:
+        schedule_log(response=None, cache_hit=False, success=False, error_message=str(e.detail))
         raise
     except Exception as e:
         logger.error(f"Error in fast_chat_v2 endpoint: {str(e)}")
+        schedule_log(response=None, cache_hit=False, success=False, error_message=str(e))
         raise HTTPException(
             status_code=500, detail=f"Error processing financial data query: {str(e)}"
         )
@@ -668,9 +826,24 @@ async def refresh_cache_endpoint():
 # ==============================================================================
 
 
+def _jsonable(value):
+    """Best-effort conversion of a Pydantic model (or list of them) to plain
+    dict/list for JSON caching. Passes plain dicts/None through unchanged."""
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    return value
+
+
 @app.post("/chat/stream", response_model=AgentChatResponse)
 async def chat_stream(
     request: AgentChatRequest,
+    http_request: Request,
+    response_cache: Any = Depends(get_response_cache_dep),
+    interaction_logger: Any = Depends(get_interaction_logger_dep),
 ):
     """
     JSE Financial Analyst endpoint using Gemini 2.5 Pro with Google Search grounding.
@@ -685,6 +858,10 @@ async def chat_stream(
     - Source citations from web search results
 
     The response is backward compatible with AgentChatResponse.
+
+    Repeated queries (same flags, no conversation history) are served from a
+    Redis response cache. Every call is logged to BigQuery for regression/
+    behavior monitoring, and traced via Langfuse if configured.
     """
     logger.info(
         f"/chat/stream called. query='{request.query[:200]}', "
@@ -700,43 +877,156 @@ async def chat_stream(
     else:
         logger.info("No conversation history received")
 
+    start_time = time.time()
+    request_id = getattr(http_request.state, "request_id", None)
+    cache_eligible = not request.conversation_history
+    cache_key = (
+        ResponseCache.build_key(
+            "chat_stream",
+            ResponseCache.normalize_query(request.query),
+            request.enable_web_search,
+            request.enable_financial_data,
+        )
+        if cache_eligible
+        else None
+    )
+
+    def schedule_log(**kwargs):
+        if interaction_logger is None:
+            return
+        row = InteractionLogger.build_row(
+            endpoint="chat_stream",
+            query=request.query,
+            request_id=request_id,
+            conversation_history=request.conversation_history,
+            memory_enabled=request.memory_enabled,
+            enable_web_search=request.enable_web_search,
+            enable_financial_data=request.enable_financial_data,
+            latency_ms=(time.time() - start_time) * 1000,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            **kwargs,
+        )
+        asyncio.create_task(interaction_logger.log(row))
+
     try:
+        cached = await response_cache.get(cache_key) if cache_key and response_cache else None
+        if cached is not None:
+            updated_conversation_history = None
+            if request.memory_enabled:
+                updated_conversation_history = [
+                    {"role": "user", "content": request.query},
+                    {"role": "assistant", "content": cached["response"]},
+                ]
+            logger.info(f"/chat/stream cache hit. data_found={cached['data_found']}")
+            schedule_log(
+                response=cached["response"],
+                cache_hit=True,
+                success=True,
+                data_found=cached["data_found"],
+                record_count=cached["record_count"],
+            )
+            return AgentChatResponse(
+                response=cached["response"],
+                data_found=cached["data_found"],
+                record_count=cached["record_count"],
+                filters_used=cached.get("filters_used"),
+                data_preview=cached.get("data_preview"),
+                conversation_history=updated_conversation_history,
+                warnings=cached.get("warnings"),
+                suggestions=cached.get("suggestions"),
+                chart=cached.get("chart"),
+                sources=cached.get("sources"),
+                web_search_results=cached.get("web_search_results"),
+                tools_executed=cached.get("tools_executed"),
+                needs_clarification=cached.get("needs_clarification", False),
+                clarification_question=cached.get("clarification_question"),
+                cost_summary=None,
+            )
+
         agent = AgentV2()
 
-        # Run the agent
-        result = await agent.run(
-            query=request.query,
-            conversation_history=request.conversation_history,
-            enable_web_search=request.enable_web_search,
-        )
+        with traced_observation(
+            "chat_stream",
+            as_type="span",
+            input={
+                "query": request.query,
+                "enable_web_search": request.enable_web_search,
+            },
+        ) as trace_obs:
+            # Run the agent
+            result = await agent.run(
+                query=request.query,
+                conversation_history=request.conversation_history,
+                enable_web_search=request.enable_web_search,
+            )
 
-        # Build response (compatible with AgentChatResponse)
-        response = AgentChatResponse(
-            response=result["response"],
-            data_found=result["data_found"],
-            record_count=result["record_count"],
-            filters_used=result.get("filters_used"),
-            data_preview=result.get("data_preview"),
-            conversation_history=result["conversation_history"] if request.memory_enabled else None,
-            warnings=result.get("warnings"),
-            suggestions=result.get("suggestions"),
-            chart=result.get("chart"),
-            sources=result.get("sources"),
-            web_search_results=result.get("web_search_results"),
-            tools_executed=result.get("tools_executed"),
-            needs_clarification=result.get("needs_clarification", False),
-            clarification_question=result.get("clarification_question"),
-        )
+            # Build response (compatible with AgentChatResponse)
+            response = AgentChatResponse(
+                response=result["response"],
+                data_found=result["data_found"],
+                record_count=result["record_count"],
+                filters_used=result.get("filters_used"),
+                data_preview=result.get("data_preview"),
+                conversation_history=(
+                    result["conversation_history"] if request.memory_enabled else None
+                ),
+                warnings=result.get("warnings"),
+                suggestions=result.get("suggestions"),
+                chart=result.get("chart"),
+                sources=result.get("sources"),
+                web_search_results=result.get("web_search_results"),
+                tools_executed=result.get("tools_executed"),
+                needs_clarification=result.get("needs_clarification", False),
+                clarification_question=result.get("clarification_question"),
+                cost_summary=result.get("cost_summary"),
+            )
+
+            if trace_obs is not None:
+                trace_obs.update(output=response.response, metadata={"cache_hit": False})
 
         logger.info(
             f"/chat/stream completed. response_chars={len(response.response)}, "
             f"tools_executed={response.tools_executed}"
         )
 
+        if cache_key and response_cache and not response.needs_clarification:
+            await response_cache.set(
+                cache_key,
+                {
+                    "response": response.response,
+                    "data_found": response.data_found,
+                    "record_count": response.record_count,
+                    "filters_used": _jsonable(response.filters_used),
+                    "data_preview": _jsonable(response.data_preview),
+                    "warnings": response.warnings,
+                    "suggestions": response.suggestions,
+                    "chart": _jsonable(response.chart),
+                    "sources": response.sources,
+                    "web_search_results": response.web_search_results,
+                    "tools_executed": response.tools_executed,
+                    "needs_clarification": response.needs_clarification,
+                    "clarification_question": response.clarification_question,
+                },
+            )
+
+        cost_summary = response.cost_summary
+        schedule_log(
+            response=response.response,
+            cache_hit=False,
+            success=True,
+            data_found=response.data_found,
+            record_count=response.record_count,
+            input_tokens=cost_summary.total_input_tokens if cost_summary else 0,
+            output_tokens=cost_summary.total_output_tokens if cost_summary else 0,
+            cost_usd=cost_summary.total_cost_usd if cost_summary else 0.0,
+            phase_costs=[p.phase for p in cost_summary.phases] if cost_summary else None,
+        )
+
         return response
 
     except Exception as e:
         logger.error(f"Error in chat stream endpoint: {str(e)}", exc_info=True)
+        schedule_log(response=None, cache_hit=False, success=False, error_message=str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error processing chat stream: {str(e)}",

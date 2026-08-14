@@ -74,6 +74,18 @@ class BigQueryConfig(BaseSettings):
     dataset: str = Field(..., description="BigQuery dataset name")
     table: str = Field(..., description="BigQuery table name")
     location: str = Field(default="US", description="BigQuery location")
+    interactions_table: str = Field(
+        default="interactions", description="BigQuery table for permanent interaction logging"
+    )
+    interactions_dataset: Optional[str] = Field(
+        default=None,
+        description="BigQuery dataset for interaction logging (falls back to `dataset` if unset)",
+    )
+    logging_enabled: bool = Field(
+        default=True,
+        alias="INTERACTION_LOGGING_ENABLED",
+        description="Whether to write interaction logs to BigQuery",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="BIGQUERY_",
@@ -82,6 +94,11 @@ class BigQueryConfig(BaseSettings):
         case_sensitive=False,
         extra="ignore",  # Ignore extra environment variables
     )
+
+    @property
+    def resolved_interactions_dataset(self) -> str:
+        """The dataset interaction logs should be written to."""
+        return self.interactions_dataset or self.dataset
 
 
 class RedisConfig(BaseSettings):
@@ -93,6 +110,16 @@ class RedisConfig(BaseSettings):
     )
     ttl_seconds: int = Field(default=900, description="TTL for job data in seconds")
     max_progress_history: int = Field(default=50, description="Max progress updates to retain")
+    response_cache_ttl_seconds: int = Field(
+        default=3600,
+        alias="RESPONSE_CACHE_TTL_SECONDS",
+        description="TTL for cached endpoint responses in seconds",
+    )
+    response_cache_enabled: bool = Field(
+        default=True,
+        alias="RESPONSE_CACHE_ENABLED",
+        description="Manual kill switch for the response cache, independent of Redis connectivity",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -116,6 +143,31 @@ class RedisConfig(BaseSettings):
         if v:
             return v
         return os.getenv("REDIS_URL") or os.getenv("RedisUrl") or os.getenv("REDISURL")
+
+
+class LangfuseConfig(BaseSettings):
+    """Langfuse tracing/observability configuration. No-ops when keys are unset."""
+
+    public_key: Optional[str] = Field(default=None, alias="LANGFUSE_PUBLIC_KEY")
+    secret_key: Optional[str] = Field(default=None, alias="LANGFUSE_SECRET_KEY")
+    host: str = Field(default="https://cloud.langfuse.com", alias="LANGFUSE_HOST")
+    enabled: bool = Field(
+        default=True,
+        alias="LANGFUSE_ENABLED",
+        description="Manual kill switch, independent of whether keys are configured",
+    )
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",  # Ignore extra environment variables
+    )
+
+    @property
+    def configured(self) -> bool:
+        """Whether tracing should actually be initialized (enabled + keys present)."""
+        return bool(self.enabled and self.public_key and self.secret_key)
 
 
 class S3DownloadConfig(BaseSettings):
@@ -200,6 +252,7 @@ class AppConfig(BaseSettings):
     s3_download: S3DownloadConfig = Field(default_factory=S3DownloadConfig)
     gemini: GeminiAIConfig = Field(default_factory=GeminiAIConfig)
     async_job: AsyncJobConfig = Field(default_factory=AsyncJobConfig)
+    langfuse: LangfuseConfig = Field(default_factory=LangfuseConfig)
 
     model_config = SettingsConfigDict(
         env_file=".env",
