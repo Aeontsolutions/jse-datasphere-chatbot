@@ -744,5 +744,3 @@ async def chat_stream(
             status_code=500,
             detail=f"Error processing chat stream: {str(e)}",
         )
-
-
