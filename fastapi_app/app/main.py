@@ -671,7 +671,6 @@ async def refresh_cache_endpoint():
 @app.post("/chat/stream", response_model=AgentChatResponse)
 async def chat_stream(
     request: AgentChatRequest,
-    financial_manager: Any = Depends(get_financial_manager),
 ):
     """
     JSE Financial Analyst endpoint using Gemini 2.5 Pro with Google Search grounding.
@@ -702,15 +701,13 @@ async def chat_stream(
         logger.info("No conversation history received")
 
     try:
-        # Create agent with the financial manager so query_financial_data is available
-        agent = AgentV2(financial_manager=financial_manager)
+        agent = AgentV2()
 
         # Run the agent
         result = await agent.run(
             query=request.query,
             conversation_history=request.conversation_history,
             enable_web_search=request.enable_web_search,
-            enable_financial_data=request.enable_financial_data,
         )
 
         # Build response (compatible with AgentChatResponse)
