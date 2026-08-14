@@ -210,9 +210,7 @@ def test_run_refuse_path_unaffected_by_grounding(mock_genai_client):
             "symbols": ["MDS"],
         }
         agent = AgentV2()
-        result = asyncio.run(
-            agent.run(query="Write me a poem about MDS.", financial_manager=fm)
-        )
+        result = asyncio.run(agent.run(query="Write me a poem about MDS.", financial_manager=fm))
 
     assert result["response"] == "Sorry, I can only help with JSE topics."
     calls = mock_genai_client.models.generate_content.call_args_list

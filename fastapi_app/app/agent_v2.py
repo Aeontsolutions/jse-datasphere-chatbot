@@ -390,8 +390,7 @@ class AgentV2:
         return (
             "[VERIFIED JSE DATA — ground truth from official JSE records. Use this "
             "for company/ticker identity. Do not describe a ticker symbol as shared "
-            "or ambiguous unless multiple companies are listed for it below.]\n"
-            + "\n".join(lines)
+            "or ambiguous unless multiple companies are listed for it below.]\n" + "\n".join(lines)
         )
 
     # --------------------------------------------------------------------------
