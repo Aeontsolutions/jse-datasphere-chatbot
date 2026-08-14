@@ -59,6 +59,8 @@ def main():
         "AWS_SECRET_ACCESS_KEY",
         "GOOGLE_API_KEY",
         "GCP_SERVICE_ACCOUNT_INFO",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
     ]
 
     pushed_count = 0

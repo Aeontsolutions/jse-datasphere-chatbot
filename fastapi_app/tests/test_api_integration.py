@@ -185,6 +185,10 @@ class MockBQClient:
         # Default: return empty result set for any unrecognized query
         return MockQueryResult([])
 
+    def insert_rows_json(self, table, rows, **kwargs):
+        # BigQuery convention: empty list = success, no row-level errors.
+        return []
+
 
 @pytest.fixture(autouse=True)
 def patch_bq_client(monkeypatch):
