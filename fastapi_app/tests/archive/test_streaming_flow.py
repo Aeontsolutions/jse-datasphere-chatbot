@@ -4,10 +4,10 @@ import asyncio
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-
-from app.models import StreamingChatRequest
 from app.progress_tracker import ProgressTracker
 from app.streaming_chat import _process_chat_async, process_streaming_chat
+
+from app.models import StreamingChatRequest
 
 
 @pytest.mark.integration
