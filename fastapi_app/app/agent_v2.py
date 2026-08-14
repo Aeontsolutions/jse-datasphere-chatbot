@@ -12,10 +12,12 @@ Architecture:
 - Compatible with AgentChatRequest/AgentChatResponse contract
 """
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from google.genai import types
 
+from app.document_selector import extract_companies_from_query
 from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.models import CostSummary, PhaseCost
@@ -325,6 +327,74 @@ class AgentV2:
         return {"sources": sources, "search_results": search_results}
 
     # --------------------------------------------------------------------------
+    # Ticker/Company Grounding (AEO-25 — prevents ticker-identity hallucination)
+    # --------------------------------------------------------------------------
+
+    async def _extract_grounded_symbols(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]],
+        financial_manager: Any,
+    ) -> List[str]:
+        """Identify JSE ticker symbols the query is clearly asking about.
+
+        Reuses the same Stage-1 extraction already used for /chat's document
+        auto-loading (app.document_selector.extract_companies_from_query) —
+        an LLM call that understands context, so it doesn't mistake a metric
+        abbreviation (e.g. "ROC" meaning Return on Capital) for a ticker
+        mention. Runs in a thread so it can overlap with the router call.
+        """
+        if financial_manager is None or not getattr(financial_manager, "metadata", None):
+            return []
+        metadata = financial_manager.metadata
+        companies = metadata.get("companies") or []
+        symbols = metadata.get("symbols") or []
+        if not symbols:
+            return []
+        extracted = await asyncio.to_thread(
+            extract_companies_from_query, query, companies, symbols, conversation_history
+        )
+        return extracted.get("symbols") or []
+
+    def _build_grounding_note(
+        self, extracted_symbols: List[str], financial_manager: Any
+    ) -> Optional[str]:
+        """Build a verified ticker->company fact block from real JSE metadata
+        (Stage 2 — deterministic lookup, no LLM involved) for any symbols the
+        extraction step surfaced. Returns None if nothing resolves."""
+        if not extracted_symbols or financial_manager is None:
+            return None
+        metadata = getattr(financial_manager, "metadata", None) or {}
+        symbol_to_company = metadata.get("associations", {}).get("symbol_to_company", {})
+        if not symbol_to_company:
+            return None
+
+        lookup = {k.upper(): (k, v) for k, v in symbol_to_company.items() if k}
+        lines = []
+        seen = set()
+        for sym in extracted_symbols:
+            match = lookup.get(str(sym).strip().upper())
+            if not match:
+                continue
+            real_symbol, companies = match
+            if real_symbol in seen:
+                continue
+            verified_companies = sorted({c for c in companies if c})
+            if not verified_companies:
+                continue
+            seen.add(real_symbol)
+            lines.append(f"- {real_symbol} = {' / '.join(verified_companies)}")
+
+        if not lines:
+            return None
+        return (
+            "[VERIFIED JSE DATA — ground truth from official JSE records. Use this "
+            "for company/ticker identity. Do not describe a ticker symbol as shared "
+            "or ambiguous unless multiple companies are listed for it below.]\n"
+            + "\n".join(lines)
+        )
+
+    # --------------------------------------------------------------------------
     # Main Entry Point
     # --------------------------------------------------------------------------
 
@@ -413,6 +483,7 @@ class AgentV2:
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         enable_web_search: bool = True,
+        financial_manager: Any = None,
     ) -> Dict[str, Any]:
         """
         Run the agent, optionally with Google Search grounding.
@@ -422,6 +493,10 @@ class AgentV2:
             conversation_history: Previous conversation messages
             enable_web_search: When False, omits the GoogleSearch tool and removes
                 the web-search instruction from the system prompt.
+            financial_manager: Optional FinancialDataManager whose verified
+                symbol/company metadata is used to ground ticker-identity claims
+                (e.g. "MDS") against real JSE records. No BigQuery data query
+                happens here — only a lookup against already-loaded metadata.
 
         Returns:
             Dictionary compatible with AgentChatResponse
@@ -430,10 +505,18 @@ class AgentV2:
 
         self._reset_cost_tracking()
 
+        # Kick off symbol extraction now so its network call overlaps with the
+        # router call below instead of adding to total latency.
+        symbol_task = asyncio.create_task(
+            self._extract_grounded_symbols(query, conversation_history, financial_manager)
+        )
+
         # Fast path: Flash router. Returns a result on REFUSE; returns None to
         # fall through to the Pro+grounding path for every other query.
         fast_result = await self._fast_path(query, conversation_history)
         if fast_result is not None:
+            if not symbol_task.done():
+                symbol_task.cancel()
             logger.info(
                 f"AgentV2 fast_path used. " f"record_count={fast_result.get('record_count', 0)}"
             )
@@ -442,6 +525,15 @@ class AgentV2:
         try:
             # Build conversation contents
             contents = self._build_contents(conversation_history, query)
+
+            extracted_symbols = await symbol_task
+            grounding_note = self._build_grounding_note(extracted_symbols, financial_manager)
+            if grounding_note:
+                last = contents[-1]
+                contents[-1] = types.Content(
+                    role=last.role,
+                    parts=[types.Part.from_text(text=grounding_note)] + list(last.parts),
+                )
 
             tools = [types.Tool(google_search=types.GoogleSearch())] if enable_web_search else None
             system_prompt = SYSTEM_PROMPT if enable_web_search else SYSTEM_PROMPT_NO_SEARCH
