@@ -357,7 +357,9 @@ class AgentV2:
             logger.info(f"AgentV2 router: '{route_label}' for query '{query[:60]}'")
 
             if "REFUSE" not in route_label:
-                logger.info(f"AgentV2 fast_path: '{route_label}' → falling through to web/plain path")
+                logger.info(
+                    f"AgentV2 fast_path: '{route_label}' → falling through to web/plain path"
+                )
                 return None
 
             # --- REFUSE: Flash answers directly, no Pro call needed ---
