@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 from app.logging_config import get_logger
 from app.models import StreamingChatRequest
-from app.progress_tracker import ProgressTracker
+from app._archive.progress_tracker import ProgressTracker
 
 logger = get_logger(__name__)
 

@@ -240,8 +240,7 @@ Pydantic models define the API contract and ensure data validation.
 **Key Models:**
 - `ChatRequest` / `ChatResponse`: Core chat functionality
 - `FinancialDataRequest` / `FinancialDataResponse`: Financial queries
-- `StreamingChatRequest`: Streaming chat support
-- `ChromaQueryRequest` / `ChromaQueryResponse`: Vector search
+- `AgentChatRequest` / `AgentChatResponse`: `/chat/stream` agent endpoint
 
 **Validation Patterns:**
 ```python

@@ -1,6 +1,6 @@
 """Integration tests for API endpoints."""
 
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -71,22 +71,26 @@ class TestChatEndpoints:
         response = client.post("/chat", json={})
         assert response.status_code == 422  # Validation error
 
-    def test_chat_endpoint_with_valid_data(self, client):
-        """Test /chat endpoint with valid request data."""
-        with patch("app.main.process_streaming_chat") as mock_process:
-            mock_tracker = Mock()
-            mock_tracker.stream_updates = Mock(return_value=iter([]))
-            mock_process.return_value = mock_tracker
+    def test_chat_stream_endpoint_with_valid_data(self, client):
+        """Test /chat/stream endpoint with valid request data."""
+        with patch("app.main.AgentV2") as MockAgent:
+            instance = MockAgent.return_value
+            instance.run = AsyncMock(
+                return_value={
+                    "response": "Company X 2023 revenue was J$1.2M.",
+                    "data_found": True,
+                    "record_count": 1,
+                    "conversation_history": None,
+                }
+            )
 
             payload = {
                 "query": "What is the revenue for Company X?",
-                "auto_load_documents": True,
                 "memory_enabled": False,
                 "conversation_history": [],
             }
             response = client.post("/chat/stream", json=payload)
-            # Should accept the request (202 for async job)
-            assert response.status_code in [200, 202, 422, 500]
+            assert response.status_code == 200
 
     def test_chat_endpoint_validates_conversation_history(self, client):
         """Test chat endpoint validates conversation history format."""

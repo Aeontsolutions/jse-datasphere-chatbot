@@ -253,20 +253,20 @@ jse-datasphere-chatbot/
 │   │   ├── document_selector.py # Document selection
 │   │   ├── metadata_loader.py # Metadata management
 │   │   ├── financial_utils.py # BigQuery integration
-│   │   └── streaming_chat.py # Streaming responses
+│   │   └── agent_v2.py  # /chat/stream agent
 │   ├── tests/            # Test suite
 │   │   ├── unit/        # Unit tests
-│   │   └── integration/ # Integration tests
+│   │   ├── integration/ # Integration tests
+│   │   └── archive/     # Tests for archived code
 │   ├── copilot/         # AWS Copilot configs
 │   └── pyproject.toml   # Python packaging
 ├── docs/                 # Documentation
 │   ├── DEVELOPMENT.md   # Developer guide
 │   ├── SECRETS_MANAGEMENT.md # Security guide
-│   ├── REFACTOR_PLAN.md # Architecture plan
 │   └── archive/         # Historical docs
 ├── scripts/             # Utility scripts
 │   ├── rebuild_metadata.py
-│   └── test_client.py
+│   └── archive/         # Stale manual test clients
 ├── data/                # Local data files (gitignored)
 ├── mock_client/         # Test client
 └── .github/workflows/   # CI/CD pipelines
@@ -322,8 +322,8 @@ aws sts get-caller-identity
 - **[SECRETS_MANAGEMENT.md](docs/SECRETS_MANAGEMENT.md)** - Security and secrets management
 
 ### Architecture & Planning
-- **[REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md)** - System architecture and refactoring plan
-- **[MIGRATION_SUMMARY.md](docs/MIGRATION_SUMMARY.md)** - Migration guide to new architecture
+- **[docs/archive/](docs/archive/)** - Historical architecture/refactoring plans and status reports
+- **[fastapi_app/app/_archive/](fastapi_app/app/_archive/README.md)** - Archived backend endpoints/modules (not wired into the running app)
 
 ### API & Deployment
 - **[API Documentation](fastapi_app/docs/API_DOCUMENTATION.md)** - Complete API reference

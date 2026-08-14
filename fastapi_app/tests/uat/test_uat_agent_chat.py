@@ -2,7 +2,7 @@
 Pytest integration for Agent Chat UAT tests.
 
 Runs test cases defined in prompt_optimization_test_cases.json against
-the /agent/chat endpoint and validates responses.
+the /chat/stream endpoint and validates responses.
 
 Usage:
     # Run all UAT tests against local server

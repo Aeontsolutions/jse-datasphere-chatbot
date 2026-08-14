@@ -1,7 +1,7 @@
 """
 UAT Test Runner for Agent Chat Endpoint.
 
-Loads test cases from JSON, executes against /agent/chat endpoint,
+Loads test cases from JSON, executes against /chat/stream endpoint,
 validates responses, captures latency metrics, and generates reports.
 
 Features:
@@ -42,7 +42,7 @@ import httpx
 
 # Constants
 DEFAULT_BASE_URL = "http://localhost:8000"
-DEFAULT_ENDPOINT = "/agent/chat"  # Can be overridden to "/chat/stream/v2"
+DEFAULT_ENDPOINT = "/chat/stream"
 DEFAULT_TIMEOUT = 60.0  # seconds
 DEFAULT_RETRIES = 0
 DEFAULT_CONCURRENCY = 1
@@ -156,7 +156,7 @@ class TestReport:
 
 class UATTestRunner:
     """
-    UAT Test Runner for the /agent/chat endpoint.
+    UAT Test Runner for the /chat/stream endpoint.
 
     Supports:
     - Loading test cases from JSON
@@ -1110,7 +1110,6 @@ Examples:
   python uat_runner.py --output report.json            # Save JSON report
   python uat_runner.py --parallel --concurrency 5      # Run in parallel for load testing
   python uat_runner.py --retries 3                     # Enable retry with 3 attempts
-  python uat_runner.py -e /chat/stream/v2              # Test AgentV2 endpoint
         """,
     )
     parser.add_argument(
@@ -1122,7 +1121,7 @@ Examples:
         "--endpoint",
         "-e",
         default=DEFAULT_ENDPOINT,
-        help=f"API endpoint path (default: {DEFAULT_ENDPOINT}). Use '/chat/stream/v2' for AgentV2.",
+        help=f"API endpoint path (default: {DEFAULT_ENDPOINT}).",
     )
     parser.add_argument(
         "--category",

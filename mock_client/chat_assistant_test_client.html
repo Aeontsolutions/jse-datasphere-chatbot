@@ -691,7 +691,7 @@
             response: "Response captured in transcript.",
           });
         } else if (state.mode === "agent") {
-          // Agent mode - uses /agent/chat endpoint with web search + SQL tools
+          // Agent mode - uses /chat/stream endpoint with web search + SQL tools
           const agentPayload = {
             query: prompt,
             memory_enabled: dom.memoryToggle.checked,
@@ -705,10 +705,10 @@
           resetStreaming();
           updateStreamingUI({
             message: "Agent request in-flight…",
-            step: "Calling /agent/chat",
+            step: "Calling /chat/stream",
             progress: 35,
           });
-          const response = await fetch(`${baseUrl}/agent/chat`, {
+          const response = await fetch(`${baseUrl}/chat/stream`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             credentials: "include",

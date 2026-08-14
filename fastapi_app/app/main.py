@@ -11,12 +11,8 @@ from app.models import (
     ChatRequest,
     ChatResponse,
     ChartSpec,
-    StreamingChatRequest,
     FinancialDataRequest,
     FinancialDataResponse,
-    JobCreateResponse,
-    JobStatusResponse,
-    JobStatus,
     AgentChatRequest,
     AgentChatResponse,
 )
@@ -30,12 +26,8 @@ from app.gemini_client import (
 )
 from app.metadata_loader import load_metadata_from_s3
 from app.document_selector import auto_load_relevant_documents
-from app.streaming_chat import process_streaming_chat
 from app.financial_utils import FinancialDataManager
 from app.agent_v2 import AgentV2
-from app.job_store import JobStore, JobProgressSink
-from app.redis_job_store import RedisJobStore
-from app.progress_tracker import ProgressTracker
 from app.config import get_config
 from app.logging_config import configure_logging, get_logger
 from app.middleware.request_id import RequestIDMiddleware
@@ -95,46 +87,8 @@ async def lifespan(app: FastAPI):
         except Exception as financial_err:
             logger.error(f"Failed to initialize financial data manager: {financial_err}")
             app.state.financial_manager = None
-        # -----------------------
-        # Initialize Job Store (Redis or In-Memory)
-        # -----------------------
-        # Use centralized config instead of multiple env var checks
-        redis_url = config.redis.url
 
-        if redis_url:
-            try:
-                # Initialize and TEST connection using config values
-                job_store = RedisJobStore(
-                    redis_url=redis_url,
-                    ttl_seconds=config.async_job.ttl_seconds,
-                    max_progress_history=config.async_job.max_progress_history,
-                )
-                # Verify connection works
-                await job_store._redis.ping()
-
-                app.state.job_store = job_store
-                logger.info("Redis job store initialized and connected successfully")
-            except Exception as e:
-                logger.error(
-                    f"Failed to initialize Redis job store (connection failed): {e}. Falling back to in-memory."
-                )
-                app.state.job_store = JobStore(
-                    ttl_seconds=config.async_job.ttl_seconds,
-                    max_progress_history=config.async_job.max_progress_history,
-                )
-        else:
-            app.state.job_store = JobStore(
-                ttl_seconds=config.async_job.ttl_seconds,
-                max_progress_history=config.async_job.max_progress_history,
-            )
-        logger.info("Job store initialized | async_job_mode=%s", config.async_job.enabled)
         yield
-
-        # Cleanup
-        if hasattr(app.state, "job_store") and hasattr(app.state.job_store, "close"):
-            logger.info("Closing job store connection...")
-            await app.state.job_store.close()
-            logger.info("Job store connection closed")
 
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
@@ -236,13 +190,6 @@ def get_financial_manager():
     return getattr(app.state, "financial_manager", None)
 
 
-def get_job_store() -> JobStore:
-    job_store = getattr(app.state, "job_store", None)
-    if not job_store:
-        raise HTTPException(status_code=503, detail="Job store not initialized")
-    return job_store
-
-
 @app.get("/")
 async def root():
     """Root endpoint to check if API is running"""
@@ -268,7 +215,6 @@ async def health_check():
     Checks the health of all critical components:
     - S3 connectivity (document storage)
     - BigQuery connectivity (financial data)
-    - Redis connectivity (job storage)
     - Gemini AI availability
 
     Returns:
@@ -294,11 +240,6 @@ async def health_check():
         health_status["components"]["bigquery"] = bigquery_health
         if bigquery_health["status"] != "healthy":
             all_healthy = False
-
-        # Check Redis connectivity
-        redis_health = await _check_redis_health()
-        health_status["components"]["redis"] = redis_health
-        # Redis is optional, so don't mark overall health as unhealthy if Redis is down
 
         # Check Gemini AI availability
         gemini_health = await _check_gemini_health()
@@ -383,31 +324,6 @@ async def _check_bigquery_health() -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"BigQuery health check failed: {str(e)}")
-        return {"status": "unhealthy", "error": str(e)}
-
-
-async def _check_redis_health() -> Dict[str, Any]:
-    """Check Redis connectivity."""
-    try:
-        if not hasattr(app.state, "job_store") or app.state.job_store is None:
-            return {"status": "unavailable", "message": "Job store not initialized"}
-
-        job_store = app.state.job_store
-
-        # Check if Redis is being used
-        if hasattr(job_store, "_redis"):
-            # Try to ping Redis
-            try:
-                await job_store._redis.ping()
-                return {"status": "healthy", "type": "redis"}
-            except Exception as e:
-                return {"status": "unhealthy", "type": "redis", "error": str(e)}
-        else:
-            # In-memory job store
-            return {"status": "healthy", "type": "in-memory"}
-
-    except Exception as e:
-        logger.error(f"Redis health check failed: {str(e)}")
         return {"status": "unhealthy", "error": str(e)}
 
 
@@ -566,113 +482,6 @@ async def chat(
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
 
 
-@app.post("/chat/stream/v0")
-async def chat_stream_v0(
-    request: StreamingChatRequest,
-    s3_client: Any = Depends(get_s3_client),
-    metadata: Dict = Depends(get_metadata),
-    job_store: JobStore = Depends(get_job_store),
-    financial_manager: Any = Depends(get_financial_manager),
-):
-    """
-    [DEPRECATED] Legacy streaming chat endpoint - use /chat/stream instead.
-
-    Stream chat responses with real-time progress updates using Server-Sent Events
-
-    This endpoint provides the same functionality as /chat but streams progress updates
-    to the client, allowing the frontend to show real-time status messages like:
-    - "Loading documents..."
-    - "Analyzing query..."
-    - "Generating response..."
-
-    The stream will emit 'progress' events with status updates and a final 'result'
-    event with the complete response.
-    """
-    logger.info(
-        f"/chat/stream/v0 called. query='{request.query[:200]}', auto_load_documents={request.auto_load_documents}, memory_enabled={request.memory_enabled}"
-    )
-
-    # Log conversation history for debugging
-    if request.conversation_history:
-        logger.info(
-            f"📜 Conversation history received: {len(request.conversation_history)} messages"
-        )
-        for idx, msg in enumerate(request.conversation_history[-5:]):  # Log last 5 messages
-            content_preview = msg.get("content", "")[:100]
-            logger.info(f"  [{idx}] {msg.get('role', 'unknown')}: {content_preview}...")
-    else:
-        logger.info("📜 No conversation history received")
-
-    try:
-        # Get symbol-to-company associations for better company resolution
-        associations = None
-        if financial_manager and financial_manager.metadata:
-            associations = financial_manager.metadata.get("associations")
-
-        if not config.async_job.enabled:
-            # SSE streaming mode - return immediate streaming response
-            tracker = await process_streaming_chat(
-                request=request,
-                s3_client=s3_client,
-                metadata=metadata,
-                use_fast_mode=False,
-                associations=associations,
-            )
-            return StreamingResponse(
-                tracker.stream_updates(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache, no-transform",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",  # Disable nginx buffering
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Headers": "Cache-Control",
-                },
-            )
-
-        # Async job mode - create job and return immediately
-        job_id = await job_store.create_job("chat_stream", request.model_dump())
-
-        # Fire-and-forget: start processing in background
-        asyncio.create_task(
-            _process_chat_job_background(
-                job_id=job_id,
-                request=request,
-                s3_client=s3_client,
-                metadata=metadata,
-                job_store=job_store,
-                associations=associations,
-            )
-        )
-
-        # Return immediately with job ID
-        response_payload = JobCreateResponse(
-            job_id=job_id,
-            status=JobStatus.queued,
-            job_type="chat_stream",
-            polling_url=f"/jobs/{job_id}",
-        )
-        logger.info(f"Created async job {job_id} for chat_stream")
-        return JSONResponse(status_code=202, content=response_payload.model_dump())
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in chat stream endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error creating chat job: {str(e)}")
-
-
-@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job_status_endpoint(
-    job_id: str,
-    job_store: JobStore = Depends(get_job_store),
-):
-    job_status = await job_store.get_job_status(job_id)
-    if not job_status:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job_status
-
-
 # ---------------------------------------------------------------------------
 # Financial Data Query Endpoint (V2)
 # ---------------------------------------------------------------------------
@@ -779,93 +588,6 @@ async def fast_chat_v2(
         )
 
 
-@app.post("/fast_chat_v2/stream")
-async def fast_chat_v2_stream(
-    request: StreamingChatRequest,
-    financial_manager: Any = Depends(get_financial_manager),
-    job_store: JobStore = Depends(get_job_store),
-):
-    """
-    Stream financial data query responses with real-time progress updates using Server-Sent Events
-
-    This endpoint provides the same functionality as /fast_chat_v2 but streams progress updates
-    to the client. It provides real-time updates on:
-    - Natural language query parsing
-    - Data availability validation
-    - Financial database queries
-    - AI response generation
-
-    The stream will emit 'progress' events with status updates and a final 'result'
-    event with the complete response.
-    """
-    logger.info(
-        f"/fast_chat_v2/stream called. query='{request.query[:200]}', memory_enabled={request.memory_enabled}"
-    )
-
-    # Log conversation history for debugging
-    if request.conversation_history:
-        logger.info(
-            f"📜 Conversation history received: {len(request.conversation_history)} messages"
-        )
-        for idx, msg in enumerate(request.conversation_history[-5:]):  # Log last 5 messages
-            content_preview = msg.get("content", "")[:100]
-            logger.info(f"  [{idx}] {msg.get('role', 'unknown')}: {content_preview}...")
-    else:
-        logger.info("📜 No conversation history received")
-
-    try:
-        # Import the streaming financial chat processor
-        from app.streaming_financial_chat import process_streaming_financial_chat
-
-        if not config.async_job.enabled:
-            # SSE streaming mode - return immediate streaming response
-            tracker = await process_streaming_financial_chat(
-                request=request, financial_manager=financial_manager
-            )
-
-            # Return streaming response with proper headers for SSE
-            return StreamingResponse(
-                tracker.stream_updates(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache, no-transform",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",  # Disable nginx buffering
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Headers": "Cache-Control",
-                },
-            )
-
-        # Async job mode - create job and return immediately
-        job_id = await job_store.create_job("financial_stream", request.model_dump())
-
-        # Fire-and-forget: start processing in background
-        asyncio.create_task(
-            _process_financial_job_background(
-                job_id=job_id,
-                request=request,
-                financial_manager=financial_manager,
-                job_store=job_store,
-            )
-        )
-
-        # Return immediately with job ID
-        response_payload = JobCreateResponse(
-            job_id=job_id,
-            status=JobStatus.queued,
-            job_type="financial_stream",
-            polling_url=f"/jobs/{job_id}",
-        )
-        logger.info(f"Created async job {job_id} for financial_stream")
-        return JSONResponse(status_code=202, content=response_payload.model_dump())
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in fast_chat_v2 stream endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error creating financial job: {str(e)}")
-
-
 @app.get("/financial/metadata")
 async def get_financial_metadata(
     financial_manager: Any = Depends(get_financial_manager),
@@ -942,12 +664,11 @@ async def refresh_cache_endpoint():
 
 
 # ==============================================================================
-# AGENT CHAT ENDPOINT (Primary: /chat/stream, Legacy alias: /agent/chat)
+# AGENT CHAT ENDPOINT (Primary: /chat/stream)
 # ==============================================================================
 
 
 @app.post("/chat/stream", response_model=AgentChatResponse)
-@app.post("/agent/chat", response_model=AgentChatResponse, include_in_schema=False)
 async def chat_stream(
     request: AgentChatRequest,
     financial_manager: Any = Depends(get_financial_manager),
@@ -1025,161 +746,3 @@ async def chat_stream(
         )
 
 
-# ==============================================================================
-# AGENT V2 ENDPOINT (Simplified Google Search Grounding)
-# ==============================================================================
-
-
-@app.post("/chat/stream/v2", response_model=AgentChatResponse)
-async def chat_stream_v2(
-    request: AgentChatRequest,
-):
-    """
-    Simplified agentic research endpoint using Google Search grounding.
-
-    This endpoint uses Gemini 2.5 Pro with native Google Search grounding
-    for JSE financial research. Unlike /chat/stream, this uses a simpler
-    single-call architecture without SQL financial data queries.
-
-    Key differences from /chat/stream:
-    - Uses gemini-2.5-pro (vs gemini-2.5-flash)
-    - Single generate_content call with GoogleSearch tool
-    - No SQL financial database queries
-    - No complex routing/clarification logic
-
-    Tools available:
-    - Google Search: For web grounding and current information
-
-    The response is backward compatible with AgentChatResponse.
-    """
-    logger.info(
-        f"/chat/stream/v2 called. query='{request.query[:200]}', "
-        f"memory_enabled={request.memory_enabled}"
-    )
-
-    # Log conversation history for debugging
-    if request.conversation_history:
-        logger.info(f"Conversation history: {len(request.conversation_history)} messages")
-        for idx, msg in enumerate(request.conversation_history[-3:]):
-            content_preview = msg.get("content", "")[:100]
-            logger.info(f"  [{idx}] {msg.get('role', 'unknown')}: {content_preview}...")
-    else:
-        logger.info("No conversation history received")
-
-    try:
-        # Create simplified agent
-        agent = AgentV2()
-
-        # Run the agent
-        result = await agent.run(
-            query=request.query,
-            conversation_history=request.conversation_history,
-            enable_web_search=request.enable_web_search,
-        )
-
-        # Build response (compatible with AgentChatResponse)
-        response = AgentChatResponse(
-            response=result["response"],
-            data_found=result["data_found"],
-            record_count=result["record_count"],
-            filters_used=result.get("filters_used"),
-            data_preview=result.get("data_preview"),
-            conversation_history=result["conversation_history"] if request.memory_enabled else None,
-            warnings=result.get("warnings"),
-            suggestions=result.get("suggestions"),
-            chart=result.get("chart"),
-            sources=result.get("sources"),
-            web_search_results=result.get("web_search_results"),
-            tools_executed=result.get("tools_executed"),
-            needs_clarification=result.get("needs_clarification", False),
-            clarification_question=result.get("clarification_question"),
-        )
-
-        logger.info(
-            f"/chat/stream/v2 completed. response_chars={len(response.response)}, "
-            f"tools_executed={response.tools_executed}"
-        )
-
-        return response
-
-    except Exception as e:
-        logger.error(f"Error in chat stream v2 endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing chat stream v2: {str(e)}",
-        )
-
-
-# ==============================================================================
-# BACKGROUND JOB PROCESSORS
-# ==============================================================================
-
-
-async def _process_chat_job_background(
-    job_id: str,
-    request: StreamingChatRequest,
-    s3_client: Any,
-    metadata: Dict,
-    job_store: JobStore,
-    associations: Dict = None,
-):
-    """
-    Background task to process chat job with progress tracking.
-    This function runs asynchronously and updates the job store with progress.
-    """
-    try:
-        logger.info(f"Starting background processing for job {job_id}")
-        await job_store.mark_running(job_id)
-
-        # Create tracker with job store sink for progress updates
-        tracker = ProgressTracker(event_sink=JobProgressSink(job_store, job_id))
-
-        # Process the streaming chat
-        await process_streaming_chat(
-            request=request,
-            s3_client=s3_client,
-            metadata=metadata,
-            use_fast_mode=False,
-            tracker=tracker,
-            associations=associations,
-        )
-
-        logger.info(f"Successfully completed background job {job_id}")
-
-    except Exception as job_error:
-        logger.error(f"Job {job_id} failed with error: {str(job_error)}", exc_info=True)
-        await job_store.fail_job(job_id, str(job_error))
-
-
-async def _process_financial_job_background(
-    job_id: str,
-    request: StreamingChatRequest,
-    financial_manager: Any,
-    job_store: JobStore,
-):
-    """
-    Background task to process financial data job with progress tracking.
-    Queries financial database with natural language.
-    """
-    try:
-        logger.info(f"Starting background financial processing for job {job_id}")
-        await job_store.mark_running(job_id)
-
-        # Import the streaming financial chat processor
-        from app.streaming_financial_chat import process_streaming_financial_chat
-
-        # Create tracker with job store sink for progress updates
-        tracker = ProgressTracker(event_sink=JobProgressSink(job_store, job_id))
-
-        # Process the streaming financial chat
-        await process_streaming_financial_chat(
-            request=request,
-            financial_manager=financial_manager,
-            tracker=tracker,
-        )
-
-        logger.info(f"Successfully completed background financial job {job_id}")
-
-    except Exception as job_error:
-        logger.error(f"Financial job {job_id} failed with error: {str(job_error)}", exc_info=True)
-        await job_store.fail_job(job_id, str(job_error))

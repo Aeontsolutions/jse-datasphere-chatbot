@@ -11,6 +11,15 @@ patterns, financial DB query logic) that may be revived in a future ticket (see 
 | File | Original path | What it is |
 |---|---|---|
 | `agent_orchestrator.py` | `app/agent.py` | `AgentOrchestrator` — a 3-phase agent (clarification → routing → synthesis) with both Google Search grounding *and* JSE financial-DB tool calling via Gemini function calling. Was imported in `main.py` but never instantiated; all live endpoints use the simpler `AgentV2` instead. |
+| `streaming_chat.py` | `app/streaming_chat.py` | Backed the `POST /chat/stream/v0` endpoint (SSE/async-job variant of the legacy `/chat` document-RAG pipeline). Docstring explicitly said `[DEPRECATED] ... use /chat/stream instead`. Archived 2026-08-14 during the prod-cleanup pass that scoped the live surface down to `/chat/stream` + `/fast_chat_v2` (`/chat` itself was kept — see project memory on the S3 doc-metadata rebuild). |
+| `streaming_financial_chat.py` | `app/streaming_financial_chat.py` | Backed `POST /fast_chat_v2/stream`, the SSE sibling of the live `/fast_chat_v2`. Confirmed unused by any frontend and archived alongside the async-job infra it depended on. |
+| `job_store.py` | `app/job_store.py` | In-memory `JobStore`/`JobProgressSink` used only by the async-job mode of `/chat/stream/v0` and `/fast_chat_v2/stream`, plus the now-removed `GET /jobs/{job_id}` polling endpoint. |
+| `redis_job_store.py` | `app/redis_job_store.py` | `RedisJobStore`, the Redis-backed alternative to `job_store.py`. Also removed the `/health` endpoint's Redis connectivity check, which only ever tested this. |
+| `progress_tracker.py` | `app/progress_tracker.py` | `ProgressTracker`/SSE progress-event formatting, used only by `streaming_chat.py` and `streaming_financial_chat.py` above. |
+
+Note: the three job/streaming-support files above import from each other via
+`app._archive.<module>` (rewritten from `app.<module>` at archive time) rather than
+relative imports, matching the style of the rest of the app package.
 
 ## Restoring
 
