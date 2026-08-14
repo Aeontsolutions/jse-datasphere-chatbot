@@ -26,6 +26,8 @@ The following secrets are stored in AWS Systems Manager Parameter Store:
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key for S3 access | SecureString |
 | `GOOGLE_API_KEY` | Google Gemini AI API key | SecureString |
 | `GCP_SERVICE_ACCOUNT_INFO` | GCP service account JSON (contains private key) | SecureString |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse project public key (tracing/dashboards) | SecureString |
+| `LANGFUSE_SECRET_KEY` | Langfuse project secret key (tracing/dashboards) | SecureString |
 
 ### Parameter Store Paths
 

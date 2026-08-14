@@ -10,6 +10,7 @@ Utility scripts for development, testing, and maintenance.
 - **run_metadata_rebuild.py** - Runner script for metadata rebuild
 - **find_unmapped_codes.py** - Identifies unmapped company codes
 - **push_copilot_secrets.py** - Pushes `.env` values to AWS SSM for the Copilot deploy
+- **create_interactions_table.py** - One-time (idempotent) creation of the BigQuery `interactions` table used for permanent interaction logging (see `docs/CACHING_LOGGING_TRACING.md`)
 
 See `archive/` for manual test clients that targeted endpoints removed in the
 2026-08-14 prod-cleanup pass (`/chroma/*`, `/chat/stream/v0`'s async-job polling).

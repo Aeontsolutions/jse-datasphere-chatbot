@@ -20,6 +20,7 @@ from app.financial_tool import build_financial_context, query_and_run
 from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.models import CostSummary, PhaseCost
+from app.tracing import log_completed_generation
 from app.utils.cost_tracking import calculate_cost_from_response
 from app.utils.monitoring import record_ai_cost
 from app.utils.prompt_cache import PromptCache
@@ -204,6 +205,15 @@ class AgentV2:
             output_cost=cost.output_cost,
             total_cost=cost.total_cost,
             cached_tokens=cost.token_usage.cached_tokens,
+        )
+        log_completed_generation(
+            phase,
+            model=model,
+            output=getattr(response, "text", None),
+            usage_details={
+                "input": cost.token_usage.input_tokens,
+                "output": cost.token_usage.output_tokens,
+            },
         )
         self._add_phase_cost(
             phase=phase,
