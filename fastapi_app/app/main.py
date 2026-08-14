@@ -844,6 +844,7 @@ async def chat_stream(
     http_request: Request,
     response_cache: Any = Depends(get_response_cache_dep),
     interaction_logger: Any = Depends(get_interaction_logger_dep),
+    financial_manager: Any = Depends(get_financial_manager),
 ):
     """
     JSE Financial Analyst endpoint using Gemini 2.5 Pro with Google Search grounding.
@@ -958,6 +959,7 @@ async def chat_stream(
                 query=request.query,
                 conversation_history=request.conversation_history,
                 enable_web_search=request.enable_web_search,
+                financial_manager=financial_manager,
             )
 
             # Build response (compatible with AgentChatResponse)
