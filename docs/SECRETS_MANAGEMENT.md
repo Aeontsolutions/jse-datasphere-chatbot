@@ -64,7 +64,7 @@ Secrets are stored with environment-specific paths:
    AWS_ACCESS_KEY_ID=your-aws-access-key
    AWS_SECRET_ACCESS_KEY=your-aws-secret-key
    AWS_DEFAULT_REGION=us-east-1
-   DOCUMENT_METADATA_S3_BUCKET=jse-renamed-docs-copy
+   DOCUMENT_METADATA_S3_BUCKET=jse-renamed-docs-copy-2
 
    # Google Cloud Configuration
    GOOGLE_API_KEY=your-google-api-key
@@ -124,11 +124,11 @@ AWS Copilot automatically injects secrets from Parameter Store at container star
 
 ```bash
 # 1. Ensure secrets exist in Parameter Store (one-time setup)
-AWS_PROFILE=jse-datasphere-elroy aws ssm get-parameter \
+AWS_PROFILE=ats-jse-elroy aws ssm get-parameter \
   --name "/copilot/jse-datasphere-chatbot/prod/secrets/GOOGLE_API_KEY"
 
 # 2. Deploy with Copilot
-AWS_PROFILE=jse-datasphere-elroy copilot svc deploy --name api --env prod
+AWS_PROFILE=ats-jse-elroy copilot svc deploy --name api --env prod
 
 # 3. Copilot fetches secrets from Parameter Store and injects them
 ```
@@ -142,7 +142,7 @@ AWS_PROFILE=jse-datasphere-elroy copilot svc deploy --name api --env prod
 Use the AWS CLI with your SSO profile:
 
 ```bash
-export AWS_PROFILE=jse-datasphere-elroy
+export AWS_PROFILE=ats-jse-elroy
 
 # Create secret in all environments
 for env in dev staging prod test; do
@@ -191,7 +191,7 @@ NEW_SECRET_NAME=your-secret-here
 ### Step 5: Deploy
 
 ```bash
-AWS_PROFILE=jse-datasphere-elroy copilot svc deploy --name api --env <environment>
+AWS_PROFILE=ats-jse-elroy copilot svc deploy --name api --env <environment>
 ```
 
 ---
@@ -204,7 +204,7 @@ AWS_PROFILE=jse-datasphere-elroy copilot svc deploy --name api --env <environmen
 
 2. **Update Parameter Store** with new values:
    ```bash
-   export AWS_PROFILE=jse-datasphere-elroy
+   export AWS_PROFILE=ats-jse-elroy
 
    aws ssm put-parameter \
      --name "/copilot/jse-datasphere-chatbot/prod/secrets/GOOGLE_API_KEY" \
@@ -215,7 +215,7 @@ AWS_PROFILE=jse-datasphere-elroy copilot svc deploy --name api --env <environmen
 
 3. **Redeploy the service** to pick up new secrets:
    ```bash
-   AWS_PROFILE=jse-datasphere-elroy copilot svc deploy --name api --env prod
+   AWS_PROFILE=ats-jse-elroy copilot svc deploy --name api --env prod
    ```
 
 4. **Verify** the service is working with new credentials:
@@ -243,7 +243,7 @@ AWS_PROFILE=jse-datasphere-elroy copilot svc deploy --name api --env <environmen
 **Solution:**
 1. Verify secret exists in Parameter Store:
    ```bash
-   AWS_PROFILE=jse-datasphere-elroy aws ssm get-parameter \
+   AWS_PROFILE=ats-jse-elroy aws ssm get-parameter \
      --name "/copilot/jse-datasphere-chatbot/dev/secrets/GOOGLE_API_KEY"
    ```
 

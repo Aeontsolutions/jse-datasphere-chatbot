@@ -1,11 +1,12 @@
 import asyncio
-from typing import Dict, Optional, Any
-from app.progress_tracker import ProgressTracker
-from app.models import StreamingChatRequest
-from app.gemini_client import generate_chat_response
-from app.document_selector import auto_load_relevant_documents_async
+from typing import Any, Dict, Optional
+
+from app._archive.progress_tracker import ProgressTracker
 from app.config import S3DownloadConfig
+from app.document_selector import auto_load_relevant_documents_async
+from app.gemini_client import generate_chat_response
 from app.logging_config import get_logger
+from app.models import StreamingChatRequest
 
 logger = get_logger(__name__)
 

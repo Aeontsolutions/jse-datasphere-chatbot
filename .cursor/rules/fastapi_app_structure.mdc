@@ -5,39 +5,42 @@ alwaysApply: false
 ---
 # FastAPI Backend Structure Guide
 
-The production FastAPI service lives inside the `fastapi_app` folder. The following files are the most relevant entry-points and helpers when working on this API:
+The production FastAPI service lives inside the `fastapi_app` folder. The following files are the most relevant entry-points and helpers when working on this API.
 
 1. **Service bootstrap**
    • [`fastapi_app/main.py`](mdc:fastapi_app/main.py) – Thin launcher that imports the FastAPI application object and starts Uvicorn when the module is executed directly.
+   • [`scripts/run_server.py`](mdc:scripts/run_server.py) – Preferred local dev entrypoint (loads `.env`, aliases API keys, runs uvicorn).
    • [`fastapi_app/Dockerfile`](mdc:fastapi_app/Dockerfile) & [`fastapi_app/docker-compose.yml`](mdc:fastapi_app/docker-compose.yml) – Container setup for running the service locally or in CI/CD.
 
-2. **Core application**
-   • [`fastapi_app/app/main.py`](mdc:fastapi_app/app/main.py) – Defines the `FastAPI` instance, startup/​shutdown `lifespan`, CORS middleware and three HTTP endpoints:
-     – `GET /` root sanity check
-     – `GET /health` health probe reporting S3 & metadata status
-     – `POST /chat` conversational endpoint that delegates to the utils helpers described below.
-     The module also wires dependencies `get_s3_client()` and `get_metadata()`.
+2. **Core application — [`fastapi_app/app/main.py`](mdc:fastapi_app/app/main.py)**
+   Defines the `FastAPI` instance, startup/shutdown `lifespan`, CORS middleware, and all HTTP routes (single-file router, no `APIRouter`s). Live endpoints:
+     – `POST /chat/stream` — **primary** agentic endpoint (Gemini 2.5 Pro + Google Search grounding + SQL financial tool), backed by `app/agent_v2.py`'s `AgentV2`.
+     – `POST /fast_chat_v2` — natural-language BigQuery financial data queries, backed by `app/financial_utils.py`'s `FinancialDataManager`.
+     – `POST /chat` — legacy S3-document RAG chat, backed by `app/document_selector.py` + `app/s3_client.py` + `app/metadata_loader.py`.
+     – `GET /cache/status`, `POST /cache/refresh` — Gemini metadata-cache management for the `/chat` pipeline.
+     – `GET /financial/metadata`, `GET /health`, `GET /health/stream`, `GET /metrics`, `GET /`.
 
 3. **Data models**
-   • [`fastapi_app/app/models.py`](mdc:fastapi_app/app/models.py) – Pydantic models for request/response bodies (`ChatRequest`, `ChatResponse`, `DocumentInfo`, …).
+   • [`fastapi_app/app/models.py`](mdc:fastapi_app/app/models.py) – Pydantic request/response models (`ChatRequest`/`ChatResponse`, `AgentChatRequest`/`AgentChatResponse`, `FinancialDataRequest`/`FinancialDataResponse`, …).
 
 4. **Business / utility layer**
-   • [`fastapi_app/app/utils.py`](mdc:fastapi_app/app/utils.py) – Contains all heavy-lifting helpers:
-     – AWS S3 handling (`init_s3_client`, `download_and_extract_from_s3`, …)
-     – Google Vertex AI setup (`init_vertex_ai`)
-     – Document selection with Gemini (`semantic_document_selection`, `auto_load_relevant_documents`)
-     – Final answer generation (`generate_chat_response`).
+   • `app/agent_v2.py` – `AgentV2`, used by `/chat/stream`.
+   • `app/financial_utils.py`, `app/financial_tool.py` – BigQuery financial data querying, used by `/fast_chat_v2` and `/chat/stream`.
+   • `app/s3_client.py`, `app/metadata_loader.py`, `app/document_selector.py`, `app/pdf_utils.py` – S3 document RAG pipeline, used by `/chat`.
+   • `app/gemini_client.py` – Gemini/Vertex AI client setup and metadata caching.
+   • `app/charting.py` – Vega-Lite chart generation for financial data responses.
 
-5. **Tests & example client**
-   • [`fastapi_app/test_api.py`](mdc:fastapi_app/test_api.py) – Simple script hitting the `/health` and `/chat` endpoints locally.
-   • [`fastapi_app/test_client.py`](mdc:fastapi_app/test_client.py) – Streamlit front-end that consumes the `/chat` endpoint.
+5. **Archived code — [`fastapi_app/app/_archive/`](mdc:fastapi_app/app/_archive/README.md)**
+   Endpoints and modules removed from the live app but kept for reference (e.g. the old 3-phase `AgentOrchestrator`, the deprecated `/chat/stream/v0` + `/fast_chat_v2/stream` SSE/async-job pipeline and its `job_store`/`redis_job_store`/`progress_tracker` support). See that directory's README before assuming any of this is wired up — it is not imported by `main.py`.
 
-6. **Environment / configuration**
-   • [`fastapi_app/.env`](mdc:fastapi_app/.env) and [`fastapi_app/.env.example`](mdc:fastapi_app/.env.example) list required environment variables (AWS creds, Vertex AI SA JSON, etc.).
-   • `PORT` and `HOST` are read in the launcher to configure Uvicorn.
+6. **Tests**
+   • [`fastapi_app/tests/`](mdc:fastapi_app/tests) – pytest suite (`unit/`, `integration/`, `uat/`); see `tests/README.md`. `tests/archive/` holds tests for archived code.
 
-Use this guide to quickly locate API entry points, data contracts, and helper functions when navigating the backend.
+7. **Tooling**
+   • [`evals/`](mdc:evals) – persona-driven simulation/eval harness that exercises `/chat/stream` and `/fast_chat_v2` directly; see `evals/README.md`.
+   • [`scripts/`](mdc:scripts) – ops scripts (metadata rebuild, Copilot secrets push); see `scripts/README.md`.
 
-*New RAG / vector-store endpoints*
-• `POST /chroma/update` – upserts documents into a Chroma vector store (see [`app/chroma_utils.py`](mdc:fastapi_app/app/chroma_utils.py)).
-• `POST /chroma/query` – retrieves most similar docs from Chroma.
+8. **Environment / configuration**
+   • [`fastapi_app/.env.example`](mdc:fastapi_app/.env.example) lists required environment variables (AWS creds, GCP/Gemini keys, etc.). `app/config.py` validates them at startup.
+
+There is no Chroma/vector-store integration anywhere in the live app — no `/chroma/*` routes exist and no `app/chroma_utils.py` file exists.

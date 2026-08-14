@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 import redis.asyncio as redis
 
-from app.job_store import JobRecord, JobStore
+from app._archive.job_store import JobRecord, JobStore
 from app.logging_config import get_logger
 from app.models import JobStatus, JobStatusResponse, ProgressUpdate
 

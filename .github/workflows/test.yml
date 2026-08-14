@@ -90,7 +90,7 @@ jobs:
         pytest tests/integration/ -v --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=0
 
     # NOTE: Legacy tests in tests/ root are currently disabled due to outdated mocks
-    # See docs/LEGACY_TEST_FIXES.md for details on what needs fixing
+    # See docs/archive/LEGACY_TEST_FIXES.md for details on what needs fixing
     # - name: Run legacy tests (DISABLED)
     #   run: |
     #     cd fastapi_app

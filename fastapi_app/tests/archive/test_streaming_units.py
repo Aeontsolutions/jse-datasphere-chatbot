@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from app.models import ProgressUpdate, StreamingChatRequest
-
 # Import the modules to test
 from app.progress_tracker import ProgressTracker, format_sse_message
 from app.streaming_chat import _process_chat_async, process_streaming_chat
 from app.streaming_financial_chat import process_streaming_financial_chat
+
+from app.models import ProgressUpdate, StreamingChatRequest
 
 
 class TestProgressTracker:

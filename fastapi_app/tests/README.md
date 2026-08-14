@@ -25,8 +25,8 @@ tests/
 │   ├── test_document_selector.py
 │   └── test_gemini_client.py
 ├── integration/             # Integration tests
-│   ├── test_api_endpoints.py
-│   └── test_streaming_flow.py
+│   └── test_api_endpoints.py
+├── archive/                 # Tests for code archived out of app/ (see archive/README.md)
 ├── conftest.py             # Shared fixtures and test configuration
 └── README.md               # This file
 ```

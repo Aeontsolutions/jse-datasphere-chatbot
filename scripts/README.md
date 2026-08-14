@@ -4,11 +4,15 @@ Utility scripts for development, testing, and maintenance.
 
 ## Files
 
+- **run_server.py** - Runs the app locally (`uvicorn app.main:app`)
+- **run_eval.py** - Runs the persona-driven eval suite against `/chat/stream` and `/fast_chat_v2`
 - **rebuild_metadata.py** - Rebuilds document metadata from S3 bucket
 - **run_metadata_rebuild.py** - Runner script for metadata rebuild
 - **find_unmapped_codes.py** - Identifies unmapped company codes
-- **test_client.py** - Manual test client for API endpoints
-- **streaming_test_client.html** - Browser-based streaming test client
+- **push_copilot_secrets.py** - Pushes `.env` values to AWS SSM for the Copilot deploy
+
+See `archive/` for manual test clients that targeted endpoints removed in the
+2026-08-14 prod-cleanup pass (`/chroma/*`, `/chat/stream/v0`'s async-job polling).
 
 ## Usage
 
