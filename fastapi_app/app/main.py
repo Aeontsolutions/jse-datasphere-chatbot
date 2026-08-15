@@ -645,7 +645,13 @@ async def fast_chat_v2(
         with traced_observation(
             "fast_chat_v2", as_type="span", input={"query": request.query}
         ) as trace_obs:
-            filters = financial_manager.parse_user_query(
+            # parse_user_query/query_data/format_response are synchronous
+            # (Gemini + BigQuery calls) and this endpoint runs on the app's
+            # single event loop — run each in a thread so it doesn't block
+            # every other in-flight request (see loadtest/README.md and ADR
+            # docs/adr/0001-fix-event-loop-blocking-llm-calls.md).
+            filters = await asyncio.to_thread(
+                financial_manager.parse_user_query,
                 request.query,
                 request.conversation_history,
                 last_query_data,
@@ -657,9 +663,10 @@ async def fast_chat_v2(
             # logger.info(f"availability type: {type(availability)}, availability: {availability}")
             warnings = availability.get("warnings", [])
             suggestions = availability.get("suggestions", [])
-            results = financial_manager.query_data(filters)
+            results = await asyncio.to_thread(financial_manager.query_data, filters)
             logger.info(f"results type: {type(results)}, results: {results}")
-            ai_response = financial_manager.format_response(
+            ai_response = await asyncio.to_thread(
+                financial_manager.format_response,
                 results,
                 request.query,
                 filters.interpretation,
