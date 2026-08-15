@@ -105,7 +105,10 @@ ignore = [
 "__init__.py" = ["F401"]  # Unused imports in __init__.py
 "tests/*" = ["F401", "F811"]  # Allow test fixtures
 "app/streaming_chat.py" = ["E", "W", "F", "I", "B", "C4"]  # Excluded in pre-commit
-"main.py" = ["E", "W", "F", "I", "B", "C4"]  # Excluded in pre-commit
+# Leading slash anchors this to the repo-root uvicorn shim. Without it the bare
+# pattern also matches app/main.py by basename, silencing every lint rule on the
+# entire API surface (that masked an F821 undefined-name that reached prod).
+"/main.py" = ["E", "W", "F", "I", "B", "C4"]  # Excluded in pre-commit
 "test_async_integration.py" = ["E", "W", "F", "I", "B", "C4"]  # Excluded in pre-commit
 
 [tool.pytest.ini_options]
