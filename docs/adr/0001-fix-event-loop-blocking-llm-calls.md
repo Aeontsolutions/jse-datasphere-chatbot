@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted. Fixed in `agent_v2.py` (`/chat/stream`) and `main.py` (`/fast_chat_v2`).
+Accepted and deployed to prod (2026-08-15). Fixed in `agent_v2.py`
+(`/chat/stream`) and `main.py` (`/fast_chat_v2`).
 
 ## Context
 
@@ -86,6 +87,19 @@ staying flat, p50 grew only 1.3x from concurrency 1→8 instead of scaling
 linearly, and there were zero errors at every level including the one that
 previously produced a total outage on prod. No saturation knee was found in
 the tested range.
+
+**Re-verified on prod itself** after merge and deploy (2 tasks):
+
+| conc | p50   | p95   | rps  | errors |
+|------|-------|-------|------|--------|
+| 1    | 11.2s | 13.4s | 0.09 | 0%     |
+| 2    | 15.2s | 22.4s | 0.13 | 0%     |
+| 4    | 12.1s | 16.5s | 0.30 | 0%     |
+| 8    | 18.5s | 24.0s | 0.36 | 0%     |
+
+30/30 requests succeeded at every level, including concurrency 8 — the exact
+level that produced 17 real HTTP 504s pre-fix. Throughput climbed 4x
+(0.09 → 0.36 rps) instead of staying flat. No revert was necessary.
 
 **Known gaps, not addressed by this change:**
 
