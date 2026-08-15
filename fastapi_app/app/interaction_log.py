@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 INTERACTIONS_SCHEMA = [
     bigquery.SchemaField("interaction_id", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("request_id", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("environment", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("endpoint", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
     bigquery.SchemaField("query", "STRING", mode="REQUIRED"),
@@ -59,10 +60,12 @@ class InteractionLogger:
         dataset: Optional[str],
         table: str,
         enabled: bool = True,
+        environment: Optional[str] = None,
     ):
         self._client = bq_client
         self._table_ref = f"{dataset}.{table}" if bq_client and dataset else None
         self._enabled = bool(enabled and bq_client is not None and self._table_ref)
+        self._environment = environment
 
     @property
     def enabled(self) -> bool:
@@ -124,6 +127,7 @@ class InteractionLogger:
     async def log(self, row: Dict[str, Any]) -> None:
         if not self._enabled:
             return
+        row = {**row, "environment": self._environment}
         try:
             errors = await asyncio.to_thread(self._client.insert_rows_json, self._table_ref, [row])
             if errors:
@@ -165,4 +169,5 @@ def build_interaction_logger() -> InteractionLogger:
         dataset=cfg.bigquery.resolved_interactions_dataset,
         table=cfg.bigquery.interactions_table,
         enabled=cfg.bigquery.logging_enabled,
+        environment=cfg.environment,
     )
