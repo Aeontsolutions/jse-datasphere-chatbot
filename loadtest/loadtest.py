@@ -170,7 +170,9 @@ class ServerDelta:
 
     @property
     def mean_bigquery_ms_per_request(self) -> float:
-        return (self.bigquery_seconds / self.http_count) * 1000 if self.http_count else 0.0
+        return (
+            (self.bigquery_seconds / self.http_count) * 1000 if self.http_count else 0.0
+        )
 
     @property
     def ai_calls_per_request(self) -> float:
@@ -266,7 +268,9 @@ def parse_metrics(text: str) -> dict[str, float]:
     return totals
 
 
-async def scrape_metrics(client: httpx.AsyncClient, base_url: str) -> dict[str, float] | None:
+async def scrape_metrics(
+    client: httpx.AsyncClient, base_url: str
+) -> dict[str, float] | None:
     """Fetch and parse ``/metrics``; None if the endpoint is unreachable."""
     try:
         response = await client.get(f"{base_url}/metrics", timeout=10.0)
@@ -276,7 +280,9 @@ async def scrape_metrics(client: httpx.AsyncClient, base_url: str) -> dict[str, 
         return None
 
 
-def diff_metrics(before: dict[str, float] | None, after: dict[str, float] | None) -> ServerDelta:
+def diff_metrics(
+    before: dict[str, float] | None, after: dict[str, float] | None
+) -> ServerDelta:
     """Subtract two metric snapshots into a per-level server-side delta."""
     if before is None or after is None:
         return ServerDelta()
@@ -399,7 +405,9 @@ async def run_level(
     await asyncio.gather(*(worker() for _ in range(concurrency)))
     wall_seconds = time.perf_counter() - start
     print()
-    return LevelResult(concurrency=concurrency, results=results, wall_seconds=wall_seconds)
+    return LevelResult(
+        concurrency=concurrency, results=results, wall_seconds=wall_seconds
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +415,9 @@ async def run_level(
 # ---------------------------------------------------------------------------
 
 
-def format_report(levels: list[LevelResult], endpoint: Endpoint, cache_mode: str) -> str:
+def format_report(
+    levels: list[LevelResult], endpoint: Endpoint, cache_mode: str
+) -> str:
     """Render the sweep as a human-readable report."""
     lines: list[str] = []
     lines.append("")
@@ -542,7 +552,9 @@ def format_report(levels: list[LevelResult], endpoint: Endpoint, cache_mode: str
 
 def _error_lines(levels: list[LevelResult]) -> list[str]:
     """Render a deduplicated error tally, or nothing if the run was clean."""
-    errors = [r.error for level in levels for r in level.results if not r.ok and r.error]
+    errors = [
+        r.error for level in levels for r in level.results if not r.ok and r.error
+    ]
     if not errors:
         return []
     counts: dict[str, int] = {}
@@ -568,7 +580,9 @@ def find_knee(levels: list[LevelResult]) -> LevelResult | None:
     return None
 
 
-def results_to_json(levels: list[LevelResult], endpoint: Endpoint, cache_mode: str) -> dict:
+def results_to_json(
+    levels: list[LevelResult], endpoint: Endpoint, cache_mode: str
+) -> dict:
     """Machine-readable form of the sweep, for diffing runs over time."""
     return {
         "endpoint": endpoint.name,
@@ -729,11 +743,15 @@ async def main_async(args: argparse.Namespace) -> int:
     levels: list[LevelResult] = []
     spent = 0.0
 
-    limits = httpx.Limits(max_connections=max(args.levels) * 2, max_keepalive_connections=0)
+    limits = httpx.Limits(
+        max_connections=max(args.levels) * 2, max_keepalive_connections=0
+    )
     async with httpx.AsyncClient(limits=limits, follow_redirects=True) as client:
         for concurrency, request_count in plan:
             print(
-                f"[concurrency {concurrency}] sending {request_count} requests ", end="", flush=True
+                f"[concurrency {concurrency}] sending {request_count} requests ",
+                end="",
+                flush=True,
             )
             before = await scrape_metrics(client, base_url)
             level = await run_level(
@@ -772,7 +790,8 @@ async def main_async(args: argparse.Namespace) -> int:
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         args.json_out.write_text(
-            json.dumps(results_to_json(levels, endpoint, args.cache_mode), indent=2) + "\n"
+            json.dumps(results_to_json(levels, endpoint, args.cache_mode), indent=2)
+            + "\n"
         )
         print(f"Wrote {args.json_out}")
 
