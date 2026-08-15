@@ -104,7 +104,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Unused imports in __init__.py
 "tests/*" = ["F401", "F811"]  # Allow test fixtures
-"app/streaming_chat.py" = ["E", "W", "F", "I", "B", "C4"]  # Excluded in pre-commit
+# app/streaming_chat.py moved to app/_archive/ and lints clean, so it needs no
+# exemption. Re-add one only if a file actually requires it.
 # Leading slash anchors this to the repo-root uvicorn shim. Without it the bare
 # pattern also matches app/main.py by basename, silencing every lint rule on the
 # entire API surface (that masked an F821 undefined-name that reached prod).
@@ -132,6 +133,11 @@ markers = [
 
 [tool.mypy]
 python_version = "3.10"
+# Without this, app/utils/*.py resolves as both `app.utils.*` and
+# `fastapi_app.app.utils.*` (fastapi_app/__init__.py makes the parent a
+# package). mypy treats that as a fatal error and exits before checking
+# anything, so the CI step has never type-checked a single file.
+explicit_package_bases = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

@@ -257,3 +257,93 @@ class TestFastChatV2Cache:
 
         cache_hit.get.assert_not_called()
         assert response.status_code in [200, 500]  # Falls through to the live path.
+
+
+@pytest.mark.integration
+class TestChatStreamCache:
+    """Test the /chat/stream response-cache branch.
+
+    The sibling of the /fast_chat_v2 branch above, and equally uncovered. It
+    survives because it hands the cached dicts straight to AgentChatResponse and
+    lets Pydantic coerce them, rather than naming the models explicitly — which
+    is exactly what broke /fast_chat_v2. These tests pin that coercion down so a
+    future refactor toward explicit construction cannot silently repeat it.
+    """
+
+    @pytest.fixture
+    def client(self, test_client):
+        return test_client
+
+    @pytest.fixture
+    def cache_hit(self):
+        cached = {
+            "response": "GraceKennedy outperformed NCB on 2023 revenue growth.",
+            "data_found": True,
+            "record_count": 2,
+            "filters_used": {
+                "companies": ["GraceKennedy", "NCB Financial Group"],
+                "symbols": ["GK", "NCBFG"],
+                "years": ["2023"],
+                "standard_items": ["revenue"],
+                "interpretation": "GK vs NCB revenue for 2023",
+                "is_follow_up": False,
+            },
+            "data_preview": [
+                {
+                    "company": "GraceKennedy",
+                    "symbol": "GK",
+                    "year": "2023",
+                    "standard_item": "revenue",
+                    "item": 1.6,
+                    "unit_multiplier": 1000000000,
+                    "formatted_value": "1.60B",
+                }
+            ],
+            "warnings": None,
+            "suggestions": None,
+            "chart": None,
+            # Matches the shape AgentV2 builds from Google Search grounding chunks.
+            "sources": [
+                {
+                    "type": "web",
+                    "title": "Jamaica Stock Exchange",
+                    "url": "https://www.jamstockex.com/",
+                }
+            ],
+            "web_search_results": None,
+            "tools_executed": ["financial_data"],
+            "needs_clarification": False,
+            "clarification_question": None,
+        }
+        cache = Mock()
+        cache.get = AsyncMock(return_value=cached)
+        cache.set = AsyncMock()
+        app.dependency_overrides[get_response_cache_dep] = lambda: cache
+        yield cache
+        app.dependency_overrides.pop(get_response_cache_dep, None)
+
+    def test_cache_hit_returns_200_without_invoking_the_agent(self, client, cache_hit):
+        """A hit must short-circuit before AgentV2 is constructed — no paid call."""
+        with patch("app.main.AgentV2") as MockAgent:
+            response = client.post(
+                "/chat/stream",
+                json={"query": "compare GK and NCB revenue", "memory_enabled": False},
+            )
+
+        assert response.status_code == 200
+        MockAgent.assert_not_called()
+
+    def test_cache_hit_coerces_nested_models(self, client, cache_hit):
+        """Cached dicts must survive the round-trip through AgentChatResponse."""
+        response = client.post(
+            "/chat/stream",
+            json={"query": "compare GK and NCB revenue", "memory_enabled": False},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["record_count"] == 2
+        assert body["filters_used"]["symbols"] == ["GK", "NCBFG"]
+        assert body["data_preview"][0]["formatted_value"] == "1.60B"
+        assert body["sources"][0]["url"] == "https://www.jamstockex.com/"
+        assert body["tools_executed"] == ["financial_data"]
