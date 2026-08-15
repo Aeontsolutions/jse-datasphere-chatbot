@@ -411,7 +411,10 @@ class AgentV2:
             contents = self._build_contents(conversation_history, query)
 
             # Step 1 — ROUTE: plain-text 2-way classify (no tools, no grounding).
-            route = self.client.models.generate_content(
+            # Runs in a thread — generate_content is a blocking call, and this
+            # method runs inside the app's single event loop (see loadtest/README.md).
+            route = await asyncio.to_thread(
+                self.client.models.generate_content,
                 model=ROUTER_MODEL,
                 contents=contents,
                 config=types.GenerateContentConfig(
@@ -432,7 +435,8 @@ class AgentV2:
                 return None
 
             # --- REFUSE: Flash answers directly, no Pro call needed ---
-            refusal = self.client.models.generate_content(
+            refusal = await asyncio.to_thread(
+                self.client.models.generate_content,
                 model=ROUTER_MODEL,
                 contents=contents,
                 config=types.GenerateContentConfig(
@@ -537,9 +541,11 @@ class AgentV2:
             tools = [types.Tool(google_search=types.GoogleSearch())] if enable_web_search else None
             system_prompt = SYSTEM_PROMPT if enable_web_search else SYSTEM_PROMPT_NO_SEARCH
 
-            # Single generate_content call with optional grounding
+            # Single generate_content call with optional grounding, run in a
+            # thread so it doesn't block the event loop (see loadtest/README.md).
             _cache = _SYSTEM_PROMPT_CACHE if enable_web_search else _SYSTEM_PROMPT_NO_SEARCH_CACHE
-            response = self.client.models.generate_content(
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
                 model=self.model_name,
                 contents=contents,
                 config=self._make_config(
