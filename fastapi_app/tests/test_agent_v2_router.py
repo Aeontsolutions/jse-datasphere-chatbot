@@ -11,7 +11,7 @@ removed.
 """
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -22,6 +22,10 @@ from app.agent_v2 import ROUTER_MODEL, AgentV2
 def mock_genai_client():
     with patch("app.agent_v2.get_genai_client") as mock_get_client:
         mock_client = MagicMock()
+        # AgentV2 calls the SDK's native async client (client.aio.models.
+        # generate_content), so this leaf has to be awaitable — a plain
+        # MagicMock would return a non-awaitable and fail at the await.
+        mock_client.aio.models.generate_content = AsyncMock()
         mock_get_client.return_value = mock_client
         yield mock_client
 
@@ -55,7 +59,7 @@ def _text_response(text):
 
 def test_route_allow_falls_through_to_web(mock_genai_client):
     # route=ALLOW -> no refusal call; web path runs (route + web = 2 calls).
-    mock_genai_client.models.generate_content.side_effect = [
+    mock_genai_client.aio.models.generate_content.side_effect = [
         _route_response("ALLOW"),
         _text_response("NCB's 2023 revenue was J$123.5M, per public filings."),
     ]
@@ -64,19 +68,19 @@ def test_route_allow_falls_through_to_web(mock_genai_client):
 
     assert result["response"] == "NCB's 2023 revenue was J$123.5M, per public filings."
     assert "query_financial_data" not in (result.get("tools_executed") or [])
-    assert mock_genai_client.models.generate_content.call_count == 2
+    assert mock_genai_client.aio.models.generate_content.call_count == 2
 
 
 def test_route_call_uses_flash_and_no_tools(mock_genai_client):
     # The ROUTE call is a plain-text flash classification — no tools attached.
-    mock_genai_client.models.generate_content.side_effect = [
+    mock_genai_client.aio.models.generate_content.side_effect = [
         _route_response("ALLOW"),
         _text_response("answer"),
     ]
     agent = AgentV2()
     asyncio.run(agent.run(query="NCB revenue 2023?"))
 
-    calls = mock_genai_client.models.generate_content.call_args_list
+    calls = mock_genai_client.aio.models.generate_content.call_args_list
     assert len(calls) == 2
     route_cfg = calls[0].kwargs["config"]
     assert calls[0].kwargs["model"] == "gemini-2.5-flash"
@@ -86,7 +90,7 @@ def test_route_call_uses_flash_and_no_tools(mock_genai_client):
 def test_router_error_falls_through_to_web(mock_genai_client):
     # If the ROUTE call itself raises, _fast_path swallows it and run() still
     # reaches the web/plain path (graceful degradation).
-    mock_genai_client.models.generate_content.side_effect = [
+    mock_genai_client.aio.models.generate_content.side_effect = [
         RuntimeError("router exploded"),
         _text_response("web fallback answer"),
     ]
@@ -94,7 +98,7 @@ def test_router_error_falls_through_to_web(mock_genai_client):
     result = asyncio.run(agent.run(query="What was NCB revenue in 2023?"))
 
     assert result["response"] == "web fallback answer"
-    assert mock_genai_client.models.generate_content.call_count == 2
+    assert mock_genai_client.aio.models.generate_content.call_count == 2
 
 
 def test_run_uses_cached_content_when_cache_hits(mock_genai_client):
@@ -103,7 +107,7 @@ def test_run_uses_cached_content_when_cache_hits(mock_genai_client):
     resp.text = "hello"
     resp.candidates = []
     resp.usage_metadata = None
-    mock_genai_client.models.generate_content.return_value = resp
+    mock_genai_client.aio.models.generate_content.return_value = resp
 
     with (
         patch("app.agent_v2._SYSTEM_PROMPT_CACHE") as mock_cache,
@@ -114,7 +118,7 @@ def test_run_uses_cached_content_when_cache_hits(mock_genai_client):
         agent = AgentV2()
         asyncio.run(agent.run("What is the JSE?", enable_web_search=True))
 
-    config = mock_genai_client.models.generate_content.call_args.kwargs["config"]
+    config = mock_genai_client.aio.models.generate_content.call_args.kwargs["config"]
     assert config.cached_content == "cachedContents/xyz"
     # system_instruction must be absent (None or not set) when cached_content is used
     assert not getattr(config, "system_instruction", None)
@@ -126,7 +130,7 @@ def test_run_falls_back_to_system_instruction_when_cache_returns_none(mock_genai
     resp.text = "hello"
     resp.candidates = []
     resp.usage_metadata = None
-    mock_genai_client.models.generate_content.return_value = resp
+    mock_genai_client.aio.models.generate_content.return_value = resp
 
     with (
         patch("app.agent_v2._SYSTEM_PROMPT_CACHE") as mock_cache,
@@ -137,7 +141,7 @@ def test_run_falls_back_to_system_instruction_when_cache_returns_none(mock_genai
         agent = AgentV2()
         asyncio.run(agent.run("What is the JSE?", enable_web_search=True))
 
-    config = mock_genai_client.models.generate_content.call_args.kwargs["config"]
+    config = mock_genai_client.aio.models.generate_content.call_args.kwargs["config"]
     assert config.system_instruction is not None
     assert not getattr(config, "cached_content", None)
 
@@ -149,7 +153,7 @@ def test_run_falls_back_to_system_instruction_when_cache_returns_none(mock_genai
 
 def test_refuse_path_uses_flash_only_no_pro(mock_genai_client):
     """REFUSE route: 2 Flash calls (route + refusal), zero Pro calls."""
-    mock_genai_client.models.generate_content.side_effect = [
+    mock_genai_client.aio.models.generate_content.side_effect = [
         _route_response("REFUSE"),
         _text_response("Sorry, I can only help with JSE topics."),
     ]
@@ -160,21 +164,21 @@ def test_refuse_path_uses_flash_only_no_pro(mock_genai_client):
     assert result["record_count"] == 0
     assert result["data_found"] is False
     # Both calls must use Flash, not Pro
-    calls = mock_genai_client.models.generate_content.call_args_list
+    calls = mock_genai_client.aio.models.generate_content.call_args_list
     assert len(calls) == 2
     assert all(c.kwargs["model"] == "gemini-2.5-flash" for c in calls)
 
 
 def test_refuse_path_no_tools_on_refusal_call(mock_genai_client):
     """The refusal Flash call must have no tools attached (no grounding)."""
-    mock_genai_client.models.generate_content.side_effect = [
+    mock_genai_client.aio.models.generate_content.side_effect = [
         _route_response("REFUSE"),
         _text_response("I can only help with JSE-related topics."),
     ]
     agent = AgentV2()
     asyncio.run(agent.run(query="What is bitcoin?"))
 
-    calls = mock_genai_client.models.generate_content.call_args_list
+    calls = mock_genai_client.aio.models.generate_content.call_args_list
     # calls[0] = route call, calls[1] = refusal generation call
     refusal_cfg = calls[1].kwargs["config"]
     assert refusal_cfg.tools is None
@@ -182,7 +186,7 @@ def test_refuse_path_no_tools_on_refusal_call(mock_genai_client):
 
 def test_refuse_path_conversation_history_none(mock_genai_client):
     """REFUSE path correctly handles conversation_history=None (no crash, history built fresh)."""
-    mock_genai_client.models.generate_content.side_effect = [
+    mock_genai_client.aio.models.generate_content.side_effect = [
         _route_response("REFUSE"),
         _text_response("JSE topics only."),
     ]

@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import logging
 import os
@@ -333,7 +334,7 @@ def test_parse_user_query_llm(monkeypatch, mock_bq_client):
 
     # Prepare a mock LLM model
     class MockLLM:
-        def generate_content(self, prompt):
+        async def generate_content_async(self, prompt):
             class Response:
                 # Simulate a realistic LLM output for a query about Elite Diagnostic Limited's revenue in 2024
                 text = '{"companies": ["Elite Diagnostic Limited"], "symbols": ["ELITE"], "years": ["2024"], "standard_items": ["revenue"], "interpretation": "Elite Diagnostic Limited revenue for 2024", "data_availability_note": "", "is_follow_up": false, "context_used": ""}'
@@ -367,7 +368,7 @@ def test_parse_user_query_llm(monkeypatch, mock_bq_client):
 
     # Test a realistic user query
     query = "Show me Elite Diagnostic Limited revenue for 2024"
-    filters = manager.parse_user_query(query)
+    filters = asyncio.run(manager.parse_user_query(query))
 
     # Assert the parsed filters match expected output
     assert isinstance(filters, FinancialDataFilters)
@@ -387,7 +388,7 @@ def test_parse_user_query_llm_multiple_companies_symbols(monkeypatch, mock_bq_cl
 
     # Prepare a mock LLM model
     class MockLLM:
-        def generate_content(self, prompt):
+        async def generate_content_async(self, prompt):
             class Response:
                 # Simulate LLM output for a query about two companies, two symbols, two years, and revenue
                 text = '{"companies": ["Elite Diagnostic Limited", "Dolla Financial Services Limited"], "symbols": ["ELITE", "DOLLA"], "years": ["2023", "2024"], "standard_items": ["revenue"], "interpretation": "Compare Elite Diagnostic Limited and Dolla Financial Services Limited revenue for 2023 and 2024", "data_availability_note": "", "is_follow_up": false, "context_used": ""}'
@@ -422,7 +423,7 @@ def test_parse_user_query_llm_multiple_companies_symbols(monkeypatch, mock_bq_cl
     }
 
     query = "Compare Elite Diagnostic Limited and Dolla Financial Services Limited revenue for 2023 and 2024"
-    filters = manager.parse_user_query(query)
+    filters = asyncio.run(manager.parse_user_query(query))
 
     assert isinstance(filters, FinancialDataFilters)
     assert set(filters.companies) == {
@@ -445,7 +446,7 @@ def test_parse_user_query_llm_symbol_only(monkeypatch, mock_bq_client):
 
     # Prepare a mock LLM model
     class MockLLM:
-        def generate_content(self, prompt):
+        async def generate_content_async(self, prompt):
             class Response:
                 # Simulate LLM output for a query about ELITE's revenue for 2024, only symbol provided
                 text = '{"companies": [], "symbols": ["ELITE"], "years": ["2024"], "standard_items": ["revenue"], "interpretation": "ELITE revenue for 2024", "data_availability_note": "", "is_follow_up": false, "context_used": ""}'
@@ -474,7 +475,7 @@ def test_parse_user_query_llm_symbol_only(monkeypatch, mock_bq_client):
     }
 
     query = "Show me ELITE revenue for 2024"
-    filters = manager.parse_user_query(query)
+    filters = asyncio.run(manager.parse_user_query(query))
 
     assert isinstance(filters, FinancialDataFilters)
     assert filters.symbols == ["ELITE"]
@@ -677,37 +678,81 @@ def test_build_parse_query_system_instruction_contains_metadata():
 
 def test_parse_user_query_uses_cached_content_when_available():
     """parse_user_query passes cached_content= to generate_content when cache hits."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     mgr = _make_mgr_with_metadata()
     mock_resp = MagicMock()
     mock_resp.text = '{"companies":[],"symbols":["NCBFG"],"years":[],"standard_items":["revenue"],"interpretation":"test","data_availability_note":"","is_follow_up":false,"context_used":""}'
 
     mock_client = MagicMock()
-    mock_client.models.generate_content.return_value = mock_resp
+    mock_client.aio.models.generate_content = AsyncMock(return_value=mock_resp)
 
     with (
         patch("app.financial_utils._PARSE_QUERY_CACHE") as mock_cache,
         patch("app.financial_utils.get_genai_client", return_value=mock_client),
     ):
         mock_cache.get_cache_name.return_value = "cachedContents/parse123"
-        mgr.parse_user_query("What is NCBFG revenue?")
+        asyncio.run(mgr.parse_user_query("What is NCBFG revenue?"))
 
-    config = mock_client.models.generate_content.call_args.kwargs["config"]
+    config = mock_client.aio.models.generate_content.call_args.kwargs["config"]
     assert config.cached_content == "cachedContents/parse123"
+
+
+def test_format_response_awaits_async_gemini_call():
+    """format_response is async and must reach the model via generate_content_async.
+
+    Guards the ADR-0003 conversion: a regression back to the blocking
+    generate_content would leave this AsyncMock un-awaited and fail here.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.models import FinancialDataRecord
+
+    mgr = _make_mgr_with_metadata()
+    mgr.dspy_response_formatter = None
+
+    mock_resp = MagicMock()
+    mock_resp.text = "NCB Financial Group reported revenue of J$1.0 billion in 2023."
+    # Real usage metadata, so cost accounting doesn't compare a MagicMock to an int.
+    mock_resp.usage_metadata = None
+    mock_resp.candidates = []
+    mgr.model.generate_content_async = AsyncMock(return_value=mock_resp)
+
+    records = [
+        FinancialDataRecord(
+            company="NCB Financial Group",
+            symbol="NCBFG",
+            year="2023",
+            standard_item="revenue",
+            item=1_000_000_000.0,
+            unit_multiplier=1,
+            formatted_value="J$1.0B",
+        )
+    ]
+
+    result = asyncio.run(
+        mgr.format_response(
+            records=records,
+            query="What is NCBFG revenue?",
+            interpretation="NCBFG revenue for 2023",
+        )
+    )
+
+    mgr.model.generate_content_async.assert_awaited_once()
+    assert result == "NCB Financial Group reported revenue of J$1.0 billion in 2023."
 
 
 def test_parse_user_query_falls_back_when_cache_none():
     """parse_user_query falls back to self.model when cache returns None."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     mgr = _make_mgr_with_metadata()
     mock_resp = MagicMock()
     mock_resp.text = '{"companies":[],"symbols":["NCBFG"],"years":[],"standard_items":["revenue"],"interpretation":"test","data_availability_note":"","is_follow_up":false,"context_used":""}'
-    mgr.model.generate_content.return_value = mock_resp
+    mgr.model.generate_content_async = AsyncMock(return_value=mock_resp)
 
     with patch("app.financial_utils._PARSE_QUERY_CACHE") as mock_cache:
         mock_cache.get_cache_name.return_value = None
-        mgr.parse_user_query("What is NCBFG revenue?")
+        asyncio.run(mgr.parse_user_query("What is NCBFG revenue?"))
 
-    mgr.model.generate_content.assert_called_once()
+    mgr.model.generate_content_async.assert_awaited_once()

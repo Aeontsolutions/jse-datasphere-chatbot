@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from google.genai import types
 
-from app.document_selector import extract_companies_from_query
+from app.document_selector import extract_companies_from_query_async
 from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.models import CostSummary, PhaseCost
@@ -342,7 +342,8 @@ class AgentV2:
         auto-loading (app.document_selector.extract_companies_from_query) —
         an LLM call that understands context, so it doesn't mistake a metric
         abbreviation (e.g. "ROC" meaning Return on Capital) for a ticker
-        mention. Runs in a thread so it can overlap with the router call.
+        mention. Issued through the SDK's native async client so it can
+        overlap with the router call without occupying a thread-pool worker.
         """
         if financial_manager is None or not getattr(financial_manager, "metadata", None):
             return []
@@ -351,8 +352,8 @@ class AgentV2:
         symbols = metadata.get("symbols") or []
         if not symbols:
             return []
-        extracted = await asyncio.to_thread(
-            extract_companies_from_query, query, companies, symbols, conversation_history
+        extracted = await extract_companies_from_query_async(
+            query, companies, symbols, conversation_history
         )
         return extracted.get("symbols") or []
 
@@ -411,10 +412,10 @@ class AgentV2:
             contents = self._build_contents(conversation_history, query)
 
             # Step 1 — ROUTE: plain-text 2-way classify (no tools, no grounding).
-            # Runs in a thread — generate_content is a blocking call, and this
-            # method runs inside the app's single event loop (see loadtest/README.md).
-            route = await asyncio.to_thread(
-                self.client.models.generate_content,
+            # Uses the SDK's native async client so the call yields the event
+            # loop directly, without occupying a thread-pool worker
+            # (see docs/adr/0003-native-async-gemini-client.md).
+            route = await self.client.aio.models.generate_content(
                 model=ROUTER_MODEL,
                 contents=contents,
                 config=types.GenerateContentConfig(
@@ -435,8 +436,7 @@ class AgentV2:
                 return None
 
             # --- REFUSE: Flash answers directly, no Pro call needed ---
-            refusal = await asyncio.to_thread(
-                self.client.models.generate_content,
+            refusal = await self.client.aio.models.generate_content(
                 model=ROUTER_MODEL,
                 contents=contents,
                 config=types.GenerateContentConfig(
@@ -541,11 +541,11 @@ class AgentV2:
             tools = [types.Tool(google_search=types.GoogleSearch())] if enable_web_search else None
             system_prompt = SYSTEM_PROMPT if enable_web_search else SYSTEM_PROMPT_NO_SEARCH
 
-            # Single generate_content call with optional grounding, run in a
-            # thread so it doesn't block the event loop (see loadtest/README.md).
+            # Single generate_content call with optional grounding, issued
+            # through the SDK's native async client so it yields the event loop
+            # (see docs/adr/0003-native-async-gemini-client.md).
             _cache = _SYSTEM_PROMPT_CACHE if enable_web_search else _SYSTEM_PROMPT_NO_SEARCH_CACHE
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
+            response = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=contents,
                 config=self._make_config(

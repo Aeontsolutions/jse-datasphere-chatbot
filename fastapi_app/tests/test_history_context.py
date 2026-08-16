@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.financial_utils import FinancialDataManager
@@ -6,7 +8,7 @@ from app.financial_utils import FinancialDataManager
 @pytest.fixture
 def mock_llm():
     class MockLLM:
-        def generate_content(self, prompt):
+        async def generate_content_async(self, prompt):
             class Response:
                 text = '{"companies": ["Elite Diagnostic Limited"], "symbols": ["ELITE"], "years": ["2024"], "standard_items": ["revenue"], "interpretation": "Elite Diagnostic Limited revenue for 2024", "data_availability_note": "", "is_follow_up": true, "context_used": "conversation history"}'
 
@@ -27,7 +29,7 @@ def test_parse_user_query_with_history(monkeypatch):
     captured_prompt = []
 
     class MockLLM:
-        def generate_content(self, prompt):
+        async def generate_content_async(self, prompt):
             captured_prompt.append(prompt)
 
             class Response:
@@ -49,7 +51,7 @@ def test_parse_user_query_with_history(monkeypatch):
     ]
     query = "What about 2024?"
 
-    manager.parse_user_query(query, conversation_history=history)
+    asyncio.run(manager.parse_user_query(query, conversation_history=history))
 
     assert len(captured_prompt) > 0
     # Verify history is in the prompt
