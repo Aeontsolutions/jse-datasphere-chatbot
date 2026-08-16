@@ -3,8 +3,23 @@
 ## Status
 
 Accepted (2026-08-16). **Not applied to the first beta wave** — all 100
-invitations had already been sent when this decision was taken. This ADR
-governs subsequent waves.
+invitations had already been sent when this decision was taken.
+
+**Superseded in practice by measurement (2026-08-17).** This ADR's own expiry
+condition was "once a sweep establishes where the knee actually is, this
+should be revisited." That sweep has now run.
+[ADR 0003](0003-native-async-gemini-client.md) records prod handling **256
+concurrent requests with zero errors**, with the knee at concurrency 128 —
+roughly 17–50× the 5–15 concurrent this document estimated for a 100-invite
+spike. The correlated-arrival risk that motivated staggering is no longer a
+capacity risk at beta scale.
+
+Waves remain reasonable for *product* reasons — graduated feedback, support
+load, room to react to bugs — but they are no longer needed to protect
+availability, and wave size should not be constrained by capacity fear. The
+reasoning below is retained because it documents how the decision was made
+under uncertainty, and because the "measure before engineering, stagger while
+unproven" pattern applies again the next time capacity is unknown.
 
 ## Context
 

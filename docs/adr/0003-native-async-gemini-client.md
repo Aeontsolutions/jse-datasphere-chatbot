@@ -2,10 +2,10 @@
 
 ## Status
 
-Accepted and verified on dev (2026-08-17). Implements issue #52. Supersedes
-the mechanism — though not the reasoning — of
+Accepted, verified on dev, and deployed and re-verified on prod (2026-08-17).
+Implements issue #52. Supersedes the mechanism — though not the reasoning — of
 [ADR 0001](0001-fix-event-loop-blocking-llm-calls.md) for Gemini calls.
-BigQuery calls keep ADR 0001's treatment unchanged. Not yet deployed to prod.
+BigQuery calls keep ADR 0001's treatment unchanged.
 
 ## Context
 
@@ -154,11 +154,53 @@ The concurrency-32 row also reproduces the previous sweep (1.69 vs 1.83 rps,
 about 8% run-to-run variance), which is worth knowing before reading small
 differences in any future comparison as signal.
 
-**What has not been identified is *which* limit this is.** Candidates are the
-single uvicorn worker, the event loop itself, and upstream Gemini quota. The
-distinction matters, because the first two are scaled around with `--workers`
-or task count while quota is not. The broken `ai_request_duration_seconds`
-metric is what prevents settling this from the existing data.
+**Prod (2 tasks × 1024 CPU) re-verified after deploy, 2026-08-17.** 1002 paid
+requests across six concurrency levels:
+
+| conc | rps | p50 | p95 | errors |
+|------|------|-------|-------|--------|
+| 1 | 0.09 | 11.5s | 12.1s | 0% |
+| 4 | 0.27 | 13.0s | 18.8s | 0% |
+| 16 | 0.96 | 12.2s | 18.3s | 0% |
+| 32 | 1.75 | 13.5s | 20.8s | 0% |
+| 64 | 2.43 | 15.4s | 24.9s | 0% |
+| 128 | **4.89** | 16.5s | 28.0s | 0% |
+| 256 | 5.48 | 25.2s | 40.7s | 0% |
+
+**Zero errors at every level, including 256 concurrent.** For scale, ADR 0001
+recorded prod losing 17 requests to HTTP 504 at concurrency *8* before that
+fix; concurrency 256 now completes cleanly. No CloudWatch alarm changed state
+during the sweep — including `prod-gemini-quota-exhausted` and the
+ELB-origin 5xx alarm added in PR #54 — and both ECS tasks stayed up with no
+restarts.
+
+Prod's knee is at concurrency **128**, peaking near **5.5 rps**: 64→128 scaled
+at essentially 100% efficiency (2.43 → 4.89 rps), while 128→256 returned only
+12% more throughput for double the load, with `queue*` rising 1740ms → 4563ms.
+
+### The scaling result is the actionable finding
+
+Prod has **4× dev's total CPU** (2 × 1024 units vs 1 × 512) but delivers only
+**1.5× the throughput** (5.48 vs 3.69 rps). Throughput tracks *task count*
+(2× tasks → 1.5× throughput) far better than it tracks CPU, and the extra 512
+CPU units per task bought close to nothing.
+
+That is the signature of an **I/O-bound workload**, which is what this is: the
+request is dominated by waiting on a network call to Gemini, not by local
+computation. The consequence for capacity planning is concrete and slightly
+counterintuitive:
+
+> **Scale out, not up.** Raising `cpu`/`memory` on the task is close to wasted
+> spend. Adding ECS tasks — or uvicorn `--workers`, which adds event loops
+> within a task — is the lever that moves throughput.
+
+This also revises the guess in the dev section above. CPU is ruled out. The
+remaining candidates are the per-process event loop and upstream Gemini
+quota, and the sublinearity (2× tasks buying 1.5×, not 2×) hints at a shared
+constraint starting to bind. The `gemini-quota-exhausted` alarm staying OK is
+weak evidence against quota, but that alarm's threshold has not been checked
+against these rates, so it is not conclusive. The broken
+`ai_request_duration_seconds` metric remains what prevents settling this.
 
 **Test doubles had to change shape.** Mocks now have to be awaitable —
 `AsyncMock` on `client.aio.models.generate_content` and on
