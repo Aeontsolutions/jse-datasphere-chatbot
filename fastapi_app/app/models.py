@@ -288,11 +288,21 @@ class PhaseCost(BaseModel):
     phase: str = Field(..., description="Agent phase name (e.g., 'classification', 'synthesis')")
     model: str = Field(..., description="Model used for this phase")
     input_tokens: int = Field(default=0, description="Number of input tokens")
-    output_tokens: int = Field(default=0, description="Number of output tokens")
+    output_tokens: int = Field(default=0, description="Number of visible output tokens")
     cached_tokens: int = Field(default=0, description="Number of cached tokens")
+    thinking_tokens: int = Field(
+        default=0,
+        description="Reasoning tokens; billed as output and counted against max_output_tokens",
+    )
     input_cost_usd: float = Field(default=0.0, description="Cost for input tokens in USD")
     output_cost_usd: float = Field(default=0.0, description="Cost for output tokens in USD")
     total_cost_usd: float = Field(default=0.0, description="Total cost for this phase in USD")
+    finish_reason: Optional[str] = Field(
+        default=None, description="Gemini finish reason (e.g. 'STOP', 'MAX_TOKENS')"
+    )
+    truncated: bool = Field(
+        default=False, description="True when this phase stopped at the output-token ceiling"
+    )
 
 
 class CostSummary(BaseModel):
@@ -306,8 +316,21 @@ class CostSummary(BaseModel):
     total_input_tokens: int = Field(default=0, description="Total input tokens across all phases")
     total_output_tokens: int = Field(default=0, description="Total output tokens across all phases")
     total_cached_tokens: int = Field(default=0, description="Total cached tokens across all phases")
+    total_thinking_tokens: int = Field(
+        default=0, description="Total reasoning tokens across all phases"
+    )
     total_cost_usd: float = Field(default=0.0, description="Total cost in USD across all phases")
     phases: List[PhaseCost] = Field(default_factory=list, description="Cost breakdown by phase")
+
+    @property
+    def truncated(self) -> bool:
+        """True when any phase hit the output-token ceiling."""
+        return any(p.truncated for p in self.phases)
+
+    @property
+    def truncated_phases(self) -> List[str]:
+        """Names of the phases that were cut short, for logging and alerting."""
+        return [p.phase for p in self.phases if p.truncated]
 
 
 # ==============================================================================

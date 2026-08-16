@@ -79,6 +79,18 @@ def get_cost_config() -> CostTrackingConfig:
 # =============================================================================
 
 
+def _int_attr(obj: Any, name: str) -> int:
+    """Read an integer counter off an SDK object, defaulting to 0.
+
+    Deliberately strict about the type: usage-metadata fields come back as
+    `None` on some responses and are absent entirely on others, and test
+    doubles auto-create truthy attributes. Anything that isn't an int is
+    treated as "not reported" so token arithmetic can never raise.
+    """
+    value = getattr(obj, name, 0)
+    return value if isinstance(value, int) else 0
+
+
 @dataclass
 class TokenUsage:
     """Token usage for a single API call."""
@@ -87,6 +99,11 @@ class TokenUsage:
     output_tokens: int = 0
     cached_tokens: int = 0
     total_tokens: int = 0
+    # Gemini 2.5 reports reasoning tokens separately from `candidates_token_count`.
+    # They are billed as output and, critically, they count against
+    # `max_output_tokens` — so a call can hit its ceiling while `output_tokens`
+    # still looks tiny. Tracking this is what makes that failure visible.
+    thinking_tokens: int = 0
 
     @classmethod
     def from_response(cls, response: Any) -> "TokenUsage":
@@ -103,16 +120,18 @@ class TokenUsage:
             return cls()
 
         metadata = response.usage_metadata
-        input_tokens = getattr(metadata, "prompt_token_count", 0) or 0
-        output_tokens = getattr(metadata, "candidates_token_count", 0) or 0
-        cached_tokens = getattr(metadata, "cached_content_token_count", 0) or 0
-        total_tokens = getattr(metadata, "total_token_count", 0) or 0
+        input_tokens = _int_attr(metadata, "prompt_token_count")
+        output_tokens = _int_attr(metadata, "candidates_token_count")
+        cached_tokens = _int_attr(metadata, "cached_content_token_count")
+        total_tokens = _int_attr(metadata, "total_token_count")
+        thinking_tokens = _int_attr(metadata, "thoughts_token_count")
 
         return cls(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cached_tokens=cached_tokens,
-            total_tokens=total_tokens or (input_tokens + output_tokens),
+            total_tokens=total_tokens or (input_tokens + output_tokens + thinking_tokens),
+            thinking_tokens=thinking_tokens,
         )
 
 
@@ -126,6 +145,8 @@ class CostResult:
     model: str = ""
     phase: str = ""
     token_usage: TokenUsage = field(default_factory=TokenUsage)
+    finish_reason: Optional[str] = None
+    truncated: bool = False
 
 
 # =============================================================================
@@ -185,7 +206,11 @@ def calculate_cost(
     pricing = get_pricing_for_model(model)
 
     input_cost = (token_usage.input_tokens / 1_000_000) * pricing["input_per_million"]
-    output_cost = (token_usage.output_tokens / 1_000_000) * pricing["output_per_million"]
+    # Thinking tokens bill at the output rate. Omitting them under-reported the
+    # cost of every reasoning-heavy call — see ADR 0002, where a refusal spent
+    # 241 thinking tokens against 13 visible ones.
+    billable_output = token_usage.output_tokens + token_usage.thinking_tokens
+    output_cost = (billable_output / 1_000_000) * pricing["output_per_million"]
     total_cost = input_cost + output_cost
 
     return CostResult(
@@ -215,4 +240,49 @@ def calculate_cost_from_response(
         CostResult with calculated costs
     """
     token_usage = TokenUsage.from_response(response)
-    return calculate_cost(model, token_usage, phase)
+    result = calculate_cost(model, token_usage, phase)
+    result.finish_reason = get_finish_reason(response)
+    result.truncated = result.finish_reason == TRUNCATED_FINISH_REASON
+    return result
+
+
+# =============================================================================
+# TRUNCATION DETECTION
+# =============================================================================
+
+# The finish reason Gemini reports when generation stopped because it hit
+# `max_output_tokens` rather than finishing its answer.
+TRUNCATED_FINISH_REASON = "MAX_TOKENS"
+
+
+def get_finish_reason(response: Any) -> Optional[str]:
+    """Return the first candidate's finish reason as a plain string, if any.
+
+    The SDK returns an enum whose `str()` is `FinishReason.MAX_TOKENS`; callers
+    (and BigQuery) want the bare name.
+    """
+    candidates = getattr(response, "candidates", None)
+    # Be strict about the shape: this runs on the response path, and a missing
+    # or oddly-typed `candidates` must degrade to "unknown", never raise.
+    if not isinstance(candidates, (list, tuple)) or not candidates:
+        return None
+
+    reason = getattr(candidates[0], "finish_reason", None)
+    if reason is None:
+        return None
+
+    # Enum members expose `.name`; raw strings pass through unchanged.
+    name = getattr(reason, "name", None)
+    if isinstance(name, str):
+        return name
+    return str(reason).rsplit(".", 1)[-1] if not isinstance(reason, str) else reason
+
+
+def was_truncated(response: Any) -> bool:
+    """True when generation was cut short by the output-token ceiling.
+
+    This is the signal that was missing when interaction
+    7dba1a26bc014fdebfdb2b9567012c52 was logged as `success: true` despite
+    ending mid-sentence.
+    """
+    return get_finish_reason(response) == TRUNCATED_FINISH_REASON

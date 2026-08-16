@@ -14,8 +14,90 @@ from app.utils.cost_tracking import (
     calculate_cost,
     calculate_cost_from_response,
     get_cost_config,
+    get_finish_reason,
     get_pricing_for_model,
+    was_truncated,
 )
+
+
+@pytest.mark.unit
+class TestThinkingTokensAndTruncation:
+    """Coverage for the ADR 0002 signals: thinking tokens and finish reasons."""
+
+    @staticmethod
+    def _response(finish_reason=None, **usage):
+        resp = Mock()
+        resp.usage_metadata = Mock()
+        for name in (
+            "prompt_token_count",
+            "candidates_token_count",
+            "cached_content_token_count",
+            "total_token_count",
+            "thoughts_token_count",
+        ):
+            setattr(resp.usage_metadata, name, usage.get(name, 0))
+        if finish_reason is None:
+            resp.candidates = []
+        else:
+            candidate = Mock()
+            candidate.finish_reason = finish_reason
+            resp.candidates = [candidate]
+        return resp
+
+    def test_thinking_tokens_extracted(self):
+        """The counter that was invisible when the truncated refusal was logged."""
+        usage = TokenUsage.from_response(
+            self._response(candidates_token_count=13, thoughts_token_count=241)
+        )
+        assert usage.thinking_tokens == 241
+        assert usage.output_tokens == 13
+
+    def test_non_integer_counters_are_ignored(self):
+        """Mocks and SDK shape changes must not break token arithmetic."""
+        resp = Mock()
+        resp.usage_metadata = Mock()  # every attribute auto-creates a truthy Mock
+        resp.candidates = []
+        usage = TokenUsage.from_response(resp)
+        assert usage.thinking_tokens == 0
+        assert usage.input_tokens == 0
+
+    def test_thinking_tokens_are_billed_as_output(self):
+        """Google bills reasoning at the output rate; omitting it under-reports cost."""
+        with_thinking = calculate_cost(
+            "gemini-2.5-flash", TokenUsage(output_tokens=13, thinking_tokens=241)
+        )
+        without = calculate_cost("gemini-2.5-flash", TokenUsage(output_tokens=13))
+        assert with_thinking.total_cost > without.total_cost
+        expected = (254 / 1_000_000) * DEFAULT_FLASH_OUTPUT_PRICE
+        assert with_thinking.output_cost == pytest.approx(expected)
+
+    def test_finish_reason_from_enum_like_object(self):
+        reason = Mock()
+        reason.name = "MAX_TOKENS"
+        assert get_finish_reason(self._response(finish_reason=reason)) == "MAX_TOKENS"
+
+    def test_finish_reason_from_plain_string(self):
+        assert get_finish_reason(self._response(finish_reason="STOP")) == "STOP"
+
+    def test_finish_reason_absent_without_candidates(self):
+        assert get_finish_reason(self._response()) is None
+
+    def test_was_truncated_true_on_max_tokens(self):
+        reason = Mock()
+        reason.name = "MAX_TOKENS"
+        assert was_truncated(self._response(finish_reason=reason)) is True
+
+    def test_was_truncated_false_on_stop(self):
+        assert was_truncated(self._response(finish_reason="STOP")) is False
+
+    def test_calculate_cost_from_response_carries_truncation(self):
+        result = calculate_cost_from_response(
+            "gemini-2.5-flash",
+            self._response(finish_reason="MAX_TOKENS", candidates_token_count=13),
+            phase="refusal",
+        )
+        assert result.truncated is True
+        assert result.finish_reason == "MAX_TOKENS"
 
 
 @pytest.mark.unit

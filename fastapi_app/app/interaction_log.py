@@ -39,6 +39,10 @@ INTERACTIONS_SCHEMA = [
     bigquery.SchemaField("model", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("input_tokens", "INTEGER", mode="NULLABLE"),
     bigquery.SchemaField("output_tokens", "INTEGER", mode="NULLABLE"),
+    # Reasoning tokens are billed as output and count against max_output_tokens,
+    # but Gemini reports them outside `candidates_token_count`. Without this
+    # column a truncated response looks like a cheap, tiny, successful one.
+    bigquery.SchemaField("thinking_tokens", "INTEGER", mode="NULLABLE"),
     bigquery.SchemaField("total_tokens", "INTEGER", mode="NULLABLE"),
     bigquery.SchemaField("cost_usd", "FLOAT", mode="NULLABLE"),
     bigquery.SchemaField("phase_costs_json", "STRING", mode="NULLABLE"),
@@ -48,6 +52,11 @@ INTERACTIONS_SCHEMA = [
     bigquery.SchemaField("record_count", "INTEGER", mode="NULLABLE"),
     bigquery.SchemaField("success", "BOOLEAN", mode="REQUIRED"),
     bigquery.SchemaField("error_message", "STRING", mode="NULLABLE"),
+    # `success` only means the request completed. A response cut off at the
+    # output-token ceiling is still `success=true`, which is how a mid-sentence
+    # answer went unnoticed — these two columns make it queryable (ADR 0002).
+    bigquery.SchemaField("finish_reason", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("truncated", "BOOLEAN", mode="NULLABLE"),
 ]
 
 
@@ -85,6 +94,9 @@ class InteractionLogger:
         model: Optional[str] = None,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        thinking_tokens: int = 0,
+        finish_reason: Optional[str] = None,
+        truncated: Optional[bool] = None,
         cost_usd: float = 0.0,
         phase_costs: Optional[Any] = None,
         latency_ms: Optional[float] = None,
@@ -113,7 +125,8 @@ class InteractionLogger:
             "model": model,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "total_tokens": (input_tokens or 0) + (output_tokens or 0),
+            "thinking_tokens": thinking_tokens,
+            "total_tokens": (input_tokens or 0) + (output_tokens or 0) + (thinking_tokens or 0),
             "cost_usd": cost_usd,
             "phase_costs_json": json.dumps(phase_costs, default=str) if phase_costs else None,
             "latency_ms": latency_ms,
@@ -122,6 +135,8 @@ class InteractionLogger:
             "record_count": record_count,
             "success": success,
             "error_message": error_message,
+            "finish_reason": finish_reason,
+            "truncated": truncated,
         }
 
     async def log(self, row: Dict[str, Any]) -> None:
