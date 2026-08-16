@@ -678,9 +678,7 @@ def test_build_parse_query_system_instruction_contains_metadata():
 
 def test_parse_user_query_uses_cached_content_when_available():
     """parse_user_query passes cached_content= to generate_content when cache hits."""
-    from unittest.mock import MagicMock, patch
-
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     mgr = _make_mgr_with_metadata()
     mock_resp = MagicMock()
@@ -746,9 +744,7 @@ def test_format_response_awaits_async_gemini_call():
 
 def test_parse_user_query_falls_back_when_cache_none():
     """parse_user_query falls back to self.model when cache returns None."""
-    from unittest.mock import MagicMock, patch
-
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     mgr = _make_mgr_with_metadata()
     mock_resp = MagicMock()
