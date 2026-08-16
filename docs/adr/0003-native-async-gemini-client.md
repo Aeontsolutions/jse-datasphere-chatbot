@@ -2,10 +2,10 @@
 
 ## Status
 
-Proposed (2026-08-17). Implements issue #52. Supersedes the mechanism —
-though not the reasoning — of
+Accepted and verified on dev (2026-08-17). Implements issue #52. Supersedes
+the mechanism — though not the reasoning — of
 [ADR 0001](0001-fix-event-loop-blocking-llm-calls.md) for Gemini calls.
-BigQuery calls keep ADR 0001's treatment unchanged.
+BigQuery calls keep ADR 0001's treatment unchanged. Not yet deployed to prod.
 
 ## Context
 
@@ -85,19 +85,50 @@ no longer exists.
 
 ## Consequences
 
-**Verification is pending.** The dev sweep above is the *before* measurement.
-The same sweep must be re-run against dev after deploy, at the same levels
-(1,4,16,32), and the results recorded here. The hypothesis this ADR rests on
-is falsifiable and should be treated as unproven until then:
+**Verified on dev (same 1-task environment, same levels, 2026-08-17).** The
+stated hypothesis was that the plateau at concurrency 16 should rise and the
+504s at 32 should disappear if the thread pool was the binding constraint. It
+did, and they did:
 
-> If the thread pool was the binding constraint, the plateau at concurrency 16
-> should rise and the 504s at 32 should reduce or disappear. If throughput
-> still peaks near 0.44 rps, the constraint is elsewhere — most likely
-> upstream Gemini rate limits or the single uvicorn worker — and this change
-> is correctness hygiene only.
+| conc | rps before | rps after | p50 before | p50 after | errors before | errors after |
+|------|-----------|-----------|-----------|-----------|---------------|--------------|
+| 1 | 0.08 | 0.04 † | 12.1s | 27.7s † | 0% | 0% |
+| 4 | 0.14 | 0.31 | 11.6s | 11.9s | 0% | 0% |
+| 16 | 0.44 | 0.92 | 29.6s | 12.2s | 0% | 0% |
+| 32 | 0.24 | **1.83** | 42.7s | **13.2s** | **54.7%** | **0%** |
 
-**Cost of measurement is negligible.** The full 106-request sweep cost $0.24,
-so re-running it is not a spend decision.
+† The concurrency-1 row is a cold-start artefact, not a regression. It is two
+requests against a container that had just been replaced, and its `queue*`
+attribution was 18.6s against 0.4s in the before run — the cost of warming,
+not of serving. Every subsequent level settles at ~12–13s p50.
+
+The headline results at concurrency 32: throughput **7.6× higher** (0.24 →
+1.83 rps), p50 **3.2× faster** (42.7s → 13.2s), and **zero errors where 55%
+of requests previously died** as HTTP 504s. Peak measured throughput rose
+4.2× (0.44 → 1.83 rps), and **no saturation knee exists in the tested range**
+any more — throughput was still climbing at the highest level.
+
+The mechanism check confirms the diagnosis rather than merely the outcome.
+Effective in-flight requests, computed as throughput × service time, went from
+0.44 × 12s ≈ **5.3** to 1.83 × 13.2s ≈ **24**. A jump from ~5 to ~24 is
+precisely what removing a ~5-worker thread-pool cap predicts. The constraint
+was the pool, as argued, and not something correlated with it.
+
+Notably, p50 stayed flat (~12–13s) from concurrency 4 to 32 while throughput
+rose 6×. That is the signature of genuine parallelism: added load is absorbed
+rather than queued.
+
+**Cost of measurement is negligible.** The before sweep cost $0.24 and the
+after sweep $0.37 (higher only because zero requests failed, so more real
+answers were generated). Re-running this is not a spend decision.
+
+**The new ceiling is unknown.** The sweep stopped at concurrency 32 because
+that is where the old build collapsed; the new build was still climbing there.
+Where it actually breaks has not been measured, and the same trap that made
+ADR 0001 under-call the thread pool applies here — an untested range is not a
+safe range. A follow-up sweep at 64/128 would locate it. Upstream Gemini
+quota is the most likely next constraint, and unlike task count it cannot be
+scaled around.
 
 **Test doubles had to change shape.** Mocks now have to be awaitable —
 `AsyncMock` on `client.aio.models.generate_content` and on
