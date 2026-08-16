@@ -185,7 +185,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub jse-datasphere-chatbot-${Env}-alb-5xx
-      AlarmDescription: 'ALB is seeing 5xx responses from the api targets.'
+      AlarmDescription: 'ALB is seeing 5xx responses that the api target itself returned (app-level error handling, not a hang).'
       Namespace: AWS/ApplicationELB
       MetricName: HTTPCode_Target_5XX_Count
       Dimensions:
@@ -202,11 +202,41 @@ Resources:
       AlarmActions: [!Ref AlertTopic]
       OKActions: [!Ref AlertTopic]
 
+  # Separate from Alb5xxAlarm on purpose. HTTPCode_Target_5XX_Count only
+  # counts 5xx status codes the target *returned*. When the target never
+  # responds at all (e.g. the app's event loop is blocked and the request
+  # just queues forever), the ALB itself gives up and manufactures a 504 -
+  # that shows up here, under HTTPCode_ELB_5XX_Count, not on the target
+  # metric. Confirmed against real data from the 2026-08-15 load test
+  # outage (see docs/adr/0001-fix-event-loop-blocking-llm-calls.md): during
+  # the failing burst, HTTPCode_ELB_5XX_Count spiked to 16 in one 5-minute
+  # period while HTTPCode_Target_5XX_Count recorded zero. Without this
+  # alarm, a full "server never responds" outage is invisible to 5xx-based
+  # alerting even though real users are seeing errors.
+  AlbElb5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub jse-datasphere-chatbot-${Env}-alb-elb-5xx
+      AlarmDescription: 'ALB itself is generating 5xx (typically 504) because the api target is not responding at all - a hang/serialization outage, not an app-level error.'
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_ELB_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerArnSuffix
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
   LatencyAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub jse-datasphere-chatbot-${Env}-p99-latency
-      AlarmDescription: !Sub 'p99 target response time exceeded ${LatencyThresholdSeconds}s (a normal chat/synthesis call runs 7-40s; this catches genuine hangs like the 180s Aug 11 outlier).'
+      AlarmDescription: !Sub 'p99 target response time exceeded ${LatencyThresholdSeconds}s (a normal chat/synthesis call runs 7-40s; this catches genuine slow-but-responding hangs like the 180s Aug 11 outlier). Known gap: TargetResponseTime has no data point at all for a request the target never responded to (confirmed zero samples during the 2026-08-15 outage window) - a total non-response outage relies on AlbElb5xxAlarm / NoHealthyHostsAlarm instead, not this one.'
       Namespace: AWS/ApplicationELB
       MetricName: TargetResponseTime
       Dimensions:
@@ -278,10 +308,11 @@ Resources:
 
             { "type": "metric", "x": 8, "y": 7, "width": 8, "height": 6,
               "properties": {
-                "title": "ALB 5xx",
+                "title": "ALB 5xx (target-returned vs ALB-generated)",
                 "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
                 "metrics": [
-                  [ "AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", "${LoadBalancerArnSuffix}", "TargetGroup", "${TargetGroupArnSuffix}", { "stat": "Sum" } ]
+                  [ "AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", "${LoadBalancerArnSuffix}", "TargetGroup", "${TargetGroupArnSuffix}", { "stat": "Sum", "label": "Target 5xx (app returned it)" } ],
+                  [ "AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", "${LoadBalancerArnSuffix}", { "stat": "Sum", "label": "ELB 5xx (ALB gave up, no response)" } ]
                 ]
               } },
 
