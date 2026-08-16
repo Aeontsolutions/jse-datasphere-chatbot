@@ -941,7 +941,14 @@
         extraDetails.push(`Tools used: ${data.tools_executed.join(', ')}`);
       }
       if (data.sources?.length) {
-        const sourcesList = data.sources.map(s => s.description || s.type).join(', ');
+        const baseUrl = ENV_URLS[state.environment];
+        const sourcesList = data.sources.map(s => {
+          const label = s.title || s.domain || s.table || 'source';
+          if (s.type === 'web' && s.url) return `<a href="${s.url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+          if (s.type === 'document' && s.document_id) return `<a href="${baseUrl}/documents/${s.document_id}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+          if (s.type === 'dataset') return `${label}${s.record_count != null ? ` (${s.record_count} rows)` : ''}`;
+          return label;
+        }).join(', ');
         extraDetails.push(`Sources: ${sourcesList}`);
       }
       if (data.suggestions?.length) {
