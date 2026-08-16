@@ -1,47 +1,49 @@
-from fastapi import FastAPI, HTTPException, Depends, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse, Response
+import asyncio
 import time
 import uuid
-import asyncio
-from datetime import datetime, timezone
-from typing import Dict, Any
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, Dict
 
-from app.models import (
-    ChatRequest,
-    ChatResponse,
-    ChartSpec,
-    FinancialDataRequest,
-    FinancialDataResponse,
-    AgentChatRequest,
-    AgentChatResponse,
-)
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+
+from app.agent_v2 import AgentV2
 from app.charting import generate_chart
-from app.s3_client import init_s3_client
-from app.gemini_client import (
-    init_vertex_ai,
-    generate_chat_response,
-    refresh_metadata_cache,
-    get_cache_status,
-)
-from app.metadata_loader import load_metadata_from_s3
+from app.config import get_config
 from app.document_selector import auto_load_relevant_documents
 from app.financial_utils import FinancialDataManager
-from app.agent_v2 import AgentV2
-from app.config import get_config
-from app.response_cache import ResponseCache, build_response_cache
+from app.gemini_client import (
+    generate_chat_response,
+    get_cache_status,
+    init_vertex_ai,
+    refresh_metadata_cache,
+)
 from app.interaction_log import InteractionLogger, build_interaction_logger
-from app.tracing import get_langfuse_client, traced_observation
 from app.logging_config import configure_logging, get_logger
-from app.middleware.request_id import RequestIDMiddleware
+from app.metadata_loader import load_metadata_from_s3
 from app.middleware.metrics import (
     PrometheusMetricsMiddleware,
     get_metrics,
     get_metrics_content_type,
 )
-
-from dotenv import load_dotenv
+from app.middleware.request_id import RequestIDMiddleware
+from app.models import (
+    AgentChatRequest,
+    AgentChatResponse,
+    ChartSpec,
+    ChatRequest,
+    ChatResponse,
+    FinancialDataFilters,
+    FinancialDataRecord,
+    FinancialDataRequest,
+    FinancialDataResponse,
+)
+from app.response_cache import ResponseCache, build_response_cache
+from app.s3_client import init_s3_client
+from app.tracing import get_langfuse_client, traced_observation
 
 load_dotenv()
 
@@ -800,11 +802,11 @@ async def get_cache_status_endpoint():
 
 
 @app.post("/cache/refresh")
-async def refresh_cache_endpoint():
+async def refresh_cache_endpoint(s3_client: Any = Depends(get_s3_client)):
     """Force refresh of the metadata cache using current S3 metadata"""
     try:
         # Load current metadata from S3
-        metadata = load_metadata_from_s3()
+        metadata = load_metadata_from_s3(s3_client)
         if not metadata:
             raise HTTPException(status_code=500, detail="Failed to load metadata from S3")
 
