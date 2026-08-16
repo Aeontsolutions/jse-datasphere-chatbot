@@ -26,14 +26,13 @@ METADATA = {
 
 
 @pytest.fixture
-def client():
-    app.state.metadata = METADATA
-    app.state.document_index = build_document_index(METADATA)
+def client(monkeypatch):
+    monkeypatch.setattr(app.state, "metadata", METADATA, raising=False)
+    monkeypatch.setattr(app.state, "document_index", build_document_index(METADATA), raising=False)
     mock_s3 = MagicMock()
     mock_s3.generate_presigned_url.return_value = "https://s3.example/presigned?sig=abc"
-    app.state.s3_client = mock_s3
-    test_client = TestClient(app)
-    yield test_client
+    monkeypatch.setattr(app.state, "s3_client", mock_s3, raising=False)
+    yield TestClient(app)
 
 
 @pytest.mark.integration
