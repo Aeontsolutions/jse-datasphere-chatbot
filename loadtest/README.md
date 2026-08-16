@@ -80,13 +80,23 @@ Both are visible in the code, and both shape what the numbers will look like:
 with `uvicorn app.main:app --host 0.0.0.0 --port 8000` — no `--workers`. One
 process, one event loop.
 
-**The Gemini calls are synchronous inside `async` endpoints.**
-`app/agent_v2.py` calls `self.client.models.generate_content(...)` directly in
-`_fast_path()` and `run()` — no `await`, no `asyncio.to_thread`. A blocking
-call on the event loop stops that loop from doing anything else, so with one
-worker the API serves roughly **one LLM request at a time** regardless of how
-many clients arrive. `_extract_grounded_symbols()` already uses
-`asyncio.to_thread`, so the pattern for fixing it exists in the file.
+**The Gemini calls are async; the BigQuery calls run on threads.** Gemini calls
+go through the SDKs' native async clients
+([ADR 0003](../docs/adr/0003-native-async-gemini-client.md)), so they yield the
+event loop. BigQuery has no first-party async client, so `query_data` and the
+interactions-log insert stay wrapped in `asyncio.to_thread`
+([ADR 0001](../docs/adr/0001-fix-event-loop-blocking-llm-calls.md)) and still
+consume a worker from a pool capped at `min(32, cpu_count + 4)` — which on a
+512-CPU-unit ECS task is about 5–6 workers, not 32.
 
-Run the sweep first and let it confirm or refute this on the real deployment
+Two failure signatures to recognise in the output:
+
+- **Throughput flat while p50 scales with concurrency** — serialisation, the
+  original ADR 0001 bug. Fixed, but worth spotting if it returns.
+- **Throughput peaking and then falling while p95 climbs to ~60s** —
+  saturation, with the 60s cluster being the ALB idle timeout converting
+  queued requests into HTTP 504s. This is what a dev sweep found at
+  concurrency 32 on 2026-08-16.
+
+Run the sweep and let it confirm or refute your theory on the real deployment
 before changing anything — the point of measuring is to not guess.

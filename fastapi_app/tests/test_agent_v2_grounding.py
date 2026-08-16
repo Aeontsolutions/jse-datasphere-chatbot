@@ -19,7 +19,7 @@ that was already loaded at startup.
 """
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -30,6 +30,10 @@ from app.agent_v2 import AgentV2
 def mock_genai_client():
     with patch("app.agent_v2.get_genai_client") as mock_get_client:
         mock_client = MagicMock()
+        # AgentV2 calls the SDK's native async client (client.aio.models.
+        # generate_content), so this leaf has to be awaitable — a plain
+        # MagicMock would return a non-awaitable and fail at the await.
+        mock_client.aio.models.generate_content = AsyncMock()
         mock_get_client.return_value = mock_client
         yield mock_client
 
@@ -134,7 +138,7 @@ def test_grounding_note_lists_multiple_companies_if_genuinely_shared():
 
 
 def test_run_injects_grounding_note_into_pro_call(mock_genai_client):
-    mock_genai_client.models.generate_content.side_effect = [
+    mock_genai_client.aio.models.generate_content.side_effect = [
         _route_response("ALLOW"),
         _text_response("Medical Disposables & Supplies reported J$3.88 billion."),
     ]
@@ -144,7 +148,7 @@ def test_run_injects_grounding_note_into_pro_call(mock_genai_client):
             "MAILPAC": ["Mailpac Group Limited"],
         }
     )
-    with patch("app.agent_v2.extract_companies_from_query") as mock_extract:
+    with patch("app.agent_v2.extract_companies_from_query_async") as mock_extract:
         mock_extract.return_value = {
             "companies": ["Medical Disposables & Supplies Limited"],
             "symbols": ["MDS"],
@@ -155,7 +159,7 @@ def test_run_injects_grounding_note_into_pro_call(mock_genai_client):
         )
 
     assert result["response"] == "Medical Disposables & Supplies reported J$3.88 billion."
-    calls = mock_genai_client.models.generate_content.call_args_list
+    calls = mock_genai_client.aio.models.generate_content.call_args_list
     assert len(calls) == 2
     pro_contents = calls[1].kwargs["contents"]
     last_turn_parts = pro_contents[-1].parts
@@ -165,33 +169,33 @@ def test_run_injects_grounding_note_into_pro_call(mock_genai_client):
 
 
 def test_run_no_grounding_note_without_financial_manager(mock_genai_client):
-    mock_genai_client.models.generate_content.side_effect = [
+    mock_genai_client.aio.models.generate_content.side_effect = [
         _route_response("ALLOW"),
         _text_response("answer"),
     ]
-    with patch("app.agent_v2.extract_companies_from_query") as mock_extract:
+    with patch("app.agent_v2.extract_companies_from_query_async") as mock_extract:
         agent = AgentV2()
         asyncio.run(agent.run(query="What was NCB revenue in 2023?"))
         mock_extract.assert_not_called()
 
-    calls = mock_genai_client.models.generate_content.call_args_list
+    calls = mock_genai_client.aio.models.generate_content.call_args_list
     pro_contents = calls[1].kwargs["contents"]
     assert len(pro_contents[-1].parts) == 1
     assert pro_contents[-1].parts[0].text == "What was NCB revenue in 2023?"
 
 
 def test_run_no_grounding_note_when_extraction_finds_nothing(mock_genai_client):
-    mock_genai_client.models.generate_content.side_effect = [
+    mock_genai_client.aio.models.generate_content.side_effect = [
         _route_response("ALLOW"),
         _text_response("answer"),
     ]
     fm = _financial_manager({"MDS": ["Medical Disposables & Supplies Limited"]})
-    with patch("app.agent_v2.extract_companies_from_query") as mock_extract:
+    with patch("app.agent_v2.extract_companies_from_query_async") as mock_extract:
         mock_extract.return_value = {"companies": [], "symbols": []}
         agent = AgentV2()
         asyncio.run(agent.run(query="How is the Jamaican economy doing?", financial_manager=fm))
 
-    calls = mock_genai_client.models.generate_content.call_args_list
+    calls = mock_genai_client.aio.models.generate_content.call_args_list
     pro_contents = calls[1].kwargs["contents"]
     assert len(pro_contents[-1].parts) == 1
 
@@ -199,12 +203,12 @@ def test_run_no_grounding_note_when_extraction_finds_nothing(mock_genai_client):
 def test_run_refuse_path_unaffected_by_grounding(mock_genai_client):
     """REFUSE still short-circuits to 2 Flash calls; extraction (if it ever
     resolves) must not force an extra Pro call or change the refusal text."""
-    mock_genai_client.models.generate_content.side_effect = [
+    mock_genai_client.aio.models.generate_content.side_effect = [
         _route_response("REFUSE"),
         _text_response("Sorry, I can only help with JSE topics."),
     ]
     fm = _financial_manager({"MDS": ["Medical Disposables & Supplies Limited"]})
-    with patch("app.agent_v2.extract_companies_from_query") as mock_extract:
+    with patch("app.agent_v2.extract_companies_from_query_async") as mock_extract:
         mock_extract.return_value = {
             "companies": ["Medical Disposables & Supplies Limited"],
             "symbols": ["MDS"],
@@ -213,5 +217,5 @@ def test_run_refuse_path_unaffected_by_grounding(mock_genai_client):
         result = asyncio.run(agent.run(query="Write me a poem about MDS.", financial_manager=fm))
 
     assert result["response"] == "Sorry, I can only help with JSE topics."
-    calls = mock_genai_client.models.generate_content.call_args_list
+    calls = mock_genai_client.aio.models.generate_content.call_args_list
     assert len(calls) == 2

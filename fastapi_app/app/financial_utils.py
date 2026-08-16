@@ -515,14 +515,19 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
             logger.error(f"DSPy query parsing error: {e}")
             return None
 
-    def parse_user_query(
+    async def parse_user_query(
         self,
         query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         last_query_data: Optional[Dict] = None,
         cost_sink: Optional[List[CostResult]] = None,
     ) -> FinancialDataFilters:
-        """Use DSPy or Gemini to parse user query and extract filter parameters with conversation context"""
+        """Use DSPy or Gemini to parse user query and extract filter parameters with conversation context
+
+        Async because the Gemini calls below are issued through native async
+        clients, so they yield the event loop rather than occupying a
+        thread-pool worker (see docs/adr/0003-native-async-gemini-client.md).
+        """
 
         # Try DSPy first if enabled
         if self.use_dspy and self.dspy_query_parser:
@@ -555,7 +560,7 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
                 if cache_name:
                     try:
                         client = get_genai_client()
-                        response = client.models.generate_content(
+                        response = await client.aio.models.generate_content(
                             model=model_name,
                             contents=[
                                 genai_types.Content(
@@ -571,9 +576,12 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
                             extra={"error": str(cache_exc)},
                         )
                 if not response:
-                    # Fallback: combine into one prompt and use the legacy model
+                    # Fallback: combine into one prompt and use the legacy model.
+                    # generate_content_async is the deprecated google.generativeai
+                    # package's async entry point — still the right call here
+                    # until this path migrates onto google.genai (see ADR 0003).
                     prompt = f"{system_instruction}\n\n{dynamic_content}"
-                    response = self.model.generate_content(prompt)
+                    response = await self.model.generate_content_async(prompt)
                 response_text = response.text.strip()
                 duration = time.time() - start_time
 
@@ -1205,7 +1213,7 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
             logger.error(f"DSPy response formatting error: {e}")
             return None
 
-    def format_response(
+    async def format_response(
         self,
         records: List[FinancialDataRecord],
         query: str,
@@ -1215,7 +1223,12 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
         unrecognized_items: Optional[List[str]] = None,
         cost_sink: Optional[List[CostResult]] = None,
     ) -> str:
-        """Format the query results into a readable response with conversation awareness"""
+        """Format the query results into a readable response with conversation awareness
+
+        Async for the same reason as parse_user_query — the Gemini call is
+        issued through a native async client rather than a thread
+        (see docs/adr/0003-native-async-gemini-client.md).
+        """
 
         # Detect if we should recommend Deep Research
         should_recommend_deep_research = self._should_recommend_deep_research(
@@ -1310,7 +1323,9 @@ Do NOT provide any analysis, data, or commentary regarding share prices, dividen
             with traced_observation(
                 "format_response", as_type="generation", model=model_name, input=prompt
             ) as gen:
-                response = self.model.generate_content(prompt)
+                # Deprecated google.generativeai async entry point; see the note
+                # in parse_user_query and ADR 0003's follow-up.
+                response = await self.model.generate_content_async(prompt)
                 duration = time.time() - start_time
                 cost_result = calculate_cost_from_response(
                     model_name, response, phase="format_response"

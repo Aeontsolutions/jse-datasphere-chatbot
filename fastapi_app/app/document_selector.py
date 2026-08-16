@@ -30,46 +30,33 @@ logger = get_logger(__name__)
 # =============================================================================
 
 
-def extract_companies_from_query(
+def _build_extraction_request(
     query: str,
     available_companies: List[str],
     available_symbols: Optional[List[str]] = None,
     conversation_history: Optional[List] = None,
-) -> Dict:
+) -> tuple:
+    """Build the (model_name, contents, config) triple for company extraction.
+
+    Shared by the sync and async variants of extract_companies_from_query so
+    the prompt only exists in one place.
     """
-    Use fast LLM to extract company names/symbols from user query.
+    model_name = "gemini-2.5-flash"  # Fast model for simple extraction
 
-    This is Stage 1 of the two-stage document selection approach.
-    Uses a smaller, faster model (gemini-2.5-flash) for simple entity extraction.
+    # Format conversation history if available
+    conversation_context = ""
+    if conversation_history and len(conversation_history) > 0:
+        recent_history = conversation_history[-6:]  # Last 3 exchanges
+        conversation_context = "\n".join(
+            [f"{msg['role']}: {msg['content']}" for msg in recent_history]
+        )
 
-    Args:
-        query: User query
-        available_companies: List of valid company names from metadata
-        available_symbols: Optional list of valid trading symbols
-        conversation_history: Optional conversation context
+    # Build a concise prompt with just company/symbol lists
+    symbols_section = ""
+    if available_symbols:
+        symbols_section = f"Available trading symbols: {', '.join(available_symbols)}"
 
-    Returns:
-        Dict with companies and symbols mentioned
-    """
-    start_time = time.time()
-    try:
-        client = get_genai_client()
-        model_name = "gemini-2.5-flash"  # Fast model for simple extraction
-
-        # Format conversation history if available
-        conversation_context = ""
-        if conversation_history and len(conversation_history) > 0:
-            recent_history = conversation_history[-6:]  # Last 3 exchanges
-            conversation_context = "\n".join(
-                [f"{msg['role']}: {msg['content']}" for msg in recent_history]
-            )
-
-        # Build a concise prompt with just company/symbol lists
-        symbols_section = ""
-        if available_symbols:
-            symbols_section = f"Available trading symbols: {', '.join(available_symbols)}"
-
-        prompt = f"""Extract company names and trading symbols mentioned in the user query.
+    prompt = f"""Extract company names and trading symbols mentioned in the user query.
 
 Available companies:
 {', '.join(available_companies)}
@@ -91,52 +78,126 @@ Return ONLY valid JSON in this format:
 {{"companies": ["company1", "company2"], "symbols": ["SYM1", "SYM2"]}}
 """
 
-        # Build content for the SDK
-        contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
+    # Build content for the SDK
+    contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
 
-        # Use low temperature for deterministic extraction
-        generate_config = types.GenerateContentConfig(
-            temperature=0.1,
-            max_output_tokens=512,
+    # Use low temperature for deterministic extraction
+    generate_config = types.GenerateContentConfig(
+        temperature=0.1,
+        max_output_tokens=512,
+    )
+
+    return model_name, contents, generate_config
+
+
+def _parse_extraction_response(response_text: str, start_time: float) -> Dict:
+    """Strip any markdown fence, isolate the JSON object, and parse it.
+
+    Shared by the sync and async variants of extract_companies_from_query.
+    """
+    clean_text = response_text.strip()
+    if clean_text.startswith("```"):
+        first_newline = clean_text.find("\n")
+        if first_newline != -1:
+            clean_text = clean_text[first_newline + 1 :]
+        if clean_text.endswith("```"):
+            clean_text = clean_text[:-3].strip()
+
+    json_start = clean_text.find("{")
+    json_end = clean_text.rfind("}") + 1
+    if json_start >= 0 and json_end > json_start:
+        clean_text = clean_text[json_start:json_end]
+
+    result = json.loads(clean_text)
+
+    duration = time.time() - start_time
+    logger.info(
+        f"Company extraction completed in {duration:.2f}s: "
+        f"companies={result.get('companies', [])}, symbols={result.get('symbols', [])}"
+    )
+
+    return result
+
+
+def _log_extraction_failure(exc: Exception, query: str) -> Dict:
+    """Log an extraction failure and return the empty result both variants use."""
+    logger.error(
+        "company_extraction_failed",
+        extra={"error": str(exc), "error_type": type(exc).__name__, "query": query[:100]},
+    )
+    return {"companies": [], "symbols": []}
+
+
+def extract_companies_from_query(
+    query: str,
+    available_companies: List[str],
+    available_symbols: Optional[List[str]] = None,
+    conversation_history: Optional[List] = None,
+) -> Dict:
+    """
+    Use fast LLM to extract company names/symbols from user query.
+
+    This is Stage 1 of the two-stage document selection approach.
+    Uses a smaller, faster model (gemini-2.5-flash) for simple entity extraction.
+
+    Synchronous variant, kept for the synchronous document-selection subtree
+    (semantic_document_selection -> auto_load_relevant_documents). Async
+    callers on the request path should use extract_companies_from_query_async
+    instead, which avoids occupying a thread-pool worker.
+
+    Args:
+        query: User query
+        available_companies: List of valid company names from metadata
+        available_symbols: Optional list of valid trading symbols
+        conversation_history: Optional conversation context
+
+    Returns:
+        Dict with companies and symbols mentioned
+    """
+    start_time = time.time()
+    try:
+        client = get_genai_client()
+        model_name, contents, generate_config = _build_extraction_request(
+            query, available_companies, available_symbols, conversation_history
         )
-
         response = client.models.generate_content(
             model=model_name,
             contents=contents,
             config=generate_config,
         )
-        response_text = response.text.strip()
-
-        # Parse JSON response
-        clean_text = response_text
-        if clean_text.startswith("```"):
-            first_newline = clean_text.find("\n")
-            if first_newline != -1:
-                clean_text = clean_text[first_newline + 1 :]
-            if clean_text.endswith("```"):
-                clean_text = clean_text[:-3].strip()
-
-        json_start = clean_text.find("{")
-        json_end = clean_text.rfind("}") + 1
-        if json_start >= 0 and json_end > json_start:
-            clean_text = clean_text[json_start:json_end]
-
-        result = json.loads(clean_text)
-
-        duration = time.time() - start_time
-        logger.info(
-            f"Company extraction completed in {duration:.2f}s: "
-            f"companies={result.get('companies', [])}, symbols={result.get('symbols', [])}"
-        )
-
-        return result
+        return _parse_extraction_response(response.text, start_time)
 
     except Exception as e:
-        logger.error(
-            "company_extraction_failed",
-            extra={"error": str(e), "error_type": type(e).__name__, "query": query[:100]},
+        return _log_extraction_failure(e, query)
+
+
+async def extract_companies_from_query_async(
+    query: str,
+    available_companies: List[str],
+    available_symbols: Optional[List[str]] = None,
+    conversation_history: Optional[List] = None,
+) -> Dict:
+    """Async variant of extract_companies_from_query.
+
+    Identical behaviour and prompt, issued through the SDK's native async
+    client so the call yields the event loop instead of occupying a
+    thread-pool worker (see docs/adr/0003-native-async-gemini-client.md).
+    """
+    start_time = time.time()
+    try:
+        client = get_genai_client()
+        model_name, contents, generate_config = _build_extraction_request(
+            query, available_companies, available_symbols, conversation_history
         )
-        return {"companies": [], "symbols": []}
+        response = await client.aio.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=generate_config,
+        )
+        return _parse_extraction_response(response.text, start_time)
+
+    except Exception as e:
+        return _log_extraction_failure(e, query)
 
 
 def resolve_companies(
