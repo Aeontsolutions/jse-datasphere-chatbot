@@ -4,7 +4,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.interaction_log import InteractionLogger, build_interaction_logger
+from app.interaction_log import (
+    INTERACTIONS_SCHEMA,
+    InteractionLogger,
+    build_interaction_logger,
+)
 
 
 def test_disabled_when_no_client():
@@ -38,6 +42,71 @@ def test_build_row_shape():
     )
     assert row["endpoint"] == "fast_chat_v2"
     assert row["total_tokens"] == 150
+
+
+def test_build_row_records_truncation():
+    """A response cut off at the token ceiling must be distinguishable in BigQuery.
+
+    Interaction 7dba1a26bc014fdebfdb2b9567012c52 logged success=true for a
+    response that stopped mid-sentence, because nothing captured the finish
+    reason (ADR 0002).
+    """
+    row = InteractionLogger.build_row(
+        endpoint="chat_stream",
+        query="what stocks are best held in defence",
+        response="Recent geopolitical events can certainly have a ripple effect on companies",
+        input_tokens=95,
+        output_tokens=13,
+        thinking_tokens=241,
+        finish_reason="MAX_TOKENS",
+        truncated=True,
+        cache_hit=False,
+        success=True,
+        timestamp="2026-08-15T02:00:46Z",
+    )
+
+    assert row["truncated"] is True
+    assert row["finish_reason"] == "MAX_TOKENS"
+    assert row["thinking_tokens"] == 241
+    # Thinking tokens are billed, so they belong in the total.
+    assert row["total_tokens"] == 95 + 13 + 241
+
+
+def test_build_row_truncation_fields_default_to_none():
+    """Callers that don't supply the new fields still produce a valid row."""
+    row = InteractionLogger.build_row(
+        endpoint="fast_chat_v2",
+        query="revenue",
+        response="answer",
+        cache_hit=False,
+        success=True,
+        timestamp="2026-08-14T00:00:00Z",
+    )
+    assert row["finish_reason"] is None
+    assert row["truncated"] is None
+    assert row["thinking_tokens"] == 0
+
+
+def test_build_row_keys_match_bigquery_schema():
+    """Every key build_row emits must exist as a column, and vice versa.
+
+    A row key with no matching column makes BigQuery reject the whole insert;
+    a column build_row never populates is silently always NULL. Both failure
+    modes are invisible because `.log()` swallows errors by design.
+    """
+    row = InteractionLogger.build_row(
+        endpoint="chat_stream",
+        query="q",
+        response="r",
+        cache_hit=False,
+        success=True,
+        timestamp="2026-08-14T00:00:00Z",
+    )
+    schema_fields = {field.name for field in INTERACTIONS_SCHEMA}
+    # `environment` is stamped by .log() from config, not by build_row.
+    row_fields = set(row) | {"environment"}
+
+    assert row_fields == schema_fields
     assert row["cache_hit"] is False
     assert row["success"] is True
     assert "interaction_id" in row and row["interaction_id"]

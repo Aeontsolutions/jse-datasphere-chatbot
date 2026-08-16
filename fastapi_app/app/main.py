@@ -728,8 +728,13 @@ async def fast_chat_v2(
             model=request_costs[0].model if request_costs else None,
             input_tokens=sum(c.token_usage.input_tokens for c in request_costs),
             output_tokens=sum(c.token_usage.output_tokens for c in request_costs),
+            thinking_tokens=sum(c.token_usage.thinking_tokens for c in request_costs),
             cost_usd=sum(c.total_cost for c in request_costs),
             phase_costs=[c.phase for c in request_costs],
+            finish_reason=(
+                ",".join(c.finish_reason or "?" for c in request_costs) if request_costs else None
+            ),
+            truncated=any(c.truncated for c in request_costs) if request_costs else None,
         )
         return FinancialDataResponse(
             response=ai_response,
@@ -1027,8 +1032,18 @@ async def chat_stream(
             record_count=response.record_count,
             input_tokens=cost_summary.total_input_tokens if cost_summary else 0,
             output_tokens=cost_summary.total_output_tokens if cost_summary else 0,
+            thinking_tokens=cost_summary.total_thinking_tokens if cost_summary else 0,
             cost_usd=cost_summary.total_cost_usd if cost_summary else 0.0,
             phase_costs=[p.phase for p in cost_summary.phases] if cost_summary else None,
+            # A response cut off at the token ceiling still completes the
+            # request; record it so it isn't indistinguishable from a clean
+            # answer in the interactions table (ADR 0002).
+            finish_reason=(
+                ",".join(p.finish_reason or "?" for p in cost_summary.phases)
+                if cost_summary and cost_summary.phases
+                else None
+            ),
+            truncated=cost_summary.truncated if cost_summary else None,
         )
 
         return response
