@@ -1010,7 +1010,7 @@ async def chat_stream(
                     "warnings": response.warnings,
                     "suggestions": response.suggestions,
                     "chart": _jsonable(response.chart),
-                    "sources": response.sources,
+                    "sources": _jsonable(response.sources),
                     "web_search_results": response.web_search_results,
                     "tools_executed": response.tools_executed,
                     "needs_clarification": response.needs_clarification,
