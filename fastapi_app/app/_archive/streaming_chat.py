@@ -162,17 +162,18 @@ async def _process_traditional_chat(
                     await tracker.emit_progress("doc_loading", message, progress)
 
                 # Use async document loading with progress tracking
-                document_texts, document_selection_message, loaded_docs = (
-                    await auto_load_relevant_documents_async(
-                        query=request.query,
-                        metadata=metadata,
-                        conversation_history=request.conversation_history,
-                        current_document_texts={},  # Start with empty document_texts since this is stateless
-                        config=download_config,
-                        progress_callback=download_progress_callback,
-                        associations=associations,
-                    )
+                load_result = await auto_load_relevant_documents_async(
+                    query=request.query,
+                    metadata=metadata,
+                    conversation_history=request.conversation_history,
+                    current_document_texts={},  # Start with empty document_texts since this is stateless
+                    config=download_config,
+                    progress_callback=download_progress_callback,
+                    associations=associations,
                 )
+                document_texts = load_result.texts
+                document_selection_message = load_result.message
+                loaded_docs = load_result.loaded_docs
 
                 await tracker.emit_progress(
                     "doc_loading",

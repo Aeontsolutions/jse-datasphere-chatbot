@@ -474,6 +474,7 @@ async def chat(
         document_texts = {}
         document_selection_message = None
         loaded_docs = []
+        doc_sources = []
 
         # Auto-load relevant documents if enabled
         if request.auto_load_documents:
@@ -482,7 +483,7 @@ async def chat(
             if financial_manager and financial_manager.metadata:
                 associations = financial_manager.metadata.get("associations")
 
-            document_texts, document_selection_message, loaded_docs = auto_load_relevant_documents(
+            load_result = auto_load_relevant_documents(
                 s3_client,
                 request.query,
                 metadata,
@@ -490,6 +491,10 @@ async def chat(
                 request.conversation_history,
                 associations,
             )
+            document_texts = load_result.texts
+            document_selection_message = load_result.message
+            loaded_docs = load_result.loaded_docs
+            doc_sources = load_result.sources
 
         # Generate response
         response_text = generate_chat_response(
@@ -525,6 +530,7 @@ async def chat(
             documents_loaded=loaded_docs if loaded_docs else None,
             document_selection_message=document_selection_message,
             conversation_history=updated_conversation_history,
+            sources=doc_sources if doc_sources else None,
         )
 
     except Exception as e:

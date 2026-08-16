@@ -404,12 +404,15 @@ class TestConcurrentDocumentLoading:
             DownloadResult(success=True, content="Content 2", download_time=1.5),
         ]
 
-        document_texts, message, loaded_docs = await auto_load_relevant_documents_async(
+        result = await auto_load_relevant_documents_async(
             query="Tell me about TestCorp",
             metadata=mock_metadata,
             config=download_config,
             progress_callback=mock_progress_callback,
         )
+        document_texts = result.texts
+        message = result.message
+        loaded_docs = result.loaded_docs
 
         assert len(document_texts) == 2
         assert "test1.pdf" in document_texts
@@ -452,12 +455,15 @@ class TestConcurrentDocumentLoading:
             DownloadResult(success=False, error="Download failed", download_time=2.0),
         ]
 
-        document_texts, message, loaded_docs = await auto_load_relevant_documents_async(
+        result = await auto_load_relevant_documents_async(
             query="Tell me about TestCorp",
             metadata=mock_metadata,
             config=download_config,
             progress_callback=mock_progress_callback,
         )
+        document_texts = result.texts
+        message = result.message
+        loaded_docs = result.loaded_docs
 
         assert len(document_texts) == 1
         assert "test1.pdf" in document_texts
