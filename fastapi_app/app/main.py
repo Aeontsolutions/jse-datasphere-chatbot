@@ -16,6 +16,9 @@ from app.models import (
     FinancialDataResponse,
     AgentChatRequest,
     AgentChatResponse,
+    Source,
+    FinancialDataFilters,
+    FinancialDataRecord,
 )
 from app.charting import generate_chart
 from app.document_registry import build_document_index, presign_document
@@ -626,6 +629,11 @@ async def fast_chat_v2(
                 else None
             )
             chart_spec = ChartSpec(**cached["chart"]) if cached.get("chart") else None
+            sources = (
+                [Source(**s) for s in cached["sources"]]
+                if cached.get("sources")
+                else None
+            )
 
             updated_conversation_history = None
             if request.memory_enabled:
@@ -652,6 +660,7 @@ async def fast_chat_v2(
                 warnings=cached.get("warnings"),
                 suggestions=cached.get("suggestions"),
                 chart=chart_spec,
+                sources=sources,
             )
 
         last_query_data = getattr(request, "_last_query_data", None)
@@ -711,6 +720,12 @@ async def fast_chat_v2(
                         f"Generated {chart_data['chart_type']} chart: {chart_data['title']}"
                     )
 
+            sources = (
+                [financial_manager.describe_source(filters, len(results))]
+                if results
+                else None
+            )
+
             if trace_obs is not None:
                 trace_obs.update(output=ai_response, metadata={"cache_hit": False})
 
@@ -730,6 +745,7 @@ async def fast_chat_v2(
                     "warnings": warnings if warnings else None,
                     "suggestions": suggestions if suggestions else None,
                     "chart": chart_spec.model_dump() if chart_spec else None,
+                    "sources": _jsonable(sources),
                 },
             )
 
@@ -755,6 +771,7 @@ async def fast_chat_v2(
             warnings=warnings if warnings else None,
             suggestions=suggestions if suggestions else None,
             chart=chart_spec,
+            sources=sources,
         )
     except HTTPException as e:
         schedule_log(response=None, cache_hit=False, success=False, error_message=str(e.detail))
