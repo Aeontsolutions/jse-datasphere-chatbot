@@ -78,9 +78,7 @@ class TestSourceCacheRoundTrip:
         from app.main import _jsonable
         from app.models import Source
 
-        source = manager.describe_source(
-            FinancialDataFilters(companies=["NCB"], years=["2023"]), 5
-        )
+        source = manager.describe_source(FinancialDataFilters(companies=["NCB"], years=["2023"]), 5)
         payload = json.loads(json.dumps(_jsonable([source])))
         restored = [Source(**item) for item in payload]
         assert restored[0].table == source.table

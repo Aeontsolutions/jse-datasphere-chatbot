@@ -629,11 +629,7 @@ async def fast_chat_v2(
                 else None
             )
             chart_spec = ChartSpec(**cached["chart"]) if cached.get("chart") else None
-            sources = (
-                [Source(**s) for s in cached["sources"]]
-                if cached.get("sources")
-                else None
-            )
+            sources = [Source(**s) for s in cached["sources"]] if cached.get("sources") else None
 
             updated_conversation_history = None
             if request.memory_enabled:
@@ -721,9 +717,7 @@ async def fast_chat_v2(
                     )
 
             sources = (
-                [financial_manager.describe_source(filters, len(results))]
-                if results
-                else None
+                [financial_manager.describe_source(filters, len(results))] if results else None
             )
 
             if trace_obs is not None:

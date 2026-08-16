@@ -1002,9 +1002,7 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
 
             return []
 
-    def describe_source(
-        self, filters: FinancialDataFilters, record_count: int
-    ) -> Source:
+    def describe_source(self, filters: FinancialDataFilters, record_count: int) -> Source:
         """Describe the dataset read for this answer.
 
         Honest provenance for a financial figure is the table plus the filters
