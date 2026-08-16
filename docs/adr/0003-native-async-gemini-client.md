@@ -122,13 +122,43 @@ rather than queued.
 after sweep $0.37 (higher only because zero requests failed, so more real
 answers were generated). Re-running this is not a spend decision.
 
-**The new ceiling is unknown.** The sweep stopped at concurrency 32 because
-that is where the old build collapsed; the new build was still climbing there.
-Where it actually breaks has not been measured, and the same trap that made
-ADR 0001 under-call the thread pool applies here — an untested range is not a
-safe range. A follow-up sweep at 64/128 would locate it. Upstream Gemini
-quota is the most likely next constraint, and unlike task count it cannot be
-scaled around.
+**The new ceiling is soft, and sits near concurrency 128 on a single task.**
+A follow-up sweep pushed further (2026-08-17, same 1-task dev environment):
+
+| conc | rps | p50 | p95 | errors | scaling efficiency |
+|------|------|-------|-------|--------|--------------------|
+| 32 | 1.69 | 13.6s | 23.4s | 0% | — |
+| 64 | 2.94 | 14.2s | 24.1s | 0% | 87% |
+| 128 | 3.69 | 17.6s | 30.2s | 0.4% (1×504) | **63%** |
+
+There is no collapse anywhere in this range — a meaningful contrast with the
+pre-change build, which lost 55% of requests at concurrency 32. But the
+ceiling is visible as deceleration rather than a cliff. Doubling concurrency
+from 32 to 64 bought 1.74× throughput (87% efficient); doubling again to 128
+bought only 1.26× (63% efficient). Three independent signals agree that
+saturation is beginning around 128:
+
+1. **Throughput is flattening** toward roughly 4 rps per task.
+2. **Queueing has appeared.** The `queue*` attribution held flat at ~890ms
+   through concurrency 64, then rose to 2172ms at 128 — the first evidence of
+   requests waiting to be picked up rather than being served immediately.
+3. **The first timeout returned.** One HTTP 504, with a max latency of 54.1s,
+   approaching the 60s ALB idle timeout that converted saturation into mass
+   failure in the pre-change build.
+
+Effective in-flight requests at concurrency 128 is 3.69 × 17.6s ≈ **65**, not
+128 — so roughly half the offered load is queueing. That is the mechanism
+behind the deceleration.
+
+The concurrency-32 row also reproduces the previous sweep (1.69 vs 1.83 rps,
+about 8% run-to-run variance), which is worth knowing before reading small
+differences in any future comparison as signal.
+
+**What has not been identified is *which* limit this is.** Candidates are the
+single uvicorn worker, the event loop itself, and upstream Gemini quota. The
+distinction matters, because the first two are scaled around with `--workers`
+or task count while quota is not. The broken `ai_request_duration_seconds`
+metric is what prevents settling this from the existing data.
 
 **Test doubles had to change shape.** Mocks now have to be awaitable —
 `AsyncMock` on `client.aio.models.generate_content` and on
