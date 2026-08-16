@@ -43,6 +43,23 @@ class DocumentLoadResult:
     sources: List[Source] = field(default_factory=list)
 
 
+def _build_document_source(doc_name: str, doc_link: str, doc_info: Dict) -> Source:
+    """Build the citable Source for a document that was just read successfully.
+
+    Shared by the sync and async loaders so their citation fields (and any
+    future fix to how document_id or provenance is derived) can't drift apart.
+    """
+    return Source(
+        type=SourceType.DOCUMENT,
+        title=doc_name,
+        detail=doc_info.get("reason"),
+        document_id=make_document_id(doc_link),
+        company=doc_info.get("company"),
+        year=doc_info.get("year") or doc_info.get("period"),
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
 # =============================================================================
 # COMPANY EXTRACTION AND RESOLUTION (Two-Stage Approach)
 # =============================================================================
@@ -547,17 +564,7 @@ def auto_load_relevant_documents(
                 document_texts[doc_name] = text
                 loaded_docs.append(doc_name)
                 # Only cite a document we actually read.
-                sources.append(
-                    Source(
-                        type=SourceType.DOCUMENT,
-                        title=doc_name,
-                        detail=doc_info.get("reason"),
-                        document_id=make_document_id(doc_link),
-                        company=doc_info.get("company"),
-                        year=doc_info.get("year") or doc_info.get("period"),
-                        retrieved_at=datetime.now(timezone.utc).isoformat(),
-                    )
-                )
+                sources.append(_build_document_source(doc_name, doc_link, doc_info))
                 record_document_load(source="s3", duration=load_duration, success=True)
             else:
                 record_document_load(source="error", duration=load_duration, success=False)
@@ -713,15 +720,7 @@ async def auto_load_relevant_documents_async(
                     successful_downloads += 1
                     # Only cite a document we actually read.
                     sources.append(
-                        Source(
-                            type=SourceType.DOCUMENT,
-                            title=doc_name,
-                            detail=doc_info.get("reason"),
-                            document_id=make_document_id(doc_info["document_link"]),
-                            company=doc_info.get("company"),
-                            year=doc_info.get("year") or doc_info.get("period"),
-                            retrieved_at=datetime.now(timezone.utc).isoformat(),
-                        )
+                        _build_document_source(doc_name, doc_info["document_link"], doc_info)
                     )
                     # Record successful async document load from S3
                     record_document_load(source="s3", duration=result.download_time, success=True)
