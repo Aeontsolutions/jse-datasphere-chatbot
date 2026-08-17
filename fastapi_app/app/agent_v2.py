@@ -13,6 +13,7 @@ Architecture:
 """
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from google.genai import types
@@ -20,7 +21,7 @@ from google.genai import types
 from app.document_selector import extract_companies_from_query_async
 from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
-from app.models import CostSummary, PhaseCost
+from app.models import CostSummary, PhaseCost, Source, SourceType
 from app.tracing import log_completed_generation
 from app.utils.cost_tracking import calculate_cost_from_response
 from app.utils.monitoring import record_ai_cost
@@ -293,28 +294,39 @@ class AgentV2:
             if hasattr(sep, "rendered_content"):
                 search_results["search_entry_point"] = sep.rendered_content
 
-        # Extract grounding chunks (web sources)
+        # Extract grounding chunks (web sources).
+        # Gemini emits one chunk per grounding support, so the same URL can
+        # appear many times — dedupe while preserving first-seen order.
         chunks = getattr(grounding, "grounding_chunks", []) or []
         grounding_chunks = []
+        retrieved_at = datetime.now(timezone.utc).isoformat()
+        seen_urls = set()
 
         for chunk in chunks:
-            if hasattr(chunk, "web") and chunk.web:
-                web = chunk.web
-                chunk_info = {
-                    "title": getattr(web, "title", ""),
-                    "uri": getattr(web, "uri", ""),
-                }
-                grounding_chunks.append(chunk_info)
+            if not (hasattr(chunk, "web") and chunk.web):
+                continue
+            web = chunk.web
+            uri = getattr(web, "uri", "") or ""
+            title = getattr(web, "title", "") or ""
+            grounding_chunks.append({"title": title, "uri": uri})
 
-                # Add to sources list
-                if chunk_info["uri"]:
-                    sources.append(
-                        {
-                            "type": "web",
-                            "title": chunk_info["title"],
-                            "url": chunk_info["uri"],
-                        }
-                    )
+            if not uri or uri in seen_urls:
+                continue
+            seen_urls.add(uri)
+
+            # Newer SDKs expose web.domain; older ones put the site domain in
+            # web.title. Either way the citation stays readable once the
+            # redirect URI expires.
+            domain = getattr(web, "domain", None) or title or None
+            sources.append(
+                Source(
+                    type=SourceType.WEB,
+                    title=title or domain or uri,
+                    url=uri,
+                    domain=domain,
+                    retrieved_at=retrieved_at,
+                )
+            )
 
         if grounding_chunks:
             search_results["grounding_chunks"] = grounding_chunks

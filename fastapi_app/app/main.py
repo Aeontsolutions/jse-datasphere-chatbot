@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse, Response
+from fastapi.responses import StreamingResponse, JSONResponse, Response, RedirectResponse
 import time
 import uuid
 import asyncio
@@ -16,8 +16,12 @@ from app.models import (
     FinancialDataResponse,
     AgentChatRequest,
     AgentChatResponse,
+    Source,
+    FinancialDataFilters,
+    FinancialDataRecord,
 )
 from app.charting import generate_chart
+from app.document_registry import build_document_index, presign_document
 from app.s3_client import init_s3_client
 from app.gemini_client import (
     init_vertex_ai,
@@ -77,6 +81,8 @@ async def lifespan(app: FastAPI):
                 detail=e.detail,
             )
             app.state.metadata = None
+        # Index documents for citation resolution (GET /documents/{id}).
+        app.state.document_index = build_document_index(app.state.metadata)
         # -----------------------
         # Initialize Financial Data Manager (BigQuery)
         # -----------------------
@@ -215,6 +221,11 @@ def get_s3_client():
 # Dependency to get metadata
 def get_metadata():
     return app.state.metadata
+
+
+# Dependency to get the document index
+def get_document_index():
+    return getattr(app.state, "document_index", {}) or {}
 
 
 # Dependency to get financial data manager
@@ -466,6 +477,7 @@ async def chat(
         document_texts = {}
         document_selection_message = None
         loaded_docs = []
+        doc_sources = []
 
         # Auto-load relevant documents if enabled
         if request.auto_load_documents:
@@ -474,7 +486,7 @@ async def chat(
             if financial_manager and financial_manager.metadata:
                 associations = financial_manager.metadata.get("associations")
 
-            document_texts, document_selection_message, loaded_docs = auto_load_relevant_documents(
+            load_result = auto_load_relevant_documents(
                 s3_client,
                 request.query,
                 metadata,
@@ -482,6 +494,10 @@ async def chat(
                 request.conversation_history,
                 associations,
             )
+            document_texts = load_result.texts
+            document_selection_message = load_result.message
+            loaded_docs = load_result.loaded_docs
+            doc_sources = load_result.sources
 
         # Generate response
         response_text = generate_chat_response(
@@ -517,6 +533,7 @@ async def chat(
             documents_loaded=loaded_docs if loaded_docs else None,
             document_selection_message=document_selection_message,
             conversation_history=updated_conversation_history,
+            sources=doc_sources if doc_sources else None,
         )
 
     except Exception as e:
@@ -612,6 +629,7 @@ async def fast_chat_v2(
                 else None
             )
             chart_spec = ChartSpec(**cached["chart"]) if cached.get("chart") else None
+            sources = [Source(**s) for s in cached["sources"]] if cached.get("sources") else None
 
             updated_conversation_history = None
             if request.memory_enabled:
@@ -638,6 +656,7 @@ async def fast_chat_v2(
                 warnings=cached.get("warnings"),
                 suggestions=cached.get("suggestions"),
                 chart=chart_spec,
+                sources=sources,
             )
 
         last_query_data = getattr(request, "_last_query_data", None)
@@ -697,6 +716,10 @@ async def fast_chat_v2(
                         f"Generated {chart_data['chart_type']} chart: {chart_data['title']}"
                     )
 
+            sources = (
+                [financial_manager.describe_source(filters, len(results))] if results else None
+            )
+
             if trace_obs is not None:
                 trace_obs.update(output=ai_response, metadata={"cache_hit": False})
 
@@ -716,6 +739,7 @@ async def fast_chat_v2(
                     "warnings": warnings if warnings else None,
                     "suggestions": suggestions if suggestions else None,
                     "chart": chart_spec.model_dump() if chart_spec else None,
+                    "sources": _jsonable(sources),
                 },
             )
 
@@ -741,6 +765,7 @@ async def fast_chat_v2(
             warnings=warnings if warnings else None,
             suggestions=suggestions if suggestions else None,
             chart=chart_spec,
+            sources=sources,
         )
     except HTTPException as e:
         schedule_log(response=None, cache_hit=False, success=False, error_message=str(e.detail))
@@ -786,6 +811,34 @@ async def get_financial_metadata(
         raise HTTPException(
             status_code=500, detail=f"Error retrieving financial metadata: {str(e)}"
         )
+
+
+@app.get("/documents/{document_id}")
+async def resolve_document(
+    document_id: str,
+    s3_client: Any = Depends(get_s3_client),
+    document_index: Dict = Depends(get_document_index),
+):
+    """Resolve a cited document to a short-lived presigned S3 URL.
+
+    `document_id` is a one-way hash, so this is a lookup against the documents
+    present in metadata.json — an id we did not mint resolves to nothing.
+    """
+    entry = document_index.get(document_id)
+    if not entry:
+        logger.warning(f"document_resolve_miss id={document_id[:32]}")
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    try:
+        url = presign_document(s3_client, entry["s3_path"])
+    except ValueError as e:
+        logger.error(f"document_resolve_bad_path id={document_id}: {e}")
+        raise HTTPException(status_code=404, detail="Document not found")
+    except Exception as e:
+        logger.error(f"document_resolve_failed id={document_id}: {e}")
+        raise HTTPException(status_code=500, detail="Could not resolve document")
+
+    return RedirectResponse(url=url, status_code=307)
 
 
 @app.get("/cache/status")
@@ -1010,7 +1063,7 @@ async def chat_stream(
                     "warnings": response.warnings,
                     "suggestions": response.suggestions,
                     "chart": _jsonable(response.chart),
-                    "sources": response.sources,
+                    "sources": _jsonable(response.sources),
                     "web_search_results": response.web_search_results,
                     "tools_executed": response.tools_executed,
                     "needs_clarification": response.needs_clarification,

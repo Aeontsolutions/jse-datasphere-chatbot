@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
@@ -17,7 +18,7 @@ from app.dspy_modules import (
 )
 from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
-from app.models import FinancialDataFilters, FinancialDataRecord
+from app.models import FinancialDataFilters, FinancialDataRecord, Source, SourceType
 from app.tracing import traced_observation
 from app.utils.cost_tracking import CostResult, calculate_cost_from_response
 from app.utils.monitoring import record_ai_request, record_bigquery_query
@@ -1008,6 +1009,29 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
             record_bigquery_query(duration=duration, rows_returned=0, success=False)
 
             return []
+
+    def describe_source(self, filters: FinancialDataFilters, record_count: int) -> Source:
+        """Describe the dataset read for this answer.
+
+        Honest provenance for a financial figure is the table plus the filters
+        applied. The table carries no reference to the statement PDF a figure
+        was extracted from, so this deliberately stops at the query rather than
+        implying a document-level citation it cannot support.
+        """
+        return Source(
+            type=SourceType.DATASET,
+            title="JSE financial statements dataset",
+            detail="Figures read directly from the JSE financial statements table",
+            table=f"{self.project_id}.{self.dataset}.{self.table}",
+            filters={
+                "companies": list(filters.companies or []),
+                "symbols": list(filters.symbols or []),
+                "years": list(filters.years or []),
+                "standard_items": list(filters.standard_items or []),
+            },
+            record_count=record_count,
+            retrieved_at=datetime.now(timezone.utc).isoformat(),
+        )
 
     def validate_data_availability(self, filters: FinancialDataFilters) -> Dict[str, Any]:
         logger.info(

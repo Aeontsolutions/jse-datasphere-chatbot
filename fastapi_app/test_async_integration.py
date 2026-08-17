@@ -146,12 +146,15 @@ async def test_concurrent_downloads():
         ]
 
         # Test concurrent loading
-        document_texts, message, loaded_docs = await auto_load_relevant_documents_async(
+        result = await auto_load_relevant_documents_async(
             query="Tell me about TestCorp financials",
             metadata=MOCK_METADATA,
             config=config,
             progress_callback=progress_callback,
         )
+        document_texts = result.texts
+        message = result.message
+        loaded_docs = result.loaded_docs
 
         # Verify results
         assert len(document_texts) == 3, f"Expected 3 documents, got {len(document_texts)}"

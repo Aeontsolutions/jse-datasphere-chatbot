@@ -8,13 +8,17 @@ and supports both synchronous and asynchronous document loading operations.
 import asyncio
 import json
 import time
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
 
 from google.genai import types
 
 from app.config import S3DownloadConfig, get_config
+from app.document_registry import make_document_id
 from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
+from app.models import Source, SourceType
 from app.s3_client import (
     DownloadResult,
     download_and_extract_from_s3,
@@ -23,6 +27,37 @@ from app.s3_client import (
 from app.utils.monitoring import record_document_load, record_document_selection
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class DocumentLoadResult:
+    """What a document-loading pass produced.
+
+    Replaces the old 3-tuple: callers needed a fourth value (`sources`), and
+    growing the tuple would have broken every unpacking site anyway.
+    """
+
+    texts: Dict[str, str]
+    message: str
+    loaded_docs: List[str] = field(default_factory=list)
+    sources: List[Source] = field(default_factory=list)
+
+
+def _build_document_source(doc_name: str, doc_link: str, doc_info: Dict) -> Source:
+    """Build the citable Source for a document that was just read successfully.
+
+    Shared by the sync and async loaders so their citation fields (and any
+    future fix to how document_id or provenance is derived) can't drift apart.
+    """
+    return Source(
+        type=SourceType.DOCUMENT,
+        title=doc_name,
+        detail=doc_info.get("reason"),
+        document_id=make_document_id(doc_link),
+        company=doc_info.get("company"),
+        year=doc_info.get("year") or doc_info.get("period"),
+        retrieved_at=datetime.now(timezone.utc).isoformat(),
+    )
 
 
 # =============================================================================
@@ -558,63 +593,75 @@ def auto_load_relevant_documents(
     """
     document_texts = current_document_texts.copy() if current_document_texts else {}
     loaded_docs = []
+    sources: List[Source] = []
 
     # Use two-stage LLM approach to determine which documents to load
     recommendation = semantic_document_selection(
         query, metadata, conversation_history, associations
     )
 
-    if recommendation and "documents_to_load" in recommendation:
-        docs_to_load = recommendation["documents_to_load"]
+    if not recommendation or "documents_to_load" not in recommendation:
+        return DocumentLoadResult(
+            texts=document_texts,
+            message="No relevant documents were identified for your query.",
+        )
 
-        # Load the recommended documents (limited to 3)
-        for doc_info in docs_to_load[:3]:
-            doc_link = doc_info["document_link"]
-            doc_name = doc_info["filename"]
+    docs_to_load = recommendation["documents_to_load"]
 
-            # Only load if not already loaded
-            if doc_name not in document_texts:
-                load_start = time.time()
-                try:
-                    text = download_and_extract_from_s3(s3_client, doc_link)
-                    load_duration = time.time() - load_start
-                    if text:
-                        document_texts[doc_name] = text
-                        loaded_docs.append(doc_name)
-                        # Record successful document load from S3
-                        record_document_load(source="s3", duration=load_duration, success=True)
-                    else:
-                        # Record failed document load
-                        record_document_load(source="error", duration=load_duration, success=False)
-                except Exception as e:
-                    load_duration = time.time() - load_start
-                    # Record failed document load
-                    record_document_load(source="error", duration=load_duration, success=False)
-                    logger.error(
-                        "document_load_failed",
-                        extra={
-                            "document": doc_name,
-                            "error": str(e),
-                            "error_type": type(e).__name__,
-                        },
-                    )
+    # Load the recommended documents (limited to 3)
+    for doc_info in docs_to_load[:3]:
+        doc_link = doc_info["document_link"]
+        doc_name = doc_info["filename"]
 
-        # Generate message about what was loaded
-        if loaded_docs:
-            message = f"Semantically selected {len(loaded_docs)} documents based on your query:\n"
-            for doc_name in loaded_docs:
-                matching_doc = next((d for d in docs_to_load if d["filename"] == doc_name), None)
-                if matching_doc:
-                    message += f"• {doc_name} - {matching_doc.get('reason', '')}\n"
-            return document_texts, message, loaded_docs
-        else:
-            return (
-                document_texts,
-                "No documents were loaded. Please check S3 access permissions or document availability.",
-                [],
+        # Only load if not already loaded
+        if doc_name in document_texts:
+            continue
+
+        load_start = time.time()
+        try:
+            text = download_and_extract_from_s3(s3_client, doc_link)
+            load_duration = time.time() - load_start
+            if text:
+                document_texts[doc_name] = text
+                loaded_docs.append(doc_name)
+                # Only cite a document we actually read.
+                sources.append(_build_document_source(doc_name, doc_link, doc_info))
+                record_document_load(source="s3", duration=load_duration, success=True)
+            else:
+                record_document_load(source="error", duration=load_duration, success=False)
+        except Exception as e:
+            load_duration = time.time() - load_start
+            record_document_load(source="error", duration=load_duration, success=False)
+            logger.error(
+                "document_load_failed",
+                extra={
+                    "document": doc_name,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
             )
 
-    return document_texts, "No relevant documents were identified for your query.", []
+    if not loaded_docs:
+        return DocumentLoadResult(
+            texts=document_texts,
+            message=(
+                "No documents were loaded. Please check S3 access permissions "
+                "or document availability."
+            ),
+        )
+
+    message = f"Semantically selected {len(loaded_docs)} documents based on your query:\n"
+    for doc_name in loaded_docs:
+        matching_doc = next((d for d in docs_to_load if d["filename"] == doc_name), None)
+        if matching_doc:
+            message += f"• {doc_name} - {matching_doc.get('reason', '')}\n"
+
+    return DocumentLoadResult(
+        texts=document_texts,
+        message=message,
+        loaded_docs=loaded_docs,
+        sources=sources,
+    )
 
 
 # =============================================================================
@@ -630,7 +677,7 @@ async def auto_load_relevant_documents_async(
     config: Optional[S3DownloadConfig] = None,
     progress_callback: Optional[callable] = None,
     associations: Optional[Dict] = None,
-) -> Tuple[Dict[str, str], str, List[str]]:
+) -> DocumentLoadResult:
     """
     Asynchronously load relevant documents based on query and conversation history with concurrent downloads.
 
@@ -644,13 +691,15 @@ async def auto_load_relevant_documents_async(
         associations: Optional dict with 'symbol_to_company' mapping for better resolution
 
     Returns:
-        Tuple of (document_texts, message, loaded_docs)
+        DocumentLoadResult with the loaded texts, a status message, the loaded
+        filenames, and the citable Source objects.
     """
     if config is None:
         config = get_config().s3_download
 
     document_texts = current_document_texts.copy() if current_document_texts else {}
     loaded_docs = []
+    sources: List[Source] = []
 
     try:
         if progress_callback:
@@ -667,7 +716,7 @@ async def auto_load_relevant_documents_async(
             message = "No relevant documents were identified for your query."
             if progress_callback:
                 await progress_callback("document_selection_complete", message)
-            return document_texts, message, []
+            return DocumentLoadResult(texts=document_texts, message=message)
 
         docs_to_load = recommendation["documents_to_load"]
         companies_mentioned = recommendation.get("companies_mentioned", [])
@@ -691,7 +740,7 @@ async def auto_load_relevant_documents_async(
             message = "All relevant documents are already loaded."
             if progress_callback:
                 await progress_callback("documents_already_loaded", message)
-            return document_texts, message, []
+            return DocumentLoadResult(texts=document_texts, message=message)
 
         if progress_callback:
             await progress_callback(
@@ -730,6 +779,10 @@ async def auto_load_relevant_documents_async(
                     document_texts[doc_name] = result.content
                     loaded_docs.append(doc_name)
                     successful_downloads += 1
+                    # Only cite a document we actually read.
+                    sources.append(
+                        _build_document_source(doc_name, doc_info["document_link"], doc_info)
+                    )
                     # Record successful async document load from S3
                     record_document_load(source="s3", duration=result.download_time, success=True)
                     logger.info(
@@ -770,7 +823,12 @@ async def auto_load_relevant_documents_async(
                 f"Completed: {successful_downloads} successful, {failed_downloads} failed",
             )
 
-        return document_texts, message, loaded_docs
+        return DocumentLoadResult(
+            texts=document_texts,
+            message=message,
+            loaded_docs=loaded_docs,
+            sources=sources,
+        )
 
     except Exception as e:
         error_msg = f"Error in async document loading: {str(e)}"
@@ -784,7 +842,7 @@ async def auto_load_relevant_documents_async(
         )
         if progress_callback:
             await progress_callback("document_load_error", error_msg)
-        return document_texts, error_msg, []
+        return DocumentLoadResult(texts=document_texts, message=error_msg)
 
 
 async def _download_single_document_async(

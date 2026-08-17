@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from app.document_selector import (
+    DocumentLoadResult,
     auto_load_relevant_documents,
     auto_load_relevant_documents_async,
     resolve_companies,
@@ -50,8 +51,10 @@ class TestDocumentSelector:
                 query="MTN report",
                 metadata=mock_metadata,
             )
-            assert isinstance(result, tuple)
-            assert len(result) == 3  # (document_texts, message, loaded_docs)
+            assert isinstance(result, DocumentLoadResult)
+            assert isinstance(result.texts, dict)
+            assert isinstance(result.loaded_docs, list)
+            assert isinstance(result.sources, list)
 
     def test_auto_load_relevant_documents(self, mock_metadata, mock_s3_client):
         """Test synchronous document loading."""
@@ -61,8 +64,10 @@ class TestDocumentSelector:
             metadata=mock_metadata,
             current_document_texts={},
         )
-        assert isinstance(result, tuple)
-        assert len(result) == 3  # (document_texts, message, loaded_docs)
+        assert isinstance(result, DocumentLoadResult)
+        assert isinstance(result.texts, dict)
+        assert isinstance(result.loaded_docs, list)
+        assert isinstance(result.sources, list)
 
     def test_semantic_selection_with_conversation_history(self, mock_metadata):
         """Test semantic selection with conversation history."""

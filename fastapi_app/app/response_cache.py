@@ -53,7 +53,12 @@ class ResponseCache:
         """
         normalized = "|".join(str(p) for p in parts)
         digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-        return f"cache:v1:{namespace}:{digest}"
+        # Bump this version prefix whenever a cached payload's schema changes
+        # (e.g. a new required field on a response model). That makes every
+        # entry written under the old schema unreadable by construction,
+        # instead of risking a deserialization error against live traffic
+        # for the remainder of the cache TTL.
+        return f"cache:v2:{namespace}:{digest}"
 
     @staticmethod
     def normalize_query(query: str) -> str:

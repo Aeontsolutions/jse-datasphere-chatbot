@@ -4,6 +4,69 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+class SourceType(str, Enum):
+    """Kind of evidence backing an answer."""
+
+    WEB = "web"  # Google Search grounding chunk
+    DOCUMENT = "document"  # PDF in S3
+    DATASET = "dataset"  # BigQuery financial table
+
+
+class Source(BaseModel):
+    """A single piece of provenance for an answer.
+
+    Only `type` and `title` are required — a client that understands nothing
+    else can still render a citation line. Per-type fields are optional so new
+    source kinds can be added without breaking existing consumers.
+    """
+
+    type: SourceType = Field(..., description="Kind of source backing the answer")
+    title: str = Field(
+        ...,
+        description=(
+            "Human-readable source name. For web sources this is third-party-supplied "
+            "and must be escaped before rendering."
+        ),
+    )
+    detail: Optional[str] = Field(
+        default=None,
+        description="Why this source was used. Model-generated text; must be escaped before rendering.",
+    )
+    retrieved_at: Optional[str] = Field(
+        default=None, description="ISO 8601 time the underlying retrieval ran"
+    )
+
+    # --- web ---
+    url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Source URL. Gemini grounding URIs expire (~30 days). Third-party-supplied — "
+            "consumers must allowlist the scheme to https: before using it in an href."
+        ),
+    )
+    domain: Optional[str] = Field(
+        default=None,
+        description=(
+            "Publisher domain. Outlives an expired url. Third-party-supplied; "
+            "must be escaped before rendering."
+        ),
+    )
+
+    # --- document ---
+    document_id: Optional[str] = Field(
+        default=None, description="Opaque id. Resolve via GET /documents/{document_id}"
+    )
+    company: Optional[str] = Field(default=None, description="Company the document belongs to")
+    year: Optional[str] = Field(default=None, description="Reporting year of the document")
+
+    # --- dataset ---
+    table: Optional[str] = Field(default=None, description="Fully-qualified BigQuery table")
+    filters: Optional[Dict[str, Any]] = Field(
+        default=None, description="Filters applied when reading the table"
+    )
+    record_count: Optional[int] = Field(default=None, description="Rows matched by the query")
+
+
 class ChatRequest(BaseModel):
     """
     Request model for chat endpoint
@@ -62,6 +125,9 @@ class ChatResponse(BaseModel):
     )
     conversation_history: Optional[List[Dict[str, str]]] = Field(
         default=None, description="Updated conversation history"
+    )
+    sources: Optional[List[Source]] = Field(
+        default=None, description="Provenance for the answer (document sources)"
     )
 
 
@@ -151,6 +217,9 @@ class FinancialDataResponse(BaseModel):
     )
     chart: Optional[ChartSpec] = Field(
         default=None, description="Vega-Lite chart specification if data is chartable"
+    )
+    sources: Optional[List[Source]] = Field(
+        default=None, description="Provenance for the answer (dataset sources)"
     )
 
 
@@ -250,9 +319,8 @@ class AgentChatResponse(BaseModel):
     )
 
     # === NEW FIELDS (agent-specific, additive only) ===
-    sources: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="List of sources cited in the response (values may be strings or lists)",
+    sources: Optional[List[Source]] = Field(
+        default=None, description="Provenance for the answer (web sources)"
     )
     web_search_results: Optional[Dict[str, Any]] = Field(
         default=None, description="Google Search grounding metadata"
