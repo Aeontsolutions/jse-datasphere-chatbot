@@ -1010,26 +1010,45 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
 
             return []
 
-    def describe_source(self, filters: FinancialDataFilters, record_count: int) -> Source:
+    def describe_source(self, results: List[FinancialDataRecord]) -> Source:
         """Describe the dataset read for this answer.
 
-        Honest provenance for a financial figure is the table plus the filters
-        applied. The table carries no reference to the statement PDF a figure
-        was extracted from, so this deliberately stops at the query rather than
-        implying a document-level citation it cannot support.
+        `filters` describes the rows actually returned, not the filters the
+        parser produced. Those two diverge badly: `_post_process_filters`
+        expands a company into its symbols, and because the source table holds
+        thousands of rows with a blank Company, a blank value matches every
+        symbol in the dataset. A single-company query therefore reports ~100
+        symbols in `filters_used` — accurate as a record of the SQL, useless
+        and actively misleading as a citation.
+
+        Describing what came back is both truthful and naturally bounded. The
+        parser's raw output is still available to callers as `filters_used`.
+
+        The table carries no reference to the statement PDF a figure was
+        extracted from, so this stops at the query rather than implying a
+        document-level citation it cannot support.
         """
+
+        def distinct(attr: str) -> List[str]:
+            values = {
+                str(getattr(record, attr)).strip()
+                for record in results
+                if getattr(record, attr, None) is not None and str(getattr(record, attr)).strip()
+            }
+            return sorted(values)
+
         return Source(
             type=SourceType.DATASET,
             title="JSE financial statements dataset",
             detail="Figures read directly from the JSE financial statements table",
             table=f"{self.project_id}.{self.dataset}.{self.table}",
             filters={
-                "companies": list(filters.companies or []),
-                "symbols": list(filters.symbols or []),
-                "years": list(filters.years or []),
-                "standard_items": list(filters.standard_items or []),
+                "companies": distinct("company"),
+                "symbols": distinct("symbol"),
+                "years": distinct("year"),
+                "standard_items": distinct("standard_item"),
             },
-            record_count=record_count,
+            record_count=len(results),
             retrieved_at=datetime.now(timezone.utc).isoformat(),
         )
 

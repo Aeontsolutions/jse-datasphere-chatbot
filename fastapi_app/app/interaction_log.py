@@ -48,7 +48,59 @@ INTERACTIONS_SCHEMA = [
     bigquery.SchemaField("record_count", "INTEGER", mode="NULLABLE"),
     bigquery.SchemaField("success", "BOOLEAN", mode="REQUIRED"),
     bigquery.SchemaField("error_message", "STRING", mode="NULLABLE"),
+    # Provenance returned to the caller. `source_count` is denormalised on
+    # purpose: "what share of answers cited nothing" is the grounding-failure
+    # signal, and it should not require an UNNEST to ask.
+    bigquery.SchemaField("source_count", "INTEGER", mode="NULLABLE"),
+    bigquery.SchemaField(
+        "sources",
+        "RECORD",
+        mode="REPEATED",
+        fields=[
+            bigquery.SchemaField("type", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("title", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("url", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("domain", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("document_id", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("company", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("year", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("table", "STRING", mode="NULLABLE"),
+            bigquery.SchemaField("record_count", "INTEGER", mode="NULLABLE"),
+        ],
+    ),
 ]
+
+# Source fields carried into the log. `detail` and `retrieved_at` are
+# deliberately excluded: `detail` is model-generated prose with little
+# analytical value, and `retrieved_at` is within milliseconds of the row's
+# own `timestamp`.
+_LOGGED_SOURCE_FIELDS = (
+    "type",
+    "title",
+    "url",
+    "domain",
+    "document_id",
+    "company",
+    "year",
+    "table",
+    "record_count",
+)
+
+
+def _normalize_sources(sources: Optional[list]) -> list:
+    """Flatten Source models (or plain dicts) into BigQuery RECORD rows.
+
+    Both shapes reach this function: the fresh request path hands over
+    `Source` objects, while a `/chat/stream` cache hit hands over the raw
+    dicts read back from Redis.
+    """
+    if not sources:
+        return []
+    rows = []
+    for source in sources:
+        data = source.model_dump() if hasattr(source, "model_dump") else dict(source)
+        rows.append({field: data.get(field) for field in _LOGGED_SOURCE_FIELDS})
+    return rows
 
 
 class InteractionLogger:
@@ -94,6 +146,7 @@ class InteractionLogger:
         success: bool = True,
         error_message: Optional[str] = None,
         timestamp: Optional[str] = None,
+        sources: Optional[list] = None,
     ) -> Dict[str, Any]:
         """Build a row dict matching INTERACTIONS_SCHEMA. Caller supplies `timestamp`
         (ISO string) since this module avoids datetime.now() for testability."""
@@ -122,6 +175,10 @@ class InteractionLogger:
             "record_count": record_count,
             "success": success,
             "error_message": error_message,
+            # None (a failed request) and [] (a request that succeeded but
+            # cited nothing) are different facts, so they stay distinguishable.
+            "source_count": len(sources) if sources is not None else None,
+            "sources": _normalize_sources(sources),
         }
 
     async def log(self, row: Dict[str, Any]) -> None:

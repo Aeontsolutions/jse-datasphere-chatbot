@@ -111,3 +111,96 @@ def test_build_interaction_logger_passes_environment_through():
     with patch("app.config.get_config", return_value=mock_config):
         logger_ = build_interaction_logger()
     assert logger_._environment == "staging"
+
+
+# ---------------------------------------------------------------------------
+# Source provenance logging
+#
+# Sources reach build_row in two shapes: the fresh request path hands over
+# Source models, while a /chat/stream cache hit hands over the raw dicts read
+# back from Redis. Both must land as the same BigQuery RECORD rows.
+# ---------------------------------------------------------------------------
+
+
+def _row(**kwargs):
+    return InteractionLogger.build_row(endpoint="chat_stream", query="q", response="r", **kwargs)
+
+
+def test_build_row_flattens_source_models():
+    from app.models import Source, SourceType
+
+    row = _row(
+        sources=[
+            Source(
+                type=SourceType.WEB,
+                title="jamstockex.com",
+                url="https://x/y",
+                domain="jamstockex.com",
+            )
+        ]
+    )
+    assert row["source_count"] == 1
+    assert row["sources"] == [
+        {
+            "type": "web",
+            "title": "jamstockex.com",
+            "url": "https://x/y",
+            "domain": "jamstockex.com",
+            "document_id": None,
+            "company": None,
+            "year": None,
+            "table": None,
+            "record_count": None,
+        }
+    ]
+
+
+def test_build_row_accepts_plain_dicts_from_cache():
+    """A /chat/stream cache hit passes dicts, not models — same output."""
+    row = _row(sources=[{"type": "web", "title": "t", "url": "https://x", "domain": "x.com"}])
+    assert row["source_count"] == 1
+    assert row["sources"][0]["type"] == "web"
+    assert row["sources"][0]["document_id"] is None
+
+
+def test_build_row_drops_detail_and_retrieved_at():
+    """Excluded on purpose: prose with no analytical value, and a near-duplicate
+    of the row's own timestamp."""
+    row = _row(
+        sources=[
+            {
+                "type": "dataset",
+                "title": "JSE financials",
+                "detail": "why it was used",
+                "retrieved_at": "2026-08-17T00:00:00+00:00",
+                "table": "p.d.t",
+                "record_count": 4,
+            }
+        ]
+    )
+    assert "detail" not in row["sources"][0]
+    assert "retrieved_at" not in row["sources"][0]
+    assert row["sources"][0]["table"] == "p.d.t"
+    assert row["sources"][0]["record_count"] == 4
+
+
+def test_zero_sources_and_failure_are_distinguishable():
+    """[] means 'answered, cited nothing' — the grounding-failure signal.
+    None means 'the request failed', so source_count stays NULL."""
+    answered_without_sources = _row(sources=[])
+    failed = _row(sources=None, success=False)
+
+    assert answered_without_sources["source_count"] == 0
+    assert answered_without_sources["sources"] == []
+    assert failed["source_count"] is None
+    assert failed["sources"] == []
+
+
+def test_build_row_keys_match_declared_schema():
+    """Guards the drift this table has already suffered once."""
+    from app.interaction_log import INTERACTIONS_SCHEMA
+
+    declared = {f.name for f in INTERACTIONS_SCHEMA}
+    produced = set(_row(sources=[]).keys())
+    # `environment` is stamped in log(), not build_row()
+    assert produced == declared - {"environment"}
