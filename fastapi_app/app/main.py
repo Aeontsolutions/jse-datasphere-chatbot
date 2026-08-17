@@ -645,6 +645,7 @@ async def fast_chat_v2(
                 success=True,
                 data_found=data_found,
                 record_count=record_count,
+                sources=sources,
             )
             return FinancialDataResponse(
                 response=ai_response,
@@ -754,6 +755,7 @@ async def fast_chat_v2(
             output_tokens=sum(c.token_usage.output_tokens for c in request_costs),
             cost_usd=sum(c.total_cost for c in request_costs),
             phase_costs=[c.phase for c in request_costs],
+            sources=sources,
         )
         return FinancialDataResponse(
             response=ai_response,
@@ -985,6 +987,7 @@ async def chat_stream(
                 success=True,
                 data_found=cached["data_found"],
                 record_count=cached["record_count"],
+                sources=cached.get("sources"),
             )
             return AgentChatResponse(
                 response=cached["response"],
@@ -1082,6 +1085,7 @@ async def chat_stream(
             output_tokens=cost_summary.total_output_tokens if cost_summary else 0,
             cost_usd=cost_summary.total_cost_usd if cost_summary else 0.0,
             phase_costs=[p.phase for p in cost_summary.phases] if cost_summary else None,
+            sources=response.sources,
         )
 
         return response
