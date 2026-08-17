@@ -64,6 +64,24 @@ def parse_args_to_overrides(ns: argparse.Namespace) -> dict[str, Any]:
     return {k: v for k, v in mapping.items() if v is not None}
 
 
+def financial_tool_coverage(personas: list[PersonaSpec]) -> tuple[int, int]:
+    """Count personas capable of exercising the financial DB tool.
+
+    `fast_chat_v2` always routes through FinancialClient. `chat_stream`
+    personas only might, depending on whether `enable_financial_data` is left
+    on (it defaults to True). Filtering to `--endpoint chat_stream` alone
+    tends to under-exercise the financial tool relative to the full suite --
+    this makes that gap visible instead of silent.
+    """
+    capable = 0
+    for p in personas:
+        if p.endpoint == "fast_chat_v2":
+            capable += 1
+        elif p.endpoint == "chat_stream" and p.api_options.get("enable_financial_data", True):
+            capable += 1
+    return capable, len(personas)
+
+
 def _filter_personas(
     all_personas: list[PersonaSpec],
     ids: list[str],
@@ -109,6 +127,15 @@ async def _amain(ns: argparse.Namespace) -> int:
     if not personas:
         print("ERROR: no personas matched the filters")
         return 2
+
+    capable, total = financial_tool_coverage(personas)
+    if total and capable / total < 0.5:
+        print(
+            f"NOTE: only {capable}/{total} selected personas are likely to exercise "
+            "the financial DB tool (fast_chat_v2, or chat_stream with enable_financial_data "
+            "left on). A run this filtered under-tests financial tool calling -- "
+            "see evals/README.md."
+        )
 
     genai_client = genai.Client(api_key=api_key)
     persona_actor = PersonaActor(

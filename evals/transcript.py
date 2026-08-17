@@ -19,6 +19,10 @@ class ChatTurn(BaseModel):
     cost_usd: float | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    persona_actor_cost_usd: float | None = None
+    """Cost of the persona actor's Gemini call that produced this turn's
+    utterance. Distinct from `cost_usd`, which is the chatbot-under-test's
+    own reported spend."""
 
 
 class TerminationReason(BaseModel):
@@ -42,9 +46,18 @@ class Transcript(BaseModel):
     termination: TerminationReason
 
     def totals(self) -> dict[str, float | int]:
-        """Aggregate latency, cost, and turn count across turns."""
+        """Aggregate latency, cost, and turn count across turns.
+
+        `cost_usd` is the chatbot-under-test's spend PLUS the persona actor's
+        spend generating each turn's utterance -- both are real Gemini calls
+        this run paid for. It does not include the judge's cost, which is
+        billed once per conversation rather than per turn; see
+        ConversationArtifact.judge_cost_usd for that.
+        """
         return {
             "turns": len(self.turns),
             "latency_ms": sum(t.latency_ms for t in self.turns),
-            "cost_usd": sum(t.cost_usd or 0.0 for t in self.turns),
+            "cost_usd": sum(
+                (t.cost_usd or 0.0) + (t.persona_actor_cost_usd or 0.0) for t in self.turns
+            ),
         }

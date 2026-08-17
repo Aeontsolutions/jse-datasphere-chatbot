@@ -67,6 +67,7 @@ async def run_conversation(
             cost_usd=result.cost_usd,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
+            persona_actor_cost_usd=persona_turn.cost_usd,
         )
         turns.append(chat_turn)
         chatbot_history.append({"role": "user", "content": persona_turn.utterance})
@@ -74,7 +75,10 @@ async def run_conversation(
         persona_history.append(
             {"persona_utterance": persona_turn.utterance, "chatbot_text": result.chatbot_text}
         )
-        running_cost += result.cost_usd or 0.0
+        # Persona-actor calls are real Gemini spend too -- both count toward the
+        # per-conversation cap, or a conversation could dodge it by spending
+        # entirely on persona-actor turns instead of chatbot calls.
+        running_cost += (result.cost_usd or 0.0) + (persona_turn.cost_usd or 0.0)
 
         if running_cost > max_cost_usd:
             termination = TerminationReason(
@@ -121,11 +125,15 @@ class ConversationArtifact:
         judge_output: JudgeOutput | None,
         judge_failed: bool,
         judge_error: str | None,
+        judge_cost_usd: float = 0.0,
     ) -> None:
         self.transcript = transcript
         self.judge_output = judge_output
         self.judge_failed = judge_failed
         self.judge_error = judge_error
+        # Cost of the judge's Gemini call. Billed once per conversation, so it
+        # lives here rather than on the transcript (see Transcript.totals()).
+        self.judge_cost_usd = judge_cost_usd
 
 
 class RunArtifacts:
@@ -184,7 +192,7 @@ async def run_simulation(
                 max_cost_usd=max_cost_usd_per_conversation,
             )
 
-            convo_cost = float(transcript.totals()["cost_usd"])
+            convo_cost = float(transcript.totals()["cost_usd"])  # chatbot + persona-actor spend
             async with cost_lock:
                 running_cost += convo_cost
                 if running_cost > max_cost_usd_per_run:
@@ -192,12 +200,26 @@ async def run_simulation(
                     cancel_event.set()
 
         async with judge_semaphore:
+            judge_cost_usd = 0.0
             try:
                 output = await judge.evaluate(persona=persona, transcript=transcript)
-                print(f"  {persona.id} rep{rep+1}: {output.verdict} (turns={len(transcript.turns)}, ${convo_cost:.3f})")
-                artifact: ConversationArtifact = ConversationArtifact(transcript, output, False, None)
+                judge_cost_usd = output.cost_usd
+                total_cost = convo_cost + judge_cost_usd
+                print(f"  {persona.id} rep{rep+1}: {output.verdict} (turns={len(transcript.turns)}, ${total_cost:.3f})")
+                artifact: ConversationArtifact = ConversationArtifact(
+                    transcript, output, False, None, judge_cost_usd=judge_cost_usd
+                )
             except Exception as exc:
                 artifact = ConversationArtifact(transcript, None, True, f"{type(exc).__name__}: {exc}")
+            # The judge is also real Gemini spend -- a run could otherwise blow
+            # through max_cost_usd_per_run entirely on judge calls, since only
+            # chatbot+persona-actor cost was counted above.
+            if judge_cost_usd:
+                async with cost_lock:
+                    running_cost += judge_cost_usd
+                    if running_cost > max_cost_usd_per_run:
+                        cost_capped = True
+                        cancel_event.set()
             if on_artifact is not None:
                 try:
                     await on_artifact(artifact)

@@ -92,6 +92,39 @@ async def test_act_retries_once_on_malformed_json():
 
 
 @pytest.mark.asyncio
+async def test_act_computes_cost_from_usage_metadata():
+    """Persona-actor calls are real Gemini spend; they must be tracked like any other."""
+    persona = _make_persona()
+    fake_client = MagicMock()
+    response = _mock_genai_response('{"utterance": "Show me NCB revenue.", "done": false, "done_reason": null}')
+    response.usage_metadata.prompt_token_count = 1_000_000
+    response.usage_metadata.candidates_token_count = 1_000_000
+    fake_client.aio.models.generate_content = MagicMock(return_value=_async_value(response))
+
+    actor = PersonaActor(client=fake_client, model="gemini-2.5-flash", temperature=0.8)
+    turn = await actor.act(persona=persona, transcript_history=[], replicate_index=0)
+
+    # gemini-2.5-flash: $0.15/M input + $0.60/M output
+    assert turn.cost_usd == pytest.approx(0.75)
+
+
+@pytest.mark.asyncio
+async def test_act_defaults_cost_to_zero_when_usage_metadata_absent():
+    """Loosely-mocked responses (no usage_metadata) shouldn't crash cost math."""
+    persona = _make_persona()
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content = MagicMock()
+    fake_client.aio.models.generate_content.return_value = _async_value(
+        _mock_genai_response('{"utterance": "Show me NCB revenue.", "done": false, "done_reason": null}')
+    )
+
+    actor = PersonaActor(client=fake_client, model="gemini-2.5-flash", temperature=0.8)
+    turn = await actor.act(persona=persona, transcript_history=[], replicate_index=0)
+
+    assert turn.cost_usd == 0.0
+
+
+@pytest.mark.asyncio
 async def test_act_raises_after_second_malformed_json():
     persona = _make_persona()
     fake_client = MagicMock()
