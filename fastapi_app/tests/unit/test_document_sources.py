@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from app.document_registry import make_document_id
+from app.document_registry import build_document_index, make_document_id
 from app.document_selector import DocumentLoadResult, auto_load_relevant_documents
 from app.models import SourceType
 
@@ -24,6 +24,19 @@ RECOMMENDATION = {
             "document_link": S3_PATH,
             "filename": "ncb_annual_report_2023.pdf",
             "reason": "Contains FY2023 net profit",
+        }
+    ],
+}
+
+# Mirrors what actually lives in metadata.json for this document, so the
+# round-trip test below exercises the same shape build_document_index sees
+# in production (not just the recommendation payload the mocked LLM echoes).
+METADATA = {
+    "NCB Financial Group": [
+        {
+            "filename": "ncb_annual_report_2023.pdf",
+            "document_link": S3_PATH,
+            "year": "2023",
         }
     ],
 }
@@ -75,6 +88,17 @@ class TestDocumentSources:
         assert source.detail == "Contains FY2023 net profit"
         assert source.company == "NCB Financial Group"
         assert source.retrieved_at is not None
+
+    def test_minted_document_id_is_resolvable(self, loaded):
+        """Round-trip check: the id _build_document_source mints from the
+        selection LLM's echoed document_link must match the id
+        build_document_index derives from the same path in metadata.json.
+        Two independent hash call sites must agree byte-for-byte, or a
+        citation's document_id 404s forever against the real resolver.
+        """
+        source_ids = {s.document_id for s in loaded.sources}
+        index = build_document_index(METADATA)
+        assert source_ids <= set(index)
 
     def test_failed_download_produces_no_source(self):
         """A document we could not read must not be cited as evidence."""

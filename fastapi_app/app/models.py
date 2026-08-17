@@ -21,8 +21,17 @@ class Source(BaseModel):
     """
 
     type: SourceType = Field(..., description="Kind of source backing the answer")
-    title: str = Field(..., description="Human-readable source name")
-    detail: Optional[str] = Field(default=None, description="Why this source was used")
+    title: str = Field(
+        ...,
+        description=(
+            "Human-readable source name. For web sources this is third-party-supplied "
+            "and must be escaped before rendering."
+        ),
+    )
+    detail: Optional[str] = Field(
+        default=None,
+        description="Why this source was used. Model-generated text; must be escaped before rendering.",
+    )
     retrieved_at: Optional[str] = Field(
         default=None, description="ISO 8601 time the underlying retrieval ran"
     )
@@ -30,10 +39,17 @@ class Source(BaseModel):
     # --- web ---
     url: Optional[str] = Field(
         default=None,
-        description="Source URL. Gemini grounding URIs expire (~30 days).",
+        description=(
+            "Source URL. Gemini grounding URIs expire (~30 days). Third-party-supplied — "
+            "consumers must allowlist the scheme to https: before using it in an href."
+        ),
     )
     domain: Optional[str] = Field(
-        default=None, description="Publisher domain. Outlives an expired url."
+        default=None,
+        description=(
+            "Publisher domain. Outlives an expired url. Third-party-supplied; "
+            "must be escaped before rendering."
+        ),
     )
 
     # --- document ---

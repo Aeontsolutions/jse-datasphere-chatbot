@@ -826,7 +826,7 @@ async def resolve_document(
     """
     entry = document_index.get(document_id)
     if not entry:
-        logger.info(f"document_resolve_miss id={document_id[:32]}")
+        logger.warning(f"document_resolve_miss id={document_id[:32]}")
         raise HTTPException(status_code=404, detail="Document not found")
 
     try:

@@ -1,10 +1,13 @@
-"""Stable, non-forgeable identifiers for the S3 documents we cite.
+"""Stable, non-reversible, index-bounded identifiers for the S3 documents we cite.
 
 A cited document is exposed to clients as an opaque `document_id`, never as
-an S3 path. The id is a truncated SHA-256 of the path and is resolved by a
-dict lookup built from metadata.json, so a client cannot craft an id that
-reaches an object we did not index. Presigned URLs are minted per request
-and never cached, so a cached response can never hand out a dead link.
+an S3 path. The id is a truncated SHA-256 of the path, so it cannot be
+decoded back to a path (non-reversible); it is not a secret, since anyone
+who guesses or already knows the S3 path can compute the same id offline.
+The safety property comes from resolution: an id is redeemed by a dict
+lookup built from metadata.json, so no crafted input can reach an object we
+did not index (index-bounded). Presigned URLs are minted per request and
+never cached, so a cached response can never hand out a dead link.
 """
 
 import hashlib

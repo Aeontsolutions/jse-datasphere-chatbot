@@ -141,9 +141,27 @@ Contains the final response. **CRITICAL: This event MUST contain the response te
   "response": "Based on the analysis of financial documents...",
   "sources": [
     {
-      "title": "Annual Report 2023",
+      "type": "web",
+      "title": "Annual Report 2023 - Company XYZ",
+      "detail": "Grounded Google Search result",
+      "retrieved_at": "2026-08-17T12:00:00Z",
       "url": "https://...",
-      "relevance": 0.95
+      "domain": "example.com"
+    },
+    {
+      "type": "document",
+      "title": "ncb_annual_report_2023.pdf",
+      "detail": "Contains FY2023 net profit",
+      "document_id": "a1b2c3d4e5f60718",
+      "company": "NCB Financial Group",
+      "year": "2023"
+    },
+    {
+      "type": "dataset",
+      "title": "net_profit for NCB Financial Group",
+      "table": "project.dataset.financial_statements",
+      "filters": {"symbol": "NCB", "year": 2023},
+      "record_count": 4
     }
   ],
   "metadata": {
@@ -157,6 +175,44 @@ Contains the final response. **CRITICAL: This event MUST contain the response te
 - `response` (string, **REQUIRED**): The chatbot's answer
 - `sources` (array, optional): Source documents used
 - `metadata` (object, optional): Additional response metadata
+
+#### `Source` Object Shape
+
+Every entry in `sources` is a single polymorphic shape, `type`-discriminated. `type` and `title` are always present so a client that understands nothing else can still render a citation line; everything else is optional and varies by `type`.
+
+| Field | Type | Present on | Description |
+|-------|------|-------------|-------------|
+| `type` | string | all | `"web"`, `"document"`, or `"dataset"` |
+| `title` | string | all | Human-readable source name |
+| `detail` | string, optional | any | Why this source was used (LLM-generated) |
+| `retrieved_at` | string, optional | any | ISO 8601 time the underlying retrieval ran |
+| `url` | string, optional | web | Google grounding redirect URL |
+| `domain` | string, optional | web | Publisher domain |
+| `document_id` | string, optional | document | Opaque id, redeemable via `GET /documents/{document_id}` |
+| `company` | string, optional | document | Company the document belongs to |
+| `year` | string, optional | document | Reporting year of the document |
+| `table` | string, optional | dataset | Fully-qualified BigQuery table |
+| `filters` | object, optional | dataset | Filters applied when reading the table |
+| `record_count` | number, optional | dataset | Rows matched by the query |
+
+`web` sources come from Gemini's Google Search grounding chunks, `document` sources from PDFs the chatbot read out of S3, and `dataset` sources from BigQuery financial tables queried on your behalf. All three chat endpoints (`/chat`, `/chat/stream`, `/fast_chat_v2`) emit the same `sources` array shape.
+
+**Security note — treat every string in `sources` as untrusted:** `title`, `domain`, and `url` on a web source come from whatever page Gemini's grounding chose (a crafted query can steer what gets grounded on), and `detail` is model-generated. Escape `title`, `domain`, and `detail` before rendering them, and allowlist `url`'s scheme to `https:` before using it in an `href` — a `javascript:` URI arriving in a grounding chunk and rendered unescaped is clickable script execution.
+
+**Web `url` values expire (~30 days):** they are Google grounding redirect URLs, not permanent links. This is why `domain` exists alongside `url` — show `domain`/`title` in the UI so a citation still reads sensibly after its `url` has gone stale.
+
+#### Resolving Document Citations: `GET /documents/{document_id}`
+
+A `document` source's `document_id` is an opaque, non-reversible identifier — not an S3 path. Redeem it against the chatbot service (not the Django proxy) to get the actual file:
+
+```
+GET /documents/{document_id}
+```
+
+- **307 Temporary Redirect** to a presigned S3 URL, valid for 300 seconds, if `document_id` is known.
+- **404 Not Found** if `document_id` is unknown or unresolvable.
+
+The intended use is a plain browser navigation — `<a href="{base_url}/documents/{document_id}" target="_blank">` — which follows the redirect natively. A `fetch()` call instead follows the redirect cross-origin to S3 and needs the bucket's CORS policy to permit the calling origin, or must be issued with `redirect: 'manual'` and the `Location` header handled explicitly.
 
 ##### `complete` Event
 Status update indicating completion (does NOT contain response).

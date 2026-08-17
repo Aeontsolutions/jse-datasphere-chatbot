@@ -2,8 +2,10 @@
 
 `document_id` is deliberately a one-way hash rather than an encoded S3 path.
 If it were reversible (e.g. base64), a client could edit the id and read
-arbitrary objects out of the bucket through our own resolver endpoint.
-Because resolution is a dict lookup built from metadata.json, no crafted
+arbitrary objects out of the bucket through our own resolver endpoint. The
+hash is unsalted, so it is not a secret — anyone who guesses the S3 path can
+compute the same id offline — but it is non-reversible and index-bounded:
+because resolution is a dict lookup built from metadata.json, no crafted
 input can reach an object we did not index.
 """
 
