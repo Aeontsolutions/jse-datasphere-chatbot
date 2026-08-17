@@ -717,9 +717,7 @@ async def fast_chat_v2(
                         f"Generated {chart_data['chart_type']} chart: {chart_data['title']}"
                     )
 
-            sources = (
-                [financial_manager.describe_source(filters, len(results))] if results else None
-            )
+            sources = [financial_manager.describe_source(results)] if results else None
 
             if trace_obs is not None:
                 trace_obs.update(output=ai_response, metadata={"cache_hit": False})
