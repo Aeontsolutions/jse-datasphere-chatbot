@@ -36,6 +36,16 @@ Resources:
               !Sub "${App}-${Env}-EnvironmentSecurityGroup"
 
   # Redis Subnet Group
+  # NOTE (2026-08-15): this app's Copilot environments (dev/prod) only export
+  # a PublicSubnets value, not PrivateSubnets -- deploying against
+  # PrivateSubnets fails with "No export named ...-PrivateSubnets found".
+  # Using PublicSubnets here means the ElastiCache node sits in a
+  # publicly-routed subnet. It's not internet-reachable in practice (no
+  # public IP is assigned, and RedisSecurityGroup above only allows traffic
+  # from EnvironmentSecurityGroup), but this is still a network-placement
+  # tradeoff someone should sanity-check against org security/compliance
+  # policy before this pattern gets reused for staging/prod, or before any
+  # sensitive data is ever cached here. See docs/CACHING_LOGGING_TRACING.md.
   RedisSubnetGroup:
     Type: AWS::ElastiCache::SubnetGroup
     Properties:
@@ -44,7 +54,7 @@ Resources:
         Fn::Split:
           - ","
           - Fn::ImportValue:
-              !Sub "${App}-${Env}-PrivateSubnets"
+              !Sub "${App}-${Env}-PublicSubnets"
 
   # Redis Cluster (Single Node for cost efficiency)
   # Using cache.t3.micro which is free-tier eligible in some regions or very cheap

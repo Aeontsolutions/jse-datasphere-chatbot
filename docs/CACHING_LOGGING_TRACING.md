@@ -83,6 +83,18 @@ if that's the only environment that's been live so far.
    environment's CloudFormation stack Outputs for `RedisUrl`. If missing,
    copy `redis.yml.example` to the real `copilot/api/addons/redis.yml` before
    deploying.
+
+   ⚠️ **Needs a security/policy sanity check (open as of 2026-08-15):** this
+   app's environments only export `PublicSubnets`, not `PrivateSubnets`, so
+   `redis.yml.example` was changed to place the ElastiCache node in a
+   publicly-routed subnet (see the note inline in that file). It's not
+   internet-reachable in practice — no public IP is assigned, and the
+   addon's security group only allows traffic from the environment's own
+   security group — but putting a datastore in a public subnet at all is
+   worth a second opinion from whoever owns security/compliance here before
+   this pattern is reused for staging/prod, or before anything sensitive is
+   ever cached. First deployed to **dev** on 2026-08-15 as a follow-up to
+   #45.
 6. **Deploy**: `copilot svc deploy --name api --env staging --profile ats-jse-elroy` (repeat per environment).
 7. **Smoke test**: send the same `/fast_chat_v2` or `/chat/stream` query
    twice with no conversation history — the second call should be
