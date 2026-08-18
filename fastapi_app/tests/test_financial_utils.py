@@ -198,12 +198,23 @@ def test_query_data_with_filters(mock_bq_client):
     assert all(r.standard_item == "net_profit" for r in results)
 
 
-def test_query_data_no_filters_returns_all(mock_bq_client):
+def test_query_data_no_filters_returns_empty_without_bq_call(monkeypatch):
+    """When every filter is empty, skip BigQuery entirely rather than dumping the table (#69)."""
+    called = {"query": False}
+
+    class MockBQClient:
+        def query(self, *a, **k):
+            called["query"] = True
+            raise AssertionError("query_data should not hit BigQuery when all filters are empty")
+
+    monkeypatch.setattr(FinancialDataManager, "_initialize_bigquery_client", lambda self: None)
+    monkeypatch.setattr(FinancialDataManager, "load_metadata_from_bigquery", lambda self: None)
     manager = FinancialDataManager()
-    filters = FinancialDataFilters()
-    results = manager.query_data(filters)
-    assert isinstance(results, list)
-    assert len(results) > 0
+    manager.bq_client = MockBQClient()
+
+    results = manager.query_data(FinancialDataFilters())
+    assert results == []
+    assert called["query"] is False
 
 
 def test_bigquery_client_init_error(monkeypatch, caplog):
@@ -233,7 +244,7 @@ def test_query_data_query_error(monkeypatch, caplog):
     )
     manager = FinancialDataManager()
     with caplog.at_level(logging.ERROR):
-        filters = FinancialDataFilters()
+        filters = FinancialDataFilters(companies=["TestCo"])
         results = manager.query_data(filters)
         assert results == []
         assert any("Error querying BigQuery" in r.message for r in caplog.records)
@@ -255,7 +266,7 @@ def test_query_data_missing_data(monkeypatch, caplog):
     )
     manager = FinancialDataManager()
     with caplog.at_level(logging.INFO):
-        filters = FinancialDataFilters()
+        filters = FinancialDataFilters(companies=["TestCo"])
         results = manager.query_data(filters)
         assert results == []
         # Not always an error, but should log info about 0 records
@@ -317,13 +328,16 @@ def test_only_select_and_parameterized_queries(monkeypatch):
         companies=["TestCo"], symbols=["TCO"], years=["2024"], standard_items=["revenue"]
     )
     manager.query_data(filters)
-    # Test with no filters (should still be SELECT)
+    # Test with no filters (should skip BigQuery entirely, see #69)
     filters = FinancialDataFilters()
-    manager.query_data(filters)
+    results = manager.query_data(filters)
+    assert results == []
     # Ensure at least one parameterized query was checked
     assert param_checks, "No parameterized queries were checked."
     # Ensure all queries were SELECT
     assert all(q.strip().lower().startswith("select") for q in select_queries)
+    # The no-filters call above must not have reached BigQuery
+    assert len(select_queries) == 1
 
 
 # --- LLM PARSING TEST: Dedicated test for parse_user_query ---
@@ -551,7 +565,7 @@ def test_dividend_per_share_formats_as_currency(monkeypatch):
         item=1.8976,
     )
     manager = _manager_with_ratio_rows(monkeypatch, [row])
-    results = manager.query_data(FinancialDataFilters())
+    results = manager.query_data(FinancialDataFilters(standard_items=["dividend_per_share"]))
     assert len(results) == 1
     assert results[0].formatted_value == "J$1.90", results[0].formatted_value
 
@@ -560,7 +574,7 @@ def test_eps_formats_as_currency(monkeypatch):
     """EPS 2.85 → J$2.85 (ATS-325)."""
     row = _ratio_row(standard_item="eps", item=2.85)
     manager = _manager_with_ratio_rows(monkeypatch, [row])
-    results = manager.query_data(FinancialDataFilters())
+    results = manager.query_data(FinancialDataFilters(standard_items=["eps"]))
     assert results[0].formatted_value == "J$2.85", results[0].formatted_value
 
 
@@ -573,7 +587,7 @@ def test_dividend_payout_ratio_fraction_multiplied(monkeypatch):
         item=0.343,
     )
     manager = _manager_with_ratio_rows(monkeypatch, [row])
-    results = manager.query_data(FinancialDataFilters())
+    results = manager.query_data(FinancialDataFilters(standard_items=["dividend_payout_ratio"]))
     assert results[0].formatted_value == "34.30%", results[0].formatted_value
 
 
@@ -586,7 +600,7 @@ def test_dividend_payout_ratio_already_percent(monkeypatch):
         item=21.41,
     )
     manager = _manager_with_ratio_rows(monkeypatch, [row])
-    results = manager.query_data(FinancialDataFilters())
+    results = manager.query_data(FinancialDataFilters(standard_items=["dividend_payout_ratio"]))
     assert results[0].formatted_value == "21.41%", results[0].formatted_value
 
 
@@ -594,7 +608,7 @@ def test_current_ratio_no_percent_suffix(monkeypatch):
     """current_ratio 1.11 → '1.11' (plain decimal, no %) (ATS-325)."""
     row = _ratio_row(standard_item="current_ratio", item=1.11)
     manager = _manager_with_ratio_rows(monkeypatch, [row])
-    results = manager.query_data(FinancialDataFilters())
+    results = manager.query_data(FinancialDataFilters(standard_items=["current_ratio"]))
     assert results[0].formatted_value == "1.11", results[0].formatted_value
 
 
@@ -602,7 +616,7 @@ def test_debt_to_equity_ratio_no_percent_suffix(monkeypatch):
     """debt_to_equity_ratio 1.06 → '1.06' (plain decimal, no %) (ATS-325)."""
     row = _ratio_row(standard_item="debt_to_equity_ratio", item=1.06)
     manager = _manager_with_ratio_rows(monkeypatch, [row])
-    results = manager.query_data(FinancialDataFilters())
+    results = manager.query_data(FinancialDataFilters(standard_items=["debt_to_equity_ratio"]))
     assert results[0].formatted_value == "1.06", results[0].formatted_value
 
 
@@ -610,7 +624,7 @@ def test_unknown_ratio_keeps_percent_suffix(monkeypatch):
     """Unknown ratio items still get % appended (default behaviour preserved)."""
     row = _ratio_row(standard_item="some_other_ratio", item=0.75)
     manager = _manager_with_ratio_rows(monkeypatch, [row])
-    results = manager.query_data(FinancialDataFilters())
+    results = manager.query_data(FinancialDataFilters(standard_items=["some_other_ratio"]))
     assert results[0].formatted_value == "0.75%", results[0].formatted_value
 
 
@@ -620,7 +634,7 @@ def test_non_ratio_item_type_unaffected(monkeypatch):
         standard_item="revenue", item=1000.0, unit_multiplier=1000000.0, item_type="currency"
     )
     manager = _manager_with_ratio_rows(monkeypatch, [row])
-    results = manager.query_data(FinancialDataFilters())
+    results = manager.query_data(FinancialDataFilters(standard_items=["revenue"]))
     # 1000 * 1_000_000 = 1_000_000_000 → "1.00B" (hits the >= 1e9 branch)
     assert "B" in results[0].formatted_value, results[0].formatted_value
 
