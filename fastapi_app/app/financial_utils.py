@@ -902,9 +902,7 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
         if not self.bq_client:
             raise RuntimeError("BigQuery client not initialized")
 
-        if not (
-            filters.companies or filters.symbols or filters.years or filters.standard_items
-        ):
+        if not (filters.companies or filters.symbols or filters.years or filters.standard_items):
             logger.info(
                 "query_data: all filters empty, skipping BigQuery call to avoid a full-table scan"
             )
