@@ -902,6 +902,12 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
         if not self.bq_client:
             raise RuntimeError("BigQuery client not initialized")
 
+        if not (filters.companies or filters.symbols or filters.years or filters.standard_items):
+            logger.info(
+                "query_data: all filters empty, skipping BigQuery call to avoid a full-table scan"
+            )
+            return []
+
         start_time = time.time()
         query = f"SELECT Company, Symbol, CAST(Year AS STRING) as Year, standard_item, item, unit_multiplier, item_type, item_name FROM `{self.project_id}.{self.dataset}.{self.table}` WHERE 1=1"
         params = []
