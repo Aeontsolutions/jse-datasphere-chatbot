@@ -110,6 +110,63 @@ async def test_run_conversation_aborts_on_api_error():
 
 
 @pytest.mark.asyncio
+async def test_run_conversation_records_persona_actor_cost_on_turn():
+    """Persona-actor spend must land on the transcript, not vanish."""
+    persona = _persona(max_turns=5)
+    client = MagicMock()
+    client.send = AsyncMock(side_effect=[_client_result("a1"), _client_result("a2")])
+
+    from evals.persona_actor import PersonaTurn
+    actor = MagicMock()
+    actor.act = AsyncMock(
+        side_effect=[
+            PersonaTurn(utterance="q1", done=False, cost_usd=0.0004),
+            PersonaTurn(utterance="q2", done=True, done_reason="satisfied", cost_usd=0.0003),
+        ]
+    )
+
+    transcript = await run_conversation(
+        persona=persona,
+        replicate_index=0,
+        chat_client=client,
+        persona_actor=actor,
+        max_cost_usd=1.0,
+    )
+
+    assert transcript.turns[0].persona_actor_cost_usd == 0.0004
+    assert transcript.turns[1].persona_actor_cost_usd == 0.0003
+    # totals() must fold persona-actor cost into the conversation total
+    assert transcript.totals()["cost_usd"] == pytest.approx(0.001 + 0.001 + 0.0004 + 0.0003)
+
+
+@pytest.mark.asyncio
+async def test_run_conversation_per_convo_cost_cap_includes_persona_actor_cost():
+    """A conversation must not be able to dodge the cap by spending only on persona-actor calls."""
+    persona = _persona(max_turns=10)
+    cheap_chat = _client_result(cost=0.01)
+    client = MagicMock()
+    client.send = AsyncMock(return_value=cheap_chat)
+
+    from evals.persona_actor import PersonaTurn
+    actor = MagicMock()
+    actor.act = AsyncMock(
+        side_effect=[PersonaTurn(utterance=f"q{i}", done=False, cost_usd=0.06) for i in range(10)]
+    )
+
+    transcript = await run_conversation(
+        persona=persona,
+        replicate_index=0,
+        chat_client=client,
+        persona_actor=actor,
+        max_cost_usd=0.5,
+    )
+    # 0.07/turn -> cap trips well before 10 turns
+    assert transcript.termination.reason == "error"
+    assert "cost cap" in transcript.termination.error_message.lower()
+    assert len(transcript.turns) < 10
+
+
+@pytest.mark.asyncio
 async def test_run_conversation_respects_per_convo_cost_cap():
     persona = _persona(max_turns=10)
     expensive = _client_result(cost=0.6)
@@ -366,6 +423,68 @@ async def test_run_simulation_skip_ids_skips_matching():
 
     assert len(artifacts.conversations) == 1
     assert artifacts.conversations[0].transcript.conversation_id == "a__rep03"
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_stores_judge_cost_on_artifact():
+    """The judge's own Gemini spend must be attached to the artifact, not discarded."""
+    persona = _persona(max_turns=1).model_copy(update={"id": "a"})
+    from evals.persona_actor import PersonaTurn
+
+    actor = MagicMock()
+    actor.act = AsyncMock(return_value=PersonaTurn(utterance="q", done=True))
+    client = MagicMock()
+    client.send = AsyncMock(return_value=_client_result())
+
+    fake_judge = MagicMock()
+    judge_output = _fake_judge_output()
+    judge_output.cost_usd = 0.02
+    fake_judge.evaluate = AsyncMock(return_value=judge_output)
+
+    artifacts = await run_simulation(
+        personas=[persona],
+        replicates=1,
+        concurrency=1,
+        max_cost_usd_per_run=10.0,
+        max_cost_usd_per_conversation=1.0,
+        chat_client_factory=lambda _: client,
+        persona_actor=actor,
+        judge=fake_judge,
+    )
+
+    assert artifacts.conversations[0].judge_cost_usd == 0.02
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_run_level_cost_cap_includes_judge_cost():
+    """A run must not be able to dodge the run-level cap by spending only on judge calls."""
+    persona = _persona(max_turns=1)
+    cheap_chat = _client_result(cost=0.001)
+    client = MagicMock()
+    client.send = AsyncMock(return_value=cheap_chat)
+
+    from evals.persona_actor import PersonaTurn
+    actor = MagicMock()
+    actor.act = AsyncMock(return_value=PersonaTurn(utterance="q", done=True))
+
+    fake_judge = MagicMock()
+    expensive_judge_output = _fake_judge_output()
+    expensive_judge_output.cost_usd = 0.6
+    fake_judge.evaluate = AsyncMock(return_value=expensive_judge_output)
+
+    artifacts = await run_simulation(
+        personas=[persona],
+        replicates=10,
+        concurrency=1,
+        max_cost_usd_per_run=1.0,  # chat spend alone would allow all 10; judge spend must not
+        max_cost_usd_per_conversation=1.0,
+        chat_client_factory=lambda _: client,
+        persona_actor=actor,
+        judge=fake_judge,
+    )
+
+    assert artifacts.cost_capped is True
+    assert len(artifacts.conversations) < 10
 
 
 @pytest.mark.asyncio

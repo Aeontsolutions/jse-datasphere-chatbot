@@ -2,7 +2,8 @@
 
 import pytest
 
-from evals.cli import build_arg_parser, parse_args_to_overrides
+from evals.cli import build_arg_parser, financial_tool_coverage, parse_args_to_overrides
+from evals.persona import PersonaSpec
 
 
 def test_parser_accepts_all_documented_flags():
@@ -57,3 +58,39 @@ def test_resume_flag_defaults_to_none():
     parser = build_arg_parser()
     ns = parser.parse_args([])
     assert ns.resume_run_id is None
+
+
+# ---------------------------------------------------------------------------
+# financial_tool_coverage — surface how thinly a filtered persona set
+# exercises the financial DB tool, instead of leaving it a silent gap.
+# ---------------------------------------------------------------------------
+
+
+def _persona(endpoint: str, enable_financial_data: bool = True) -> PersonaSpec:
+    return PersonaSpec(
+        id=f"p_{endpoint}_{enable_financial_data}",
+        name="P",
+        category="positive",
+        endpoint=endpoint,
+        character="X",
+        goal="Y",
+        max_turns=3,
+        api_options={"enable_financial_data": enable_financial_data} if endpoint == "chat_stream" else {},
+    )
+
+
+def test_coverage_counts_fast_chat_v2_as_always_capable():
+    personas = [_persona("fast_chat_v2"), _persona("fast_chat_v2")]
+    assert financial_tool_coverage(personas) == (2, 2)
+
+
+def test_coverage_counts_chat_stream_only_when_financial_data_enabled():
+    personas = [
+        _persona("chat_stream", enable_financial_data=True),
+        _persona("chat_stream", enable_financial_data=False),
+    ]
+    assert financial_tool_coverage(personas) == (1, 2)
+
+
+def test_coverage_empty_list():
+    assert financial_tool_coverage([]) == (0, 0)

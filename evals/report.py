@@ -9,10 +9,44 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from evals.judge import JudgeOutput
+from evals.judge import DEFAULT_RUBRIC_PATH, JudgeOutput, load_rubric
+from evals.metrics import compute_weighted_verdict
 from evals.persona import PersonaSpec
 from evals.runner import ConversationArtifact, RunArtifacts
 from evals.transcript import ChatTurn, TerminationReason, Transcript
+
+_DIMENSION_FIELDS = (
+    "groundedness",
+    "factfulness",
+    "goal_completion",
+    "tool_use_appropriateness",
+    "coherence",
+    "persona_handling",
+)
+
+
+def _scores_dict(judge_output: JudgeOutput) -> dict[str, float | None]:
+    return {field: getattr(judge_output.scores, field).score for field in _DIMENSION_FIELDS}
+
+
+def _weighted_verdict_for(
+    judge_output: JudgeOutput, category: str, verdict_weights: dict[str, dict[str, float]]
+) -> tuple[str, float | None]:
+    weights = verdict_weights.get(category)
+    if not weights:
+        return "partial", None
+    return compute_weighted_verdict(_scores_dict(judge_output), weights)
+
+
+# Loaded once at import time, same default rubric the Judge itself uses.
+# judge_rubric.yaml's `verdict_weights` previously had no reader anywhere in
+# the codebase -- editing it had zero effect on scoring. This is what makes
+# it meaningful: an independent, deterministic verdict computed from the
+# documented weights, reported alongside (never in place of) the judge LLM's
+# own holistic verdict so disagreements are visible rather than silent.
+_DEFAULT_VERDICT_WEIGHTS: dict[str, dict[str, float]] = load_rubric(DEFAULT_RUBRIC_PATH).get(
+    "verdict_weights", {}
+)
 
 
 def write_run(
@@ -147,18 +181,30 @@ def _detect_replicates(artifacts: RunArtifacts) -> int:
 
 def _convo_payload(c: ConversationArtifact, persona: PersonaSpec | None) -> dict[str, Any]:
     t = c.transcript
+    totals = t.totals()  # "cost_usd" here is chatbot + persona-actor spend only
+    totals["chat_and_persona_cost_usd"] = totals["cost_usd"]
+    totals["judge_cost_usd"] = c.judge_cost_usd
+    totals["cost_usd"] = totals["chat_and_persona_cost_usd"] + c.judge_cost_usd
     payload = {
         "conversation_id": t.conversation_id,
         "persona": persona.model_dump() if persona else None,
         "endpoint": t.endpoint,
         "turns": [turn.model_dump() for turn in t.turns],
         "termination": t.termination.model_dump(),
-        "totals": t.totals(),
+        "totals": totals,
     }
     if c.judge_failed:
         payload["judge"] = {"judge_failed": True, "error": c.judge_error}
     elif c.judge_output is not None:
-        payload["judge"] = c.judge_output.model_dump()
+        judge_payload = c.judge_output.model_dump()
+        if persona is not None:
+            computed_verdict, weighted_score = _weighted_verdict_for(
+                c.judge_output, persona.category, _DEFAULT_VERDICT_WEIGHTS
+            )
+            judge_payload["computed_verdict"] = computed_verdict
+            judge_payload["computed_verdict_score"] = weighted_score
+            judge_payload["verdict_agreement"] = computed_verdict == c.judge_output.verdict
+        payload["judge"] = judge_payload
     else:
         payload["judge"] = None
     payload["errors"] = []
@@ -178,28 +224,35 @@ def _summarize(
     by_persona: dict[str, dict[str, Any]] = {}
     for p in personas:
         ps = [c for c in complete if c.transcript.persona_id == p.id]
-        by_persona[p.id] = _persona_stats(ps)
+        by_persona[p.id] = _persona_stats(ps, personas)
 
     incomplete_by_persona: dict[str, dict[str, Any]] = {}
     for p in personas:
         errs = [c for c in incomplete if c.transcript.persona_id == p.id]
         if errs:
-            incomplete_by_persona[p.id] = {"incomplete_count": len(errs)}
+            by_error_type: dict[str, int] = {}
+            for c in errs:
+                error_type = c.transcript.termination.error_type or "unknown"
+                by_error_type[error_type] = by_error_type.get(error_type, 0) + 1
+            incomplete_by_persona[p.id] = {
+                "incomplete_count": len(errs),
+                "by_error_type": by_error_type,
+            }
 
     by_endpoint = {
-        endpoint: _persona_stats([c for c in complete if c.transcript.endpoint == endpoint])
+        endpoint: _persona_stats([c for c in complete if c.transcript.endpoint == endpoint], personas)
         for endpoint in {c.transcript.endpoint for c in complete}
     }
 
     by_category = {
         cat: _persona_stats(
-            [c for c in complete if _category_for(c.transcript.persona_id, personas) == cat]
+            [c for c in complete if _category_for(c.transcript.persona_id, personas) == cat], personas
         )
         for cat in {p.category for p in personas}
     }
 
     incomplete_cost = sum(c.transcript.totals()["cost_usd"] for c in incomplete)
-    overall = _overall_stats(complete, len(incomplete), incomplete_cost)
+    overall = _overall_stats(complete, personas, len(incomplete), incomplete_cost)
 
     return {
         "run_id": run_id,
@@ -223,13 +276,35 @@ def _category_for(persona_id: str, personas: list[PersonaSpec]) -> str:
     return "unknown"
 
 
-def _persona_stats(convos: list[ConversationArtifact]) -> dict[str, Any]:
+def _verdict_agreement_rate(
+    judged: list[ConversationArtifact], category_by_id: dict[str, str]
+) -> float | None:
+    """Fraction of judged conversations where the LLM's holistic verdict
+    matches the deterministic weighted-rubric verdict. A low rate here means
+    either the judge is miscalibrated relative to the documented rubric, or
+    the rubric weights no longer reflect what actually matters -- worth
+    investigating either way."""
+    rated = []
+    for c in judged:
+        category = category_by_id.get(c.transcript.persona_id)
+        if category is None:
+            continue
+        computed_verdict, _ = _weighted_verdict_for(c.judge_output, category, _DEFAULT_VERDICT_WEIGHTS)
+        rated.append(computed_verdict == c.judge_output.verdict)
+    if not rated:
+        return None
+    return sum(rated) / len(rated)
+
+
+def _persona_stats(convos: list[ConversationArtifact], personas: list[PersonaSpec]) -> dict[str, Any]:
     if not convos:
         return {"count": 0}
 
     judged = [c for c in convos if c.judge_output is not None]
     if not judged:
         return {"count": len(convos), "judged_count": 0}
+
+    category_by_id = {p.id: p.category for p in personas}
 
     def dim(field: str) -> list[float]:
         out: list[float] = []
@@ -264,17 +339,24 @@ def _persona_stats(convos: list[ConversationArtifact]) -> dict[str, Any]:
     for c in judged:
         verdict_counts[c.judge_output.verdict] = verdict_counts.get(c.judge_output.verdict, 0) + 1
     out["verdict_counts"] = verdict_counts
+    out["verdict_agreement_rate"] = _verdict_agreement_rate(judged, category_by_id)
 
     out["mean_turns"] = statistics.mean(len(c.transcript.turns) for c in convos)
     out["mean_latency_ms"] = statistics.mean(c.transcript.totals()["latency_ms"] for c in convos)
-    out["total_cost_usd"] = sum(c.transcript.totals()["cost_usd"] for c in convos)
+    out["total_cost_usd"] = sum(c.transcript.totals()["cost_usd"] + c.judge_cost_usd for c in convos)
     return out
 
 
-def _overall_stats(convos: list[ConversationArtifact], incomplete_count: int = 0, incomplete_cost: float = 0.0) -> dict[str, Any]:
+def _overall_stats(
+    convos: list[ConversationArtifact],
+    personas: list[PersonaSpec],
+    incomplete_count: int = 0,
+    incomplete_cost: float = 0.0,
+) -> dict[str, Any]:
     if not convos:
         return {"incomplete_count": incomplete_count}
 
+    category_by_id = {p.id: p.category for p in personas}
     judged = [c for c in convos if c.judge_output is not None]
 
     def values(field: str) -> list[float]:
@@ -301,6 +383,7 @@ def _overall_stats(convos: list[ConversationArtifact], incomplete_count: int = 0
     for c in judged:
         verdict_counts[c.judge_output.verdict] = verdict_counts.get(c.judge_output.verdict, 0) + 1
     overall["verdict_counts"] = verdict_counts
+    overall["verdict_agreement_rate"] = _verdict_agreement_rate(judged, category_by_id)
 
     overall["judge_failed_count"] = sum(1 for c in convos if c.judge_failed)
     overall["incomplete_count"] = incomplete_count
@@ -308,5 +391,7 @@ def _overall_stats(convos: list[ConversationArtifact], incomplete_count: int = 0
     overall["mean_latency_ms"] = statistics.mean(
         c.transcript.totals()["latency_ms"] for c in convos
     )
-    overall["total_cost_usd"] = sum(c.transcript.totals()["cost_usd"] for c in convos) + incomplete_cost
+    overall["total_cost_usd"] = (
+        sum(c.transcript.totals()["cost_usd"] + c.judge_cost_usd for c in convos) + incomplete_cost
+    )
     return overall

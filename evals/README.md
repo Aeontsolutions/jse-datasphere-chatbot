@@ -82,15 +82,71 @@ for the full schema. The repo ships four examples to start from:
 `evals/config/judge_rubric.yaml` controls the prompt the judge sees;
 edit dimension descriptions to tune scoring without touching code.
 
+`judge_rubric.yaml`'s `verdict_weights` block is not just documentation —
+`report.py` uses it to compute an independent, deterministic
+`computed_verdict` per conversation from the six dimension scores, and flags
+`verdict_agreement` (whether it matches the judge LLM's own holistic
+`pass`/`fail`/`partial` call). Check `summary.json`'s `verdict_agreement_rate`
+after a run; a low rate means either the judge is drifting from the
+documented rubric or the rubric no longer reflects what actually matters —
+worth investigating either way, not just noise.
+
+## Cost accounting
+
+`max_cost_usd_per_run` and `max_cost_usd_per_conversation` (in
+`config/default.yaml`) bound **all** Gemini spend the eval suite generates:
+the chatbot-under-test's own reported cost, the persona actor's calls
+(one per turn), and the judge's calls (one per conversation) — not just the
+chatbot's. `summary.json`'s `total_cost_usd` is the true total for the same
+reason; per-conversation JSON breaks it out under `totals` as
+`chat_and_persona_cost_usd` + `judge_cost_usd`.
+
+## Judge calibration
+
+Unit tests (`test_judge.py`) only check that the judge produces well-formed
+output against mocked responses — nothing validates that its *scoring* is
+accurate, since there's no ground truth to compare against in a
+no-network test run. `tests/test_judge_calibration.py` is that ground
+truth: it runs the real judge against a hand-labeled obviously-grounded
+transcript and a hand-labeled obviously-hallucinated one, and asserts it
+lands in the expected bucket. It's skipped unless `GOOGLE_API_KEY` is set
+(costs a couple of real Gemini calls); run it explicitly after bumping
+`judge_model` or editing `judge_rubric.yaml`:
+
+```bash
+GOOGLE_API_KEY=... pytest tests/test_judge_calibration.py -v
+```
+
+## Endpoint coverage caveat
+
+13 of the 20 shipped personas hit `chat_stream`; only 7 hit `fast_chat_v2`.
+Running with `--endpoint chat_stream` for quick iteration therefore
+under-exercises the financial DB tool relative to a full, unfiltered run —
+the CLI prints a `NOTE:` line when a filtered persona selection is light on
+financial-tool coverage (see `financial_tool_coverage()` in `cli.py`). To
+directly verify financial tool calling on `/chat/stream`, send a metric
+query (e.g. "What was NCB revenue in 2023?") with `enable_financial_data:
+true` rather than relying on a `chat_stream`-filtered eval run.
+
+## Provenance caveat
+
+Nothing in this suite verifies which chatbot code is actually running at
+`--base-url` — that's on you. Before trusting a run's results, confirm the
+server process was started from the commit you think it was
+(`git -C <chatbot-checkout-dir> rev-parse HEAD`), and that there are no
+uncommitted local edits. `manifest.json`'s `git_sha` records the eval
+suite's own commit, not the chatbot server's.
+
 ## Tests
 
 ```bash
-pytest                                  # all unit tests (no network)
+pytest                                  # all unit tests (no network, run in CI)
 ```
 
 The CLI's `--persona` mode is the de-facto live integration test — it
 hits the real Gemini API and the real chatbot. Keep `--replicates 1`
-for quick iteration.
+for quick iteration. `tests/test_judge_calibration.py` is a second,
+narrower live check — see "Judge calibration" above.
 
 ## Layout
 

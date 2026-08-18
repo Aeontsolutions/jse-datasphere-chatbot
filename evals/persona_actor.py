@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from evals.metrics import estimate_gemini_cost_usd, usage_tokens_from_response
 from evals.persona import PersonaSpec
 
 
@@ -17,6 +18,9 @@ class PersonaTurn(BaseModel):
     utterance: str
     done: bool
     done_reason: str | None = None
+    cost_usd: float = 0.0
+    """Cost of the Gemini call that produced this turn. Not part of the LLM's
+    own JSON output -- set by PersonaActor.act() after parsing."""
 
 
 _SYSTEM_TEMPLATE = """You are role-playing a user interacting with a financial chatbot.
@@ -93,9 +97,13 @@ class PersonaActor:
             )
             try:
                 data = json.loads(response.text)
-                return PersonaTurn(**data)
+                data.pop("cost_usd", None)  # only ever set by us, never trust the LLM's JSON
+                turn = PersonaTurn(**data)
             except (json.JSONDecodeError, ValueError, TypeError):
                 continue
+            input_tokens, output_tokens = usage_tokens_from_response(response)
+            turn.cost_usd = estimate_gemini_cost_usd(self._model, input_tokens, output_tokens)
+            return turn
 
         raise RuntimeError(
             f"persona_malformed: persona {persona.id} returned unparseable JSON twice"

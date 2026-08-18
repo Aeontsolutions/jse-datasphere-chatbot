@@ -197,6 +197,7 @@ function renderOverview() {
       ${ov.judge_failed_count ? `· <span class="verdict-judgefailed">judge_failed: ${ov.judge_failed_count}</span>` : ""}
       ${ov.incomplete_count ? `· <span class="verdict-judgefailed">incomplete (infra-error): ${ov.incomplete_count}</span>` : ""}
     </p>
+    ${ov.verdict_agreement_rate != null ? `<p><strong>rubric agreement:</strong> ${(ov.verdict_agreement_rate * 100).toFixed(0)}% of judge verdicts match the weighted-rubric computed_verdict (see per-conversation "judge" block)</p>` : ""}
 
     <h3>Per-persona</h3>
     ${renderPersonaTable(s.by_persona)}
@@ -342,9 +343,18 @@ function renderJudge(j) {
   const notable = (j.notable_moments || []).map(m =>
     `<li>turn ${m.turn} (${m.type}): ${escapeHtml(m.note)}</li>`
   ).join("");
+  const agreementNote = j.computed_verdict == null ? "" : j.verdict_agreement
+    ? `<p class="verdict-pass">rubric cross-check agrees (computed_verdict: ${j.computed_verdict})</p>`
+    : `<p class="verdict-fail">rubric cross-check DISAGREES — weighted-rubric verdict is "${j.computed_verdict}"` +
+      `${j.computed_verdict_score != null ? ` (score ${(j.computed_verdict_score * 100).toFixed(0)}%)` : ""}</p>`;
+  const truncationNote = j.truncated_turn_count
+    ? `<p class="verdict-judgefailed">${j.truncated_turn_count} turn(s) had metadata too large to show the judge in full — groundedness on those turns is unverified, not confirmed.</p>`
+    : "";
   return `
     <h3 class="verdict-${j.verdict}">verdict: ${j.verdict}</h3>
     <p>${escapeHtml(j.verdict_reason || "")}</p>
+    ${agreementNote}
+    ${truncationNote}
     <table>
       <thead><tr><th>dimension</th><th>score</th><th>justification</th></tr></thead>
       <tbody>${scoreRows}</tbody>

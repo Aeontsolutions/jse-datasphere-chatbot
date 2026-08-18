@@ -51,6 +51,39 @@ def test_transcript_totals_computed():
     assert totals["cost_usd"] == pytest.approx(0.003)
 
 
+def test_transcript_totals_includes_persona_actor_cost():
+    """The persona actor's Gemini spend was previously invisible to totals()."""
+    turns = [
+        ChatTurn(
+            turn_index=0,
+            persona_utterance="q0",
+            chatbot_text="a0",
+            chatbot_metadata={},
+            latency_ms=1000.0,
+            cost_usd=0.001,
+            persona_actor_cost_usd=0.0002,
+        ),
+        ChatTurn(
+            turn_index=1,
+            persona_utterance="q1",
+            chatbot_text="a1",
+            chatbot_metadata={},
+            latency_ms=1000.0,
+            cost_usd=0.001,
+            persona_actor_cost_usd=None,  # e.g. usage_metadata unavailable
+        ),
+    ]
+    t = Transcript(
+        conversation_id="test__rep01",
+        persona_id="test",
+        replicate_index=0,
+        endpoint="fast_chat_v2",
+        turns=turns,
+        termination=TerminationReason(reason="done", at_turn=1),
+    )
+    assert t.totals()["cost_usd"] == pytest.approx(0.0022)
+
+
 def test_transcript_json_roundtrip():
     t = Transcript(
         conversation_id="x__rep01",

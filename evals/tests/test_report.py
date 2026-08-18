@@ -133,6 +133,143 @@ def test_manifest_captures_cost_cap_flag(tmp_path: Path):
     assert manifest["cost_capped"] is True
 
 
+# ---------------------------------------------------------------------------
+# Weighted-verdict cross-check + full cost accounting
+# ---------------------------------------------------------------------------
+
+
+def test_convo_payload_total_cost_includes_judge_cost(tmp_path: Path):
+    """total_cost_usd was previously silently undercounted -- judge spend is real."""
+    persona = _persona()
+    transcript = _transcript("p1", 0, cost=0.001)
+    judge_output = _judge()
+    judge_output.cost_usd = 0.02
+    artifacts = RunArtifacts(
+        conversations=[ConversationArtifact(transcript, judge_output, False, None, judge_cost_usd=0.02)],
+        cost_capped=False,
+    )
+    run_dir = write_run(
+        artifacts=artifacts,
+        personas=[persona],
+        config={},
+        run_id="r_cost1",
+        git_sha=None,
+        output_root=tmp_path,
+    )
+    convo = json.loads((run_dir / "conversations" / "p1__rep01.json").read_text())
+    assert convo["totals"]["judge_cost_usd"] == pytest.approx(0.02)
+    assert convo["totals"]["cost_usd"] == pytest.approx(0.021)
+
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["overall"]["total_cost_usd"] == pytest.approx(0.021)
+    assert summary["by_persona"]["p1"]["total_cost_usd"] == pytest.approx(0.021)
+
+
+def test_convo_payload_includes_computed_verdict_and_agreement(tmp_path: Path):
+    """judge_rubric.yaml's verdict_weights must actually drive something."""
+    persona = _persona()
+    # All dimensions score 5 -> weighted cross-check should compute "pass",
+    # matching the LLM's own "pass" verdict.
+    artifacts = RunArtifacts(
+        conversations=[ConversationArtifact(_transcript("p1", 0), _judge(score=5, verdict="pass"), False, None)],
+        cost_capped=False,
+    )
+    run_dir = write_run(
+        artifacts=artifacts,
+        personas=[persona],
+        config={},
+        run_id="r_verdict1",
+        git_sha=None,
+        output_root=tmp_path,
+    )
+    convo = json.loads((run_dir / "conversations" / "p1__rep01.json").read_text())
+    assert convo["judge"]["computed_verdict"] == "pass"
+    assert convo["judge"]["verdict_agreement"] is True
+
+
+def test_convo_payload_flags_verdict_disagreement(tmp_path: Path):
+    """LLM says 'pass' but every dimension scored 1 -> the weighted check must disagree."""
+    persona = _persona()
+    mismatched_judge = _judge(score=1, verdict="pass")
+    artifacts = RunArtifacts(
+        conversations=[ConversationArtifact(_transcript("p1", 0), mismatched_judge, False, None)],
+        cost_capped=False,
+    )
+    run_dir = write_run(
+        artifacts=artifacts,
+        personas=[persona],
+        config={},
+        run_id="r_verdict2",
+        git_sha=None,
+        output_root=tmp_path,
+    )
+    convo = json.loads((run_dir / "conversations" / "p1__rep01.json").read_text())
+    assert convo["judge"]["computed_verdict"] == "fail"
+    assert convo["judge"]["verdict_agreement"] is False
+
+
+def test_summary_reports_verdict_agreement_rate(tmp_path: Path):
+    persona = _persona()
+    artifacts = RunArtifacts(
+        conversations=[
+            ConversationArtifact(_transcript("p1", 0), _judge(score=5, verdict="pass"), False, None),
+            ConversationArtifact(_transcript("p1", 1), _judge(score=1, verdict="pass"), False, None),  # disagrees
+        ],
+        cost_capped=False,
+    )
+    run_dir = write_run(
+        artifacts=artifacts,
+        personas=[persona],
+        config={},
+        run_id="r_verdict3",
+        git_sha=None,
+        output_root=tmp_path,
+    )
+    summary = json.loads((run_dir / "summary.json").read_text())
+    assert summary["overall"]["verdict_agreement_rate"] == pytest.approx(0.5)
+    assert summary["by_persona"]["p1"]["verdict_agreement_rate"] == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Incomplete-conversation error_type breakdown
+# ---------------------------------------------------------------------------
+
+
+def test_incomplete_by_persona_breaks_down_by_error_type(tmp_path: Path):
+    """Distinguish infra flakiness (timeouts) from real bugs (cost cap, other errors)."""
+    persona = _persona()
+
+    def _err(rep: int, error_type: str) -> Transcript:
+        return Transcript(
+            conversation_id=f"p1__rep{rep + 1:02d}",
+            persona_id="p1",
+            replicate_index=rep,
+            endpoint="fast_chat_v2",
+            turns=[],
+            termination=TerminationReason(reason="error", at_turn=0, error_type=error_type, error_message="x"),
+        )
+
+    artifacts = RunArtifacts(
+        conversations=[
+            ConversationArtifact(_err(0, "ReadTimeout"), None, False, None),
+            ConversationArtifact(_err(1, "ReadTimeout"), None, False, None),
+            ConversationArtifact(_err(2, "CostCapExceeded"), None, False, None),
+        ],
+        cost_capped=False,
+    )
+    run_dir = write_run(
+        artifacts=artifacts,
+        personas=[persona],
+        config={},
+        run_id="r_errtype1",
+        git_sha=None,
+        output_root=tmp_path,
+    )
+    summary = json.loads((run_dir / "summary.json").read_text())
+    by_type = summary["incomplete_by_persona"]["p1"]["by_error_type"]
+    assert by_type == {"ReadTimeout": 2, "CostCapExceeded": 1}
+
+
 def test_conversation_json_inlines_persona_and_judge(tmp_path: Path):
     persona = _persona()
     artifacts = RunArtifacts(

@@ -9,8 +9,11 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field
 
+from evals.metrics import estimate_gemini_cost_usd, usage_tokens_from_response
 from evals.persona import PersonaSpec
 from evals.transcript import Transcript
+
+_METADATA_CHAR_LIMIT = 4000
 
 DEFAULT_RUBRIC_PATH = Path(__file__).parent / "config" / "judge_rubric.yaml"
 
@@ -52,9 +55,17 @@ class JudgeOutput(BaseModel):
     verdict: Literal["pass", "fail", "partial"]
     verdict_reason: str
     notable_moments: list[NotableMoment] = Field(default_factory=list)
+    cost_usd: float = 0.0
+    """Cost of the judge's Gemini call. Not part of the LLM's own JSON output --
+    set by Judge.evaluate() after parsing."""
+    truncated_turn_count: int = 0
+    """Number of turns whose chatbot_metadata was too large to show the judge
+    in full. Not part of the LLM's own JSON output -- set by Judge.evaluate()."""
 
 
-def _load_rubric(path: Path) -> dict[str, Any]:
+def load_rubric(path: Path) -> dict[str, Any]:
+    """Load judge_rubric.yaml. Public so report.py can reuse `verdict_weights`
+    for the weighted-verdict cross-check without re-implementing YAML loading."""
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
@@ -107,16 +118,32 @@ Output ONLY the JSON, no commentary.
 """
 
 
-def _format_transcript(transcript: Transcript) -> str:
+def _format_transcript(transcript: Transcript) -> tuple[str, list[int]]:
+    """Render the transcript for the judge prompt.
+
+    Returns (text, truncated_turn_indices). Turns whose metadata JSON exceeds
+    _METADATA_CHAR_LIMIT are cut but visibly marked -- both to the judge (so
+    it doesn't score groundedness against data it can't see) and to callers
+    (so report.py can surface how often this happens).
+    """
     lines = []
+    truncated_turns: list[int] = []
     for t in transcript.turns:
         lines.append(f"--- Turn {t.turn_index} ---")
         lines.append(f"USER: {t.persona_utterance}")
         lines.append(f"BOT TEXT: {t.chatbot_text}")
-        lines.append(
-            f"BOT METADATA (sources, tools, filters):\n{json.dumps(t.chatbot_metadata, indent=2)[:4000]}"
-        )
-    return "\n".join(lines)
+        metadata_json = json.dumps(t.chatbot_metadata, indent=2)
+        if len(metadata_json) > _METADATA_CHAR_LIMIT:
+            omitted = len(metadata_json) - _METADATA_CHAR_LIMIT
+            metadata_json = (
+                f"{metadata_json[:_METADATA_CHAR_LIMIT]}\n"
+                f"...[TRUNCATED: {omitted} chars omitted -- do not assume claims "
+                f"beyond this point are unsupported, but treat groundedness here "
+                f"as unverifiable rather than confirmed]"
+            )
+            truncated_turns.append(t.turn_index)
+        lines.append(f"BOT METADATA (sources, tools, filters):\n{metadata_json}")
+    return "\n".join(lines), truncated_turns
 
 
 def _format_facts(facts: list[str]) -> str:
@@ -146,7 +173,7 @@ class Judge:
         self._client = client
         self._model = model
         self._temperature = temperature
-        self._rubric = _load_rubric(rubric_path or DEFAULT_RUBRIC_PATH)
+        self._rubric = load_rubric(rubric_path or DEFAULT_RUBRIC_PATH)
 
     async def evaluate(
         self,
@@ -154,6 +181,7 @@ class Judge:
         transcript: Transcript,
     ) -> JudgeOutput:
         totals = transcript.totals()
+        transcript_block, truncated_turns = _format_transcript(transcript)
         prompt = _PROMPT_TEMPLATE.format(
             persona_id=persona.id,
             persona_category=persona.category,
@@ -165,7 +193,7 @@ class Judge:
             termination=transcript.termination.reason,
             total_latency_ms=int(totals["latency_ms"]),
             total_cost_usd=round(totals["cost_usd"], 6),
-            transcript_block=_format_transcript(transcript),
+            transcript_block=transcript_block,
             rubric_block=_format_rubric(self._rubric),
         )
 
@@ -180,9 +208,15 @@ class Judge:
             )
             try:
                 data = json.loads(response.text)
-                return JudgeOutput(**data)
+                data.pop("cost_usd", None)  # only ever set by us, never trust the LLM's JSON
+                data.pop("truncated_turn_count", None)
+                output = JudgeOutput(**data)
             except (json.JSONDecodeError, ValueError, TypeError):
                 continue
+            input_tokens, output_tokens = usage_tokens_from_response(response)
+            output.cost_usd = estimate_gemini_cost_usd(self._model, input_tokens, output_tokens)
+            output.truncated_turn_count = len(truncated_turns)
+            return output
 
         raise RuntimeError(
             f"judge_failed: conversation {transcript.conversation_id} judge returned unparseable JSON twice"
