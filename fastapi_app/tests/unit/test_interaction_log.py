@@ -204,3 +204,58 @@ def test_build_row_keys_match_declared_schema():
     produced = set(_row(sources=[]).keys())
     # `environment` is stamped in log(), not build_row()
     assert produced == declared - {"environment"}
+
+
+# ---------------------------------------------------------------------------
+# Generation-outcome columns (issue #72)
+#
+# finish_reason / truncated / thinking_tokens exist in INTERACTIONS_SCHEMA but
+# nothing wrote them, so a MAX_TOKENS stop was indistinguishable from a clean
+# one in BigQuery. total_tokens was recomputed as input + output, which also
+# discarded the thinking spend that caused the truncation.
+# ---------------------------------------------------------------------------
+
+
+def _row(**kwargs):
+    base = {
+        "endpoint": "chat_stream",
+        "query": "best performing stock for 2026",
+        "response": "As a financial analyst, I cannot",
+        "timestamp": "2026-08-24T17:07:56Z",
+    }
+    base.update(kwargs)
+    return InteractionLogger.build_row(**base)
+
+
+def test_build_row_records_finish_reason():
+    assert _row(finish_reason="MAX_TOKENS")["finish_reason"] == "MAX_TOKENS"
+
+
+def test_build_row_marks_max_tokens_as_truncated():
+    assert _row(finish_reason="MAX_TOKENS")["truncated"] is True
+
+
+def test_build_row_marks_normal_stop_as_not_truncated():
+    assert _row(finish_reason="STOP")["truncated"] is False
+
+
+def test_build_row_truncated_is_none_when_finish_reason_unknown():
+    """Null must keep meaning 'unknown', never 'not truncated'."""
+    row = _row()
+    assert row["finish_reason"] is None
+    assert row["truncated"] is None
+
+
+def test_build_row_records_thinking_tokens():
+    assert _row(thinking_tokens=243)["thinking_tokens"] == 243
+
+
+def test_build_row_total_tokens_prefers_reported_total():
+    """The API total includes thinking; input + output alone hides it."""
+    row = _row(input_tokens=392, output_tokens=9, thinking_tokens=243, total_tokens=644)
+    assert row["total_tokens"] == 644
+
+
+def test_build_row_total_tokens_falls_back_to_sum():
+    row = _row(input_tokens=100, output_tokens=50)
+    assert row["total_tokens"] == 150

@@ -358,6 +358,9 @@ class PhaseCost(BaseModel):
     input_tokens: int = Field(default=0, description="Number of input tokens")
     output_tokens: int = Field(default=0, description="Number of output tokens")
     cached_tokens: int = Field(default=0, description="Number of cached tokens")
+    thinking_tokens: int = Field(
+        default=0, description="Reasoning tokens, billed as output and counted against the cap"
+    )
     input_cost_usd: float = Field(default=0.0, description="Cost for input tokens in USD")
     output_cost_usd: float = Field(default=0.0, description="Cost for output tokens in USD")
     total_cost_usd: float = Field(default=0.0, description="Total cost for this phase in USD")
@@ -374,6 +377,9 @@ class CostSummary(BaseModel):
     total_input_tokens: int = Field(default=0, description="Total input tokens across all phases")
     total_output_tokens: int = Field(default=0, description="Total output tokens across all phases")
     total_cached_tokens: int = Field(default=0, description="Total cached tokens across all phases")
+    total_thinking_tokens: int = Field(
+        default=0, description="Total reasoning tokens across all phases"
+    )
     total_cost_usd: float = Field(default=0.0, description="Total cost in USD across all phases")
     phases: List[PhaseCost] = Field(default_factory=list, description="Cost breakdown by phase")
 

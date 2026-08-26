@@ -1073,6 +1073,7 @@ async def chat_stream(
             )
 
         cost_summary = response.cost_summary
+        thinking_tokens = cost_summary.total_thinking_tokens if cost_summary else None
         schedule_log(
             response=response.response,
             cache_hit=False,
@@ -1081,6 +1082,17 @@ async def chat_stream(
             record_count=response.record_count,
             input_tokens=cost_summary.total_input_tokens if cost_summary else 0,
             output_tokens=cost_summary.total_output_tokens if cost_summary else 0,
+            thinking_tokens=thinking_tokens,
+            # Thinking is billed as output but reported separately, so the real
+            # total is input + visible output + thinking (issue #72).
+            total_tokens=(
+                cost_summary.total_input_tokens
+                + cost_summary.total_output_tokens
+                + cost_summary.total_thinking_tokens
+                if cost_summary
+                else None
+            ),
+            finish_reason=result.get("finish_reason"),
             cost_usd=cost_summary.total_cost_usd if cost_summary else 0.0,
             phase_costs=[p.phase for p in cost_summary.phases] if cost_summary else None,
             sources=response.sources,
