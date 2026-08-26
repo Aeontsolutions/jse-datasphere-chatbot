@@ -6,6 +6,7 @@ Utility scripts for development, testing, and maintenance.
 
 - **run_server.py** - Runs the app locally (`uvicorn app.main:app`)
 - **run_eval.py** - Runs the persona-driven eval suite against `/chat/stream` and `/fast_chat_v2`
+- **check_eval_gate.py** - Gates a deploy on an eval run vs. a checked-in baseline (see `docs/CI_CD_DEPLOY_PIPELINE.md`)
 - **rebuild_metadata.py** - Rebuilds document metadata from S3 bucket
 - **run_metadata_rebuild.py** - Runner script for metadata rebuild
 - **find_unmapped_codes.py** - Identifies unmapped company codes
