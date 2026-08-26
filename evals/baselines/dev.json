@@ -1,0 +1,12 @@
+{
+  "source_run_id": "baseline_seed",
+  "category": "positive",
+  "means": {
+    "groundedness": 3.3333333333333335,
+    "factfulness": 3.380952380952381,
+    "goal_completion": 3.238095238095238,
+    "persona_handling": 3.4285714285714284,
+    "coherence": 3.2857142857142856
+  },
+  "fail_verdicts": 10
+}

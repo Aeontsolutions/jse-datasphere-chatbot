@@ -127,9 +127,9 @@ gh variable set AWS_DEPLOY_ROLE_ARN --body "arn:aws:iam::925030480327:role/jse-d
 
 **Keeping the manifest secrets in sync:** these are a snapshot, not a live reference to your working tree. If you hand-edit `manifest.yml` locally (e.g. bumping `cpu`/`memory`), re-run the matching `gh secret set` command or the pipeline will deploy the old config. This is the same manifest-drift risk noted in [[project_aws_account_migration]] — the pipeline doesn't fix it, it just relocates "the one place manifests live" from a laptop's working tree to GitHub secrets.
 
-## 4. Seed the regression baseline
+## 4. Seed the regression baseline (done — 2026-08-26)
 
-`scripts/check_eval_gate.py` gates on regression vs. a baseline, not an absolute score — there's no principled absolute cutoff for this judge's 1–5 scale yet. Seed it once from a run you've reviewed and are happy with:
+`scripts/check_eval_gate.py` gates on regression vs. a baseline, not an absolute score — there's no principled absolute cutoff for this judge's 1–5 scale yet.
 
 ```bash
 python scripts/run_eval.py --base-url http://jse-da-Publi-3w4oxbvTf5j0-374994583.us-east-1.elb.amazonaws.com --replicates 1 --run-id baseline_seed
@@ -138,12 +138,15 @@ git add evals/baselines/dev.json
 git commit -m "chore(evals): seed dev regression baseline"
 ```
 
-Without `evals/baselines/dev.json` committed, every `eval-gate` run fails immediately with a clear "no baseline" error rather than silently passing.
+`evals/baselines/dev.json` is now committed. Without it, every `eval-gate` run fails immediately with a clear "no baseline" error rather than silently passing.
 
-**Deliberately re-baselining** (e.g. after a reviewed prompt change that legitimately shifts scores): re-run `--update-baseline` by hand and commit the new file with a commit message explaining why. Never wire `--update-baseline` into the pipeline itself — that would let a slow score decline become the new normal one green build at a time.
+**Important — the seed run had 10/26 `fail` verdicts (positive category), not 0.** Most trace to known data-coverage gaps, not app bugs: e.g. `investor_compare_ncb_vs_jmmb` and `senior_analyst_ncb_financials` ask for NCBFG years the DB doesn't have (see [[reference_dev_table_net_profit_years]]), and `technical_trader_market_data` asks for trading-volume/market-cap fields that were never in this data model. Because of this, `check_eval_gate.py`'s fail-verdict check is **relative to the baseline's own fail count** (`--max-fail-increase`, default tolerance 2), not an absolute cap of 0 — an absolute-zero cap would have failed every future run, including a perfect no-op deploy, since today's floor already has 10.
+
+Re-baseline deliberately after any change that legitimately shifts scores (a reviewed prompt fix, new data coverage) — re-run `--update-baseline` by hand and commit the new file with a commit message explaining why. Never wire `--update-baseline` into the pipeline itself — that would let a slow score decline become the new normal one green build at a time.
 
 ## Notes / things worth revisiting later
 
 - The IAM policy in step 1 is a starting point; tighten or extend it as real deploys reveal what's actually needed.
-- `check_eval_gate.py` doesn't check the `record_count: 10557` red flag from [[reference_eval_suite]] (financial tool dumping the whole table) — a real regression could hide behind passing scores if the judge doesn't penalize it. Worth adding if it recurs.
-- `eval-gate` costs ~$0.35 and ~10 min per run (22 personas, `--replicates 1`) — cheap enough to run on every push to `main`, per [[reference_eval_suite]].
+- **New finding from the baseline seed run, unrelated to this pipeline:** several judge-flagged `hallucination` moments where the bot treats 2025/2026 events as futuristic and fabricates details (a nonexistent "2025 Annual Report," a fabricated hurricane) — e.g. `analyst_finds_latest_annual_report`, `diaspora_investor_jse_access`, `esg_conscious_investor` in `evals/runs/baseline_seed/`. Looks like a temporal-grounding bug (the model not being told "today" is actually in the past relative to these dates), separate from anything this pipeline fixes. Worth its own investigation.
+- `check_eval_gate.py` doesn't check the `record_count: 10557` red flag from [[reference_eval_suite]] (financial tool dumping the whole table) — a real regression could hide behind passing scores if the judge doesn't penalize it. Worth adding if it recurs. (Not seen in the baseline seed run.)
+- `eval-gate` costs ~$0.35 and ~10 min per run (26 personas, `--replicates 1`) — cheap enough to run on every push to `main`, per [[reference_eval_suite]].

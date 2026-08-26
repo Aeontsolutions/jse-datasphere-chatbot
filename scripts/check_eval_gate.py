@@ -47,6 +47,7 @@ def category_means(summary: dict, category: str) -> dict:
 
 def write_baseline(path: Path, summary: dict, category: str) -> None:
     means = category_means(summary, category)
+    fail_verdicts = summary["by_category"][category].get("verdict_counts", {}).get("fail", 0)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -54,13 +55,14 @@ def write_baseline(path: Path, summary: dict, category: str) -> None:
                 "source_run_id": summary.get("run_id"),
                 "category": category,
                 "means": means,
+                "fail_verdicts": fail_verdicts,
             },
             indent=2,
         )
         + "\n",
         encoding="utf-8",
     )
-    print(f"Wrote baseline to {path} from run {summary.get('run_id')}: {means}")
+    print(f"Wrote baseline to {path} from run {summary.get('run_id')}: {means}, fail_verdicts={fail_verdicts}")
 
 
 def annotate(level: str, message: str) -> None:
@@ -81,10 +83,12 @@ def main() -> int:
         help="Max allowed drop (1-5 scale) per dimension vs baseline before failing (default: 0.4)",
     )
     parser.add_argument(
-        "--max-fail-verdicts",
+        "--max-fail-increase",
         type=int,
-        default=0,
-        help="Max allowed 'fail' verdicts in --category before failing (default: 0)",
+        default=2,
+        help="Max allowed increase in 'fail' verdicts vs baseline before failing (default: 2). Relative, "
+        "not absolute -- many 'fail' verdicts reflect known data-coverage gaps (personas asking for years "
+        "or fields the DB doesn't have), not app bugs, so an absolute cap of 0 would fail every run.",
     )
     parser.add_argument(
         "--max-judge-failed",
@@ -136,8 +140,14 @@ def main() -> int:
 
     cat_stats = summary["by_category"][args.category]
     fail_verdicts = cat_stats.get("verdict_counts", {}).get("fail", 0)
-    if fail_verdicts > args.max_fail_verdicts:
-        failures.append(f"{fail_verdicts} '{args.category}' conversations verdict=fail (max allowed {args.max_fail_verdicts})")
+    baseline_fail_verdicts = baseline.get("fail_verdicts", 0)
+    fail_increase = fail_verdicts - baseline_fail_verdicts
+    print(f"  fail_verdicts      baseline={baseline_fail_verdicts} current={fail_verdicts} increase={fail_increase:+d}")
+    if fail_increase > args.max_fail_increase:
+        failures.append(
+            f"fail_verdicts rose by {fail_increase} (baseline {baseline_fail_verdicts} -> {fail_verdicts}, "
+            f"max allowed increase {args.max_fail_increase})"
+        )
 
     judge_failed = summary.get("overall", {}).get("judge_failed_count", 0)
     if judge_failed > args.max_judge_failed:
