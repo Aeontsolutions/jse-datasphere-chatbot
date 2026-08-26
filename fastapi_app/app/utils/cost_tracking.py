@@ -87,6 +87,10 @@ class TokenUsage:
     output_tokens: int = 0
     cached_tokens: int = 0
     total_tokens: int = 0
+    # Billed as output and counted against max_output_tokens, but reported
+    # separately from candidates_token_count — so a call can exhaust its budget
+    # on thinking and return almost no visible text (issue #72).
+    thinking_tokens: int = 0
 
     @classmethod
     def from_response(cls, response: Any) -> "TokenUsage":
@@ -107,12 +111,14 @@ class TokenUsage:
         output_tokens = getattr(metadata, "candidates_token_count", 0) or 0
         cached_tokens = getattr(metadata, "cached_content_token_count", 0) or 0
         total_tokens = getattr(metadata, "total_token_count", 0) or 0
+        thinking_tokens = getattr(metadata, "thoughts_token_count", 0) or 0
 
         return cls(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cached_tokens=cached_tokens,
             total_tokens=total_tokens or (input_tokens + output_tokens),
+            thinking_tokens=thinking_tokens,
         )
 
 

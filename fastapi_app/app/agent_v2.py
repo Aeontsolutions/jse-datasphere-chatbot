@@ -13,6 +13,7 @@ Architecture:
 """
 
 import asyncio
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -80,7 +81,52 @@ SYSTEM_PROMPT_NO_SEARCH = SYSTEM_PROMPT.replace(
 )
 
 # Model used for the cheap route + refusal calls (Phase A).
-ROUTER_MODEL = "gemini-2.5-flash"
+# Router/refusal calls run on a small output budget, so the model must not spend
+# that budget thinking. Gemini 2.5 honours thinking_budget=0; Gemini 3.x ignores
+# it (it uses thinking_level, whose lowest supported value still spends ~250
+# tokens), which is why the router stays pinned to 2.5 for now. Issue #72 has
+# the measurements behind this.
+DEFAULT_ROUTER_MODEL = "gemini-2.5-flash"
+
+# Budget shared between thinking and visible output on the refusal call. The
+# original 256 was exhausted by thinking alone, truncating the answer mid-word.
+REFUSAL_MAX_OUTPUT_TOKENS = 1024
+ROUTER_MAX_OUTPUT_TOKENS = 256
+
+# Thinking disabled outright: the router emits one word and a refusal is one or
+# two sentences. Neither needs deliberation, and both paid for it in truncations.
+NO_THINKING = types.ThinkingConfig(thinking_budget=0)
+
+
+def resolve_router_model() -> str:
+    """Router model, overridable per environment for trialling a candidate.
+
+    Set ROUTER_MODEL_NAME to pin a different model without a code change. Any
+    replacement must support disabling thinking, or it will reintroduce the
+    truncation this guards against.
+    """
+    return os.getenv("ROUTER_MODEL_NAME", "").strip() or DEFAULT_ROUTER_MODEL
+
+
+def extract_finish_reason(response: Any) -> Optional[str]:
+    """Bare finish-reason name from a Gemini response, or None if unavailable.
+
+    The SDK yields an enum whose str() is 'FinishReason.MAX_TOKENS', so prefer
+    .name. Never raises: this feeds logging, which must not break a request.
+    """
+    try:
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return None
+        reason = getattr(candidates[0], "finish_reason", None)
+        if reason is None:
+            return None
+        return getattr(reason, "name", None) or str(reason).rsplit(".", 1)[-1]
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+ROUTER_MODEL = resolve_router_model()
 
 # Phase-A step 1 — ROUTE: a plain-text 2-way classifier (no tools, no grounding).
 # Every query answers via Gemini 2.5 Pro + Google Search grounding; the router's
@@ -142,6 +188,7 @@ class AgentV2:
         self.client = get_genai_client()
         self.model_name = model_name
         self._phase_costs: List[PhaseCost] = []
+        self._finish_reason: Optional[str] = None
 
     # --------------------------------------------------------------------------
     # Cost Tracking
@@ -150,6 +197,7 @@ class AgentV2:
     def _reset_cost_tracking(self) -> None:
         """Reset cost tracking for a new request."""
         self._phase_costs = []
+        self._finish_reason = None
 
     def _add_phase_cost(
         self,
@@ -161,6 +209,7 @@ class AgentV2:
         input_cost: float,
         output_cost: float,
         total_cost: float,
+        thinking_tokens: int = 0,
     ) -> None:
         """Add a phase cost to tracking."""
         self._phase_costs.append(
@@ -170,6 +219,7 @@ class AgentV2:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cached_tokens=cached_tokens,
+                thinking_tokens=thinking_tokens,
                 input_cost_usd=input_cost,
                 output_cost_usd=output_cost,
                 total_cost_usd=total_cost,
@@ -182,6 +232,7 @@ class AgentV2:
             total_input_tokens=sum(p.input_tokens for p in self._phase_costs),
             total_output_tokens=sum(p.output_tokens for p in self._phase_costs),
             total_cached_tokens=sum(p.cached_tokens for p in self._phase_costs),
+            total_thinking_tokens=sum(p.thinking_tokens for p in self._phase_costs),
             total_cost_usd=sum(p.total_cost_usd for p in self._phase_costs),
             phases=self._phase_costs.copy(),
         )
@@ -218,6 +269,7 @@ class AgentV2:
             input_cost=cost.input_cost,
             output_cost=cost.output_cost,
             total_cost=cost.total_cost,
+            thinking_tokens=cost.token_usage.thinking_tokens,
         )
 
     # --------------------------------------------------------------------------
@@ -433,7 +485,8 @@ class AgentV2:
                 config=types.GenerateContentConfig(
                     system_instruction=QUERY_ROUTER_PROMPT,
                     temperature=0.0,
-                    max_output_tokens=256,
+                    max_output_tokens=ROUTER_MAX_OUTPUT_TOKENS,
+                    thinking_config=NO_THINKING,
                 ),
             )
             self._track_cost(route, "routing", model=ROUTER_MODEL)
@@ -454,11 +507,13 @@ class AgentV2:
                 config=types.GenerateContentConfig(
                     system_instruction=REFUSAL_FLASH_PROMPT,
                     temperature=0.1,
-                    max_output_tokens=256,
+                    max_output_tokens=REFUSAL_MAX_OUTPUT_TOKENS,
+                    thinking_config=NO_THINKING,
                     tools=None,
                 ),
             )
             self._track_cost(refusal, "refusal", model=ROUTER_MODEL)
+            self._finish_reason = extract_finish_reason(refusal)
 
             response_text = (refusal.text or "").strip() or (
                 "I can only assist with JSE and Jamaican financial topics. "
@@ -486,6 +541,7 @@ class AgentV2:
                 "suggestions": None,
                 "conversation_history": updated_history,
                 "warnings": None,
+                "finish_reason": self._finish_reason,
                 "cost_summary": self._build_cost_summary(),
             }
 
@@ -572,6 +628,7 @@ class AgentV2:
 
             # Track cost
             self._track_cost(response, "generation")
+            self._finish_reason = extract_finish_reason(response)
 
             # Extract response text
             response_text = response.text if response.text else ""
@@ -613,6 +670,7 @@ class AgentV2:
                 "suggestions": None,  # Could be extracted from response if needed
                 "conversation_history": updated_history,
                 "warnings": None,
+                "finish_reason": self._finish_reason,
                 "cost_summary": self._build_cost_summary(),
             }
 
@@ -641,5 +699,6 @@ class AgentV2:
                 "suggestions": None,
                 "conversation_history": updated_history[-20:],
                 "warnings": [f"Error: {str(e)}"],
+                "finish_reason": self._finish_reason,
                 "cost_summary": self._build_cost_summary(),
             }

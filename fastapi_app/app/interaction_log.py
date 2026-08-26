@@ -40,6 +40,7 @@ INTERACTIONS_SCHEMA = [
     bigquery.SchemaField("input_tokens", "INTEGER", mode="NULLABLE"),
     bigquery.SchemaField("output_tokens", "INTEGER", mode="NULLABLE"),
     bigquery.SchemaField("total_tokens", "INTEGER", mode="NULLABLE"),
+    bigquery.SchemaField("thinking_tokens", "INTEGER", mode="NULLABLE"),
     bigquery.SchemaField("cost_usd", "FLOAT", mode="NULLABLE"),
     bigquery.SchemaField("phase_costs_json", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("latency_ms", "FLOAT", mode="NULLABLE"),
@@ -48,6 +49,10 @@ INTERACTIONS_SCHEMA = [
     bigquery.SchemaField("record_count", "INTEGER", mode="NULLABLE"),
     bigquery.SchemaField("success", "BOOLEAN", mode="REQUIRED"),
     bigquery.SchemaField("error_message", "STRING", mode="NULLABLE"),
+    # How generation actually ended. `success` only reports whether the request
+    # threw, so a MAX_TOKENS stop reads as a clean success without these.
+    bigquery.SchemaField("finish_reason", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("truncated", "BOOLEAN", mode="NULLABLE"),
     # Provenance returned to the caller. `source_count` is denormalised on
     # purpose: "what share of answers cited nothing" is the grounding-failure
     # signal, and it should not require an UNNEST to ask.
@@ -137,6 +142,9 @@ class InteractionLogger:
         model: Optional[str] = None,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        thinking_tokens: Optional[int] = None,
+        total_tokens: Optional[int] = None,
+        finish_reason: Optional[str] = None,
         cost_usd: float = 0.0,
         phase_costs: Optional[Any] = None,
         latency_ms: Optional[float] = None,
@@ -166,7 +174,18 @@ class InteractionLogger:
             "model": model,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "total_tokens": (input_tokens or 0) + (output_tokens or 0),
+            "thinking_tokens": thinking_tokens,
+            # Prefer the total the API reported: it includes thinking tokens,
+            # which input + output alone silently drops (issue #72).
+            "total_tokens": (
+                total_tokens
+                if total_tokens is not None
+                else (input_tokens or 0) + (output_tokens or 0)
+            ),
+            "finish_reason": finish_reason,
+            # None means "the model did not tell us", which is not the same as
+            # "not truncated" — keep the three states distinguishable.
+            "truncated": (finish_reason == "MAX_TOKENS" if finish_reason else None),
             "cost_usd": cost_usd,
             "phase_costs_json": json.dumps(phase_costs, default=str) if phase_costs else None,
             "latency_ms": latency_ms,

@@ -274,3 +274,25 @@ class TestCostTrackingConfig:
         assert config.gemini_flash_output_price == DEFAULT_FLASH_OUTPUT_PRICE
         assert config.gemini_pro_input_price == DEFAULT_PRO_INPUT_PRICE
         assert config.gemini_pro_output_price == DEFAULT_PRO_OUTPUT_PRICE
+
+
+@pytest.mark.unit
+class TestThinkingTokens:
+    """Thinking tokens are billed as output and count against max_output_tokens,
+    but nothing read them — see issue #72."""
+
+    def test_from_response_captures_thinking_tokens(self):
+        resp = Mock()
+        resp.usage_metadata = Mock()
+        resp.usage_metadata.prompt_token_count = 392
+        resp.usage_metadata.candidates_token_count = 9
+        resp.usage_metadata.cached_content_token_count = 0
+        resp.usage_metadata.total_token_count = 644
+        resp.usage_metadata.thoughts_token_count = 243
+
+        usage = TokenUsage.from_response(resp)
+        assert usage.thinking_tokens == 243
+        assert usage.total_tokens == 644
+
+    def test_thinking_tokens_default_zero_when_absent(self):
+        assert TokenUsage().thinking_tokens == 0
