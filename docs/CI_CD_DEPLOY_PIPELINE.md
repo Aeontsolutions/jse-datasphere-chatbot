@@ -68,13 +68,25 @@ cat > /tmp/gha-deploy-policy.json <<'EOF'
         "ecs:DescribeTaskDefinition", "ecs:DeregisterTaskDefinition", "ecs:ListTasks",
         "ecs:DescribeTasks", "ecs:TagResource"
       ], "Resource": "*", "Condition": { "StringLike": { "ecs:cluster": "arn:aws:ecs:us-east-1:925030480327:cluster/jse-datasphere-chatbot-*" } } },
-    { "Sid": "SSMSecrets", "Effect": "Allow", "Action": ["ssm:GetParameter", "ssm:GetParameters"],
-      "Resource": "arn:aws:ssm:us-east-1:925030480327:parameter/copilot/jse-datasphere-chatbot/*" },
+    { "Sid": "SSMSecrets", "Effect": "Allow", "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
+      "Resource": [
+        "arn:aws:ssm:us-east-1:925030480327:parameter/copilot/jse-datasphere-chatbot/*",
+        "arn:aws:ssm:us-east-1:925030480327:parameter/copilot/applications/jse-datasphere-chatbot*"
+      ] },
     { "Sid": "Logs", "Effect": "Allow", "Action": [
         "logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:DescribeLogGroups", "logs:TagResource"
       ], "Resource": "arn:aws:logs:us-east-1:925030480327:log-group:/copilot/jse-datasphere-chatbot-*" },
     { "Sid": "PassRole", "Effect": "Allow", "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::925030480327:role/jse-datasphere-chatbot-*" }
+      "Resource": "arn:aws:iam::925030480327:role/jse-datasphere-chatbot-*" },
+    { "Sid": "AssumeCopilotEnvRoles", "Effect": "Allow", "Action": "sts:AssumeRole",
+      "Resource": [
+        "arn:aws:iam::925030480327:role/jse-datasphere-chatbot-*-EnvManagerRole",
+        "arn:aws:iam::925030480327:role/jse-datasphere-chatbot-*-CFNExecutionRole"
+      ] },
+    { "Sid": "AppStackSet", "Effect": "Allow", "Action": [
+        "cloudformation:DescribeStackSet", "cloudformation:ListStackInstances",
+        "cloudformation:ListStackSetOperations", "cloudformation:DescribeStackSetOperation"
+      ], "Resource": "arn:aws:cloudformation:us-east-1:925030480327:stackset/jse-datasphere-chatbot-infrastructure:*" }
   ]
 }
 EOF
