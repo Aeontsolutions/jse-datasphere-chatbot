@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -70,6 +71,15 @@ def load_rubric(path: Path) -> dict[str, Any]:
 
 
 _PROMPT_TEMPLATE = """You are an expert evaluator of a financial chatbot.
+
+# Current date
+Today's real-world date is {today}. Your own training data has an earlier
+cutoff -- do not use it to judge plausibility. A claim citing a report,
+filing, or market event dated on or before {today} is NOT "impossible",
+"hypothetical", or "future" just because it postdates what you were trained
+on. Only mark a claim as ungrounded or hallucinated when it conflicts with
+the transcript's own sources/metadata below, never because a date in it
+feels futuristic to you.
 
 # Persona under test
 - id: {persona_id}
@@ -169,11 +179,17 @@ class Judge:
         model: str,
         temperature: float,
         rubric_path: Path | None = None,
+        today: str | None = None,
     ) -> None:
         self._client = client
         self._model = model
         self._temperature = temperature
         self._rubric = load_rubric(rubric_path or DEFAULT_RUBRIC_PATH)
+        # Anchors the judge against its own training cutoff. Captured once per
+        # Judge instance (one per eval run) rather than per evaluate() call,
+        # since day-level granularity makes re-computing it per-conversation
+        # pointless.
+        self._today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     async def evaluate(
         self,
@@ -183,6 +199,7 @@ class Judge:
         totals = transcript.totals()
         transcript_block, truncated_turns = _format_transcript(transcript)
         prompt = _PROMPT_TEMPLATE.format(
+            today=self._today,
             persona_id=persona.id,
             persona_category=persona.category,
             character=persona.character.strip(),
