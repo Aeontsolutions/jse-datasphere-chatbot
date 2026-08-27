@@ -1,6 +1,7 @@
 """Tests for the Judge component."""
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -261,3 +262,38 @@ def test_load_rubric_is_public_and_returns_verdict_weights():
     assert "verdict_weights" in rubric
     assert "positive" in rubric["verdict_weights"]
     assert "negative" in rubric["verdict_weights"]
+
+
+# ---------------------------------------------------------------------------
+# Date anchoring -- the judge model's own training cutoff predates real
+# 2025/2026 events. Without an explicit anchor it can reason that a correct,
+# recent claim (e.g. a FY2025 annual report) is an "impossible future date"
+# and wrongly score it as ungrounded/hallucinated.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_evaluate_prompt_includes_explicit_run_date():
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content = MagicMock(
+        return_value=_async_value(_mock_genai_response(_judge_response_json()))
+    )
+    judge = Judge(client=fake_client, model="gemini-2.5-pro", temperature=0.2, today="2026-08-27")
+    await judge.evaluate(persona=_persona(), transcript=_transcript())
+
+    sent_prompt = fake_client.aio.models.generate_content.call_args.kwargs["contents"][0]["parts"][0]["text"]
+    assert "2026-08-27" in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_judge_defaults_today_to_current_utc_date():
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content = MagicMock(
+        return_value=_async_value(_mock_genai_response(_judge_response_json()))
+    )
+    judge = Judge(client=fake_client, model="gemini-2.5-pro", temperature=0.2)
+    await judge.evaluate(persona=_persona(), transcript=_transcript())
+
+    sent_prompt = fake_client.aio.models.generate_content.call_args.kwargs["contents"][0]["parts"][0]["text"]
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert today_str in sent_prompt
