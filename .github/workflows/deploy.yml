@@ -40,8 +40,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    outputs:
-      base_url: ${{ steps.url.outputs.base_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -74,16 +72,15 @@ jobs:
         working-directory: fastapi_app
         run: copilot svc deploy --name "${{ env.COPILOT_SVC }}" --env dev
 
-      - name: Resolve dev base URL
-        id: url
-        run: |
-          BASE_URL="${{ vars.DEV_BASE_URL || 'http://jse-da-Publi-3w4oxbvTf5j0-374994583.us-east-1.elb.amazonaws.com' }}"
-          echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
-
+      # Computed inline (not passed as a job output) -- GitHub Actions silently
+      # empties any job output whose value contains a substring matching a
+      # registered secret, which this URL tripped on in practice. eval-gate
+      # below computes the same value itself instead of reading it from here.
       - name: Wait for dev /health
         run: |
+          BASE_URL="${{ vars.DEV_BASE_URL || 'http://jse-da-Publi-3w4oxbvTf5j0-374994583.us-east-1.elb.amazonaws.com' }}"
           for i in $(seq 1 20); do
-            if curl -fsS "${{ steps.url.outputs.base_url }}/health"; then exit 0; fi
+            if curl -fsS "$BASE_URL/health"; then exit 0; fi
             sleep 15
           done
           echo "::error::dev /health did not turn healthy in time"
@@ -106,13 +103,17 @@ jobs:
           cd evals
           python -m pip install --upgrade pip
           pip install -e .
+          # python-dotenv: a dependency of scripts/run_eval.py, not of the
+          # evals package itself -- present on dev machines via fastapi_app's
+          # own install, absent on a clean CI runner.
+          pip install python-dotenv
 
       - name: Run eval suite against dev
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python scripts/run_eval.py \
-            --base-url "${{ needs.deploy-dev.outputs.base_url }}" \
+            --base-url "${{ vars.DEV_BASE_URL || 'http://jse-da-Publi-3w4oxbvTf5j0-374994583.us-east-1.elb.amazonaws.com' }}" \
             --replicates 1 \
             --concurrency 3 \
             --max-cost-usd 5 \
