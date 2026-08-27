@@ -5,6 +5,7 @@
 *.json
 !metadata-example.json
 !companies.json
+!evals/baselines/*.json
 
 # Python
 __pycache__/

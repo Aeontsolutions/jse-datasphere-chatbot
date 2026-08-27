@@ -1,0 +1,183 @@
+name: Deploy
+
+# Auto-deploys to dev on every push to main, runs the live persona eval suite
+# against that dev deployment, and only then offers a prod deploy -- gated on
+# both the eval score (scripts/check_eval_gate.py) and a human approval
+# (the "prod" GitHub Environment's required reviewers).
+#
+# One-time setup required before this workflow can run -- see
+# docs/CI_CD_DEPLOY_PIPELINE.md for exact commands:
+#   - An IAM role for GitHub OIDC (repo variable AWS_DEPLOY_ROLE_ARN)
+#   - Secrets: COPILOT_API_MANIFEST, COPILOT_DEV_ENV_MANIFEST,
+#     COPILOT_PROD_ENV_MANIFEST, GEMINI_API_KEY
+#   - A "prod" GitHub Environment with required reviewers configured
+#   - A seeded baseline at evals/baselines/dev.json
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+env:
+  AWS_REGION: us-east-1
+  COPILOT_APP: jse-datasphere-chatbot
+  COPILOT_SVC: api
+  COPILOT_VERSION: v1.34.1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-dev:
+    name: Deploy to dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      base_url: ${{ steps.url.outputs.base_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install AWS Copilot CLI
+        run: |
+          curl -sSL -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
+          chmod +x /usr/local/bin/copilot
+          copilot --version
+
+      # api/manifest.yml and environments/dev/manifest.yml are gitignored
+      # (docs/SECRETS_MANAGEMENT.md) -- a fresh checkout never has them, so
+      # they're supplied here from repo secrets instead of the working tree.
+      - name: Write gitignored Copilot manifests
+        run: |
+          mkdir -p fastapi_app/copilot/api fastapi_app/copilot/environments/dev
+          cat > fastapi_app/copilot/api/manifest.yml <<'COPILOT_API_MANIFEST_EOF'
+          ${{ secrets.COPILOT_API_MANIFEST }}
+          COPILOT_API_MANIFEST_EOF
+          cat > fastapi_app/copilot/environments/dev/manifest.yml <<'COPILOT_DEV_ENV_MANIFEST_EOF'
+          ${{ secrets.COPILOT_DEV_ENV_MANIFEST }}
+          COPILOT_DEV_ENV_MANIFEST_EOF
+
+      - name: copilot svc deploy --env dev
+        working-directory: fastapi_app
+        run: copilot svc deploy --name "${{ env.COPILOT_SVC }}" --env dev
+
+      - name: Resolve dev base URL
+        id: url
+        run: |
+          BASE_URL="${{ vars.DEV_BASE_URL || 'http://jse-da-Publi-3w4oxbvTf5j0-374994583.us-east-1.elb.amazonaws.com' }}"
+          echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for dev /health
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS "${{ steps.url.outputs.base_url }}/health"; then exit 0; fi
+            sleep 15
+          done
+          echo "::error::dev /health did not turn healthy in time"
+          exit 1
+
+  eval-gate:
+    name: Eval suite regression gate (dev)
+    runs-on: ubuntu-latest
+    needs: deploy-dev
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install eval suite
+        run: |
+          cd evals
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run eval suite against dev
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python scripts/run_eval.py \
+            --base-url "${{ needs.deploy-dev.outputs.base_url }}" \
+            --replicates 1 \
+            --concurrency 3 \
+            --max-cost-usd 5 \
+            --run-id "ci-${{ github.run_id }}"
+
+      # Reads by_category.positive (not `overall`, which is dragged down by
+      # by-design-passing refusal personas) and fails the job on regression
+      # vs evals/baselines/dev.json. See scripts/check_eval_gate.py.
+      - name: Check regression gate
+        run: python scripts/check_eval_gate.py "evals/runs/ci-${{ github.run_id }}"
+
+      - name: Upload eval run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-run-ci-${{ github.run_id }}
+          path: evals/runs/ci-${{ github.run_id }}
+          retention-days: 30
+
+  deploy-prod:
+    name: Deploy to prod
+    runs-on: ubuntu-latest
+    needs: eval-gate
+    timeout-minutes: 25
+    # Configure required reviewers on this Environment in repo settings --
+    # that's the manual-approval half of the gate. The job won't even start
+    # until eval-gate succeeds; it then waits for approval.
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install AWS Copilot CLI
+        run: |
+          curl -sSL -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
+          chmod +x /usr/local/bin/copilot
+
+      - name: Write gitignored Copilot manifests
+        run: |
+          mkdir -p fastapi_app/copilot/api fastapi_app/copilot/environments/prod
+          cat > fastapi_app/copilot/api/manifest.yml <<'COPILOT_API_MANIFEST_EOF'
+          ${{ secrets.COPILOT_API_MANIFEST }}
+          COPILOT_API_MANIFEST_EOF
+          cat > fastapi_app/copilot/environments/prod/manifest.yml <<'COPILOT_PROD_ENV_MANIFEST_EOF'
+          ${{ secrets.COPILOT_PROD_ENV_MANIFEST }}
+          COPILOT_PROD_ENV_MANIFEST_EOF
+
+      - name: copilot svc deploy --env prod
+        working-directory: fastapi_app
+        run: copilot svc deploy --name "${{ env.COPILOT_SVC }}" --env prod
+
+      - name: Verify prod /health
+        run: |
+          BASE_URL="${{ vars.PROD_BASE_URL || 'http://jse-da-Publi-2tSlV7zf7Ysl-685234288.us-east-1.elb.amazonaws.com' }}"
+          for i in $(seq 1 20); do
+            if curl -fsS "$BASE_URL/health"; then exit 0; fi
+            sleep 15
+          done
+          echo "::error::prod /health did not turn healthy in time"
+          exit 1

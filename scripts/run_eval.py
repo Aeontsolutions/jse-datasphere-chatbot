@@ -25,11 +25,10 @@ ENV_PATH = REPO_ROOT / "fastapi_app" / ".env"
 # Keep in sync with AliasChoices in fastapi_app/app/config.py.
 API_KEY_ALIASES = ("GOOGLE_API_KEY", "GEMINI_API_KEY", "CHATBOT_API_KEY")
 
-if not ENV_PATH.exists():
-    print(f"ERROR: missing {ENV_PATH}", file=sys.stderr)
-    sys.exit(2)
-
-load_dotenv(ENV_PATH)
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH)
+# else: no local .env (e.g. CI, which injects the key via the environment
+# directly) -- fall through to the alias check below instead of erroring.
 
 if not os.environ.get("GOOGLE_API_KEY"):
     for alias in API_KEY_ALIASES:
@@ -39,7 +38,8 @@ if not os.environ.get("GOOGLE_API_KEY"):
     else:
         print(
             "ERROR: no Gemini API key found. Set one of "
-            f"{', '.join(API_KEY_ALIASES)} in {ENV_PATH}.",
+            f"{', '.join(API_KEY_ALIASES)} in {ENV_PATH}, or export it "
+            "directly in the environment (e.g. in CI).",
             file=sys.stderr,
         )
         sys.exit(2)
