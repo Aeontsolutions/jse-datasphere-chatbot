@@ -53,7 +53,9 @@ def mock_genai_client():
 def test_extraction_request_disables_thinking():
     """A one-shot company/symbol extraction needs no deliberation; thinking must
     not compete with the 512-token output cap for budget."""
-    _model_name, _contents, config = _build_extraction_request("GraceKennedy revenue", ["GraceKennedy"])
+    _model_name, _contents, config = _build_extraction_request(
+        "GraceKennedy revenue", ["GraceKennedy"]
+    )
     assert config.thinking_config is not None
     assert config.thinking_config.thinking_budget == 0
 
@@ -82,7 +84,9 @@ async def test_async_parse_failure_logs_finish_reason(mock_genai_client):
     mock_genai_client.aio.models.generate_content = _fake_generate
 
     with capture_logs() as logs:
-        result = await extract_companies_from_query_async("GraceKennedy revenue 2024", ["GraceKennedy"])
+        result = await extract_companies_from_query_async(
+            "GraceKennedy revenue 2024", ["GraceKennedy"]
+        )
 
     assert result == {"companies": [], "symbols": []}
     entry = next(e for e in logs if e["event"] == "company_extraction_failed")
