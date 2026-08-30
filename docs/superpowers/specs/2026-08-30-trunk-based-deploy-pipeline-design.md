@@ -43,18 +43,28 @@ strategy exists to remove.
 | Dev deploy | Automatic on merge. No gate. |
 | Release | CalVer tag on `main` HEAD: `vYYYY.MM.DD`, suffixed `-2`, `-3` for multiple releases in one day. |
 | Hotfix | An ordinary PR into `main`, then a new tag. No hotfix branch. |
-| Rollback | `copilot svc rollback --name api --env prod` for immediate recovery, then revert on trunk and tag the revert for the durable fix. Never a tag on an older commit. |
+| Rollback | Roll the prod ECS service back directly (`aws ecs stop-service-deployment --stop-type ROLLBACK` while a deploy is in flight, otherwise `aws ecs update-service --task-definition <family>:<previous-revision>`), then revert on trunk and tag the revert for the durable fix. Never a tag on an older commit, and note there is no `copilot svc rollback` command. |
 
 Tags are cut from `main` HEAD. Tagging an older commit is rejected by
 `verify-tag` below, because dev would no longer be serving that build and the
 eval results would describe the wrong code. **This is why rollback cannot be
 "tag the previous good commit"** — that procedure fails at the first gate, and
-it fails while someone is trying to end an incident. Rollback is therefore two
-separate things: `copilot svc rollback` moves the prod service back to its
-previous task definition immediately, outside CI and outside this pipeline;
-and a revert commit on trunk, tagged once dev has redeployed it, is the durable
-fix that goes through the normal gates and is therefore evaluated and reviewed
-like any other release.
+it fails while someone is trying to end an incident.
+
+Rollback is therefore two separate things, neither of them a Copilot command.
+Copilot has no rollback verb: it rolls the CloudFormation stack back
+automatically when a *deploy* fails (unless `--no-rollback`, which this pipeline
+never passes), but offers nothing for returning an already-healthy service to
+its previous version. Immediate recovery is therefore done on ECS directly —
+`aws ecs stop-service-deployment --stop-type ROLLBACK` while the bad deployment
+is still rolling out, or `aws ecs update-service --task-definition
+<family>:<previous-revision>` once it has completed — which is out-of-band from
+CloudFormation and so buys time rather than closing the incident. The durable
+fix is a revert commit on trunk, tagged once dev has redeployed it, which goes
+through the normal gates and is therefore evaluated and reviewed like any other
+release; it costs a full eval cycle plus an approval, so it is not the
+incident-time answer. `docs/CI_CD_DEPLOY_PIPELINE.md` § Rollback carries the
+commands and the upstream citations.
 
 ## Pipeline architecture
 

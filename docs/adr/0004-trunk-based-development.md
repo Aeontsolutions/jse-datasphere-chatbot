@@ -47,13 +47,24 @@ by a new tag.
 
 A rollback is deliberately **not** a tag on the previous good commit: gate 1
 rejects that, because dev is serving trunk's HEAD and not that commit, so the
-release would stop at the first gate in the middle of an incident. Rollback is
-two moves instead — `copilot svc rollback --name api --env prod` returns the
-prod service to its previous task definition immediately, outside this
-pipeline; then a revert commit on trunk, tagged once dev has redeployed it,
-ships the fix through the normal gates so that it is evaluated and reviewed
-like any other release. The runbook in
-[docs/CI_CD_DEPLOY_PIPELINE.md](../CI_CD_DEPLOY_PIPELINE.md) has the commands.
+release would stop at the first gate in the middle of an incident.
+
+Rollback is two moves instead, and neither is a Copilot command — Copilot has
+no rollback verb. It rolls the CloudFormation stack back automatically when a
+*deploy* fails (unless `--no-rollback`, which this pipeline never passes), but
+has nothing for returning an already-healthy service to its previous version.
+So immediate recovery operates on ECS directly, outside this pipeline: roll the
+in-flight deployment back with `aws ecs stop-service-deployment --stop-type
+ROLLBACK`, or, once it has completed, point the service at the previous task
+definition revision with `aws ecs update-service`. That is out-of-band from
+CloudFormation, so the next `copilot svc deploy` undoes it — it buys time, it
+does not close the incident. The durable fix is a revert commit on trunk,
+tagged once dev has redeployed it, which ships through the normal gates and is
+therefore evaluated and reviewed like any other release; because that costs a
+full eval cycle plus an approval, it follows the immediate step rather than
+replacing it. The runbook in
+[docs/CI_CD_DEPLOY_PIPELINE.md](../CI_CD_DEPLOY_PIPELINE.md) has the commands
+and the upstream citations.
 
 ## Consequences
 

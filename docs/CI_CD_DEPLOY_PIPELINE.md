@@ -260,35 +260,103 @@ go through.
 
 ### Rollback
 
-Two steps, in this order. **Do not tag an older commit** — `verify-tag` rejects
-it, because dev is serving trunk's HEAD and not that commit, so the release
-never gets past the first gate.
+**There is no `copilot svc rollback` command.** Copilot has never had one — the
+`copilot svc` verbs are `init`, `ls`, `package`, `deploy`, `delete`, `show`,
+`status`, `logs`, `exec`, `override`, `pause`, `resume`, and the feature request
+for a rollback verb ([aws/copilot-cli#2519][i2519]) was closed without one; the
+`copilot-cli` repo itself was archived in June 2026. What Copilot does give you
+is automatic rollback when a **deploy itself fails**: CloudFormation reverts the
+stack unless `--no-rollback` was passed, and this pipeline never passes it
+([svc deploy docs][svcdeploy]). What it has no answer for is returning an
+already-healthy service to its previous version — which is exactly the case you
+are in when a release deployed cleanly and turned out to be bad.
 
-1. **Immediate recovery — `copilot svc rollback`.** This is what works under
-   pressure: it moves the prod ECS service back to its previous task
-   definition, without CI, an approval, or a tag.
+**Do not tag an older commit either** — `verify-tag` rejects it, because dev is
+serving trunk's HEAD and not that commit, so the release stops at the first gate.
 
-   ```bash
-   export AWS_PROFILE=ats-jse-elroy AWS_DEFAULT_REGION=us-east-1
-   cd fastapi_app
-   copilot svc rollback --name api --env prod
-   curl -s http://jse-da-Publi-2tSlV7zf7Ysl-685234288.us-east-1.elb.amazonaws.com/version
-   ```
+Immediate recovery is therefore done against ECS directly, outside Copilot and
+outside CI.
 
-   Confirm `/version` reports the commit you expected to roll back to. Note
-   that prod is now serving a commit that no tag points at, and that the next
-   release will move it forward again — so this buys time, it does not close
-   the incident.
+#### 1. Find the cluster, service, and current task definition
 
-2. **Durable fix — revert on trunk, then tag.** `git revert` the bad commit
-   into `main` via PR. That deploys to dev automatically, and a new tag on the
-   reverted HEAD ships it to prod through the normal pipeline — meaning the
-   rollback is itself evaluated by the eval suite and reviewed by a human,
-   which a `copilot svc rollback` is not.
+Copilot generates these names with hashes, so look them up rather than guessing:
 
-   ```bash
-   git checkout main && git pull
-   git revert <bad-commit> && git push   # via PR, per the usual review rules
-   # wait for deploy-dev.yml to go green, then:
-   git tag v2026.08.31 && git push origin v2026.08.31
-   ```
+```bash
+export AWS_PROFILE=ats-jse-elroy AWS_DEFAULT_REGION=us-east-1
+
+# Copilot's own view, to confirm you are looking at the right service:
+cd fastapi_app && copilot svc status --name api --env prod
+
+# The ECS names the AWS CLI needs (cluster is jse-datasphere-chatbot-prod-*):
+aws ecs list-clusters
+aws ecs list-services --cluster <cluster-arn-from-above>
+
+# What prod is running right now -- the ARN ends in <family>:<revision>:
+aws ecs describe-services --cluster <cluster> --services <service> \
+  --query 'services[0].taskDefinition' --output text
+```
+
+#### 2a. If the bad deployment is still rolling out
+
+ECS can roll an in-flight deployment back to the previous service revision
+([Stopping Amazon ECS service deployments][stopdep]):
+
+```bash
+aws ecs list-service-deployments --cluster <cluster> --service <service>
+aws ecs stop-service-deployment \
+  --service-deployment-arn <serviceDeploymentArn-from-above> \
+  --stop-type ROLLBACK
+```
+
+Console equivalent: ECS → the cluster → the service → **Deployments** → **Roll
+back**. Eligible deployment states are `PENDING`, `IN_PROGRESS`,
+`STOP_REQUESTED`, `ROLLBACK_REQUESTED`, and `ROLLBACK_IN_PROGRESS` — **not** a
+deployment that has already completed. If the release finished cleanly and the
+problem surfaced later, this is not your command; use 2b.
+
+#### 2b. If the deployment already completed
+
+Point the service back at the previous task definition revision. `--task-definition`
+takes `family:revision` and "triggers a new service deployment"
+([update-service docs][updsvc]):
+
+```bash
+# Newest revisions first, so the one below the current is the previous:
+aws ecs list-task-definitions --family-prefix <family> --sort DESC
+
+aws ecs update-service --cluster <cluster> --service <service> \
+  --task-definition <family>:<previous-revision>
+
+curl -s http://jse-da-Publi-2tSlV7zf7Ysl-685234288.us-east-1.elb.amazonaws.com/version
+```
+
+Confirm `/version` reports the commit you expected to land on.
+
+**Two things are now true and both matter.** Prod is serving a commit that no
+tag points at. And this edit is out-of-band: CloudFormation still believes the
+stack describes the version you just backed out, so the next `copilot svc
+deploy --env prod` will put it back. Immediate recovery buys time; it does not
+close the incident.
+
+#### 3. Durable fix — revert on trunk, then tag
+
+`git revert` the bad commit into `main` via PR. That deploys to dev
+automatically, and a new tag on the reverted HEAD ships it to prod through the
+normal pipeline — so the rollback is itself evaluated by the eval suite and
+reviewed by a human, and CloudFormation and the running service agree again.
+
+```bash
+git checkout main && git pull
+git revert <bad-commit> && git push   # via PR, per the usual review rules
+# wait for deploy-dev.yml to go green, then:
+git tag v2026.08.31 && git push origin v2026.08.31
+```
+
+**This is not the incident-time answer.** It costs a full eval cycle (10–25
+minutes of suite) plus a human approval that may not be sitting at a keyboard.
+Do step 2 first, then this.
+
+[i2519]: https://github.com/aws/copilot-cli/issues/2519
+[svcdeploy]: https://aws.github.io/copilot-cli/docs/commands/svc-deploy/
+[stopdep]: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/stop-service-deployment.html
+[updsvc]: https://docs.aws.amazon.com/cli/latest/reference/ecs/update-service.html

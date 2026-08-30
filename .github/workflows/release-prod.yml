@@ -76,7 +76,16 @@ jobs:
             echo "::error::dev /version returned HTTP $STATUS -- cannot confirm what dev is running."
             exit 1
           fi
-          DEV_SHA=$(python3 -c 'import json; print(json.load(open("/tmp/version.json")).get("commit",""))')
+          # Same guard as the post-suite re-check in release-eval: without
+          # `|| true` a malformed body (an ALB error page rather than JSON)
+          # makes python3 raise, and `VAR=$(failing_cmd)` aborts the step under
+          # `bash -e` with a raw traceback and no ::error:: at all -- the very
+          # failure mode the STATUS line above is written to avoid.
+          DEV_SHA=$(python3 -c 'import json; print(json.load(open("/tmp/version.json")).get("commit",""))' 2>/dev/null || true)
+          if [ -z "$DEV_SHA" ]; then
+            echo "::error::dev /version returned an unparseable response -- cannot confirm what dev is running. Check dev is healthy, then use 'Re-run jobs' on this run."
+            exit 1
+          fi
           echo "tag commit: $TAG_SHA"
           echo "dev commit: $DEV_SHA"
           if [ "$DEV_SHA" != "$TAG_SHA" ]; then
@@ -251,7 +260,7 @@ jobs:
             sleep 15
           done
           if [ "$HEALTHY" != "1" ]; then
-            echo "::error::prod /health did not turn healthy in time -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover prod immediately. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
+            echo "::error::prod /health did not turn healthy in time -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then roll prod back on ECS directly -- there is no 'copilot svc rollback' command. While the deployment is still rolling out: ECS console -> the service -> Deployments -> Roll back, or 'aws ecs stop-service-deployment --service-deployment-arn <arn> --stop-type ROLLBACK'. Once it has completed: 'aws ecs update-service --cluster <cluster> --service <service> --task-definition <family>:<previous-revision>'. Full runbook with the discovery commands: docs/CI_CD_DEPLOY_PIPELINE.md, 'Rollback'. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
             exit 1
           fi
           # Fetch and parse are split, and each guarded with `|| true`, so a
@@ -263,16 +272,16 @@ jobs:
           # (last in the pipe) is what -e sees.
           PROD_VERSION_BODY=$(curl -fsS --max-time 30 "${{ env.PROD_BASE_URL }}/version" || true)
           if [ -z "$PROD_VERSION_BODY" ]; then
-            echo "::error::prod /version did not return a response -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover prod immediately. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
+            echo "::error::prod /version did not return a response -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then roll prod back on ECS directly -- there is no 'copilot svc rollback' command. While the deployment is still rolling out: ECS console -> the service -> Deployments -> Roll back, or 'aws ecs stop-service-deployment --service-deployment-arn <arn> --stop-type ROLLBACK'. Once it has completed: 'aws ecs update-service --cluster <cluster> --service <service> --task-definition <family>:<previous-revision>'. Full runbook with the discovery commands: docs/CI_CD_DEPLOY_PIPELINE.md, 'Rollback'. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
             exit 1
           fi
           PROD_SHA=$(printf '%s' "$PROD_VERSION_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
           if [ -z "$PROD_SHA" ]; then
-            echo "::error::prod /version returned an unparseable response ($PROD_VERSION_BODY) -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover prod immediately. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
+            echo "::error::prod /version returned an unparseable response ($PROD_VERSION_BODY) -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then roll prod back on ECS directly -- there is no 'copilot svc rollback' command. While the deployment is still rolling out: ECS console -> the service -> Deployments -> Roll back, or 'aws ecs stop-service-deployment --service-deployment-arn <arn> --stop-type ROLLBACK'. Once it has completed: 'aws ecs update-service --cluster <cluster> --service <service> --task-definition <family>:<previous-revision>'. Full runbook with the discovery commands: docs/CI_CD_DEPLOY_PIPELINE.md, 'Rollback'. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
             exit 1
           fi
           if [ "$PROD_SHA" != "$COMMIT_SHA" ]; then
-            echo "::error::prod is serving $PROD_SHA, expected $COMMIT_SHA -- the deploy reported success but the rollout did not take. Re-run 'copilot svc deploy --name ${{ env.COPILOT_SVC }} --env prod', or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to restore the previous release. Do not tag an older commit -- verify-tag rejects it; the durable fix is a revert PR on main, then a new tag."
+            echo "::error::prod is serving $PROD_SHA, expected $COMMIT_SHA -- the deploy reported success but the rollout did not take. Re-run 'copilot svc deploy --name ${{ env.COPILOT_SVC }} --env prod', or restore the previous release by rolling the ECS service back to its previous task definition ('aws ecs update-service --task-definition <family>:<previous-revision>'; see docs/CI_CD_DEPLOY_PIPELINE.md, 'Rollback'). There is no 'copilot svc rollback' command. Do not tag an older commit -- verify-tag rejects it; the durable fix is a revert PR on main, then a new tag."
             exit 1
           fi
           echo "prod is serving $COMMIT_SHA (${{ github.ref_name }})"
