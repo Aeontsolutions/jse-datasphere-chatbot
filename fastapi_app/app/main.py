@@ -20,6 +20,7 @@ from app.models import (
     FinancialDataFilters,
     FinancialDataRecord,
 )
+from app.build_info import read_build_sha
 from app.charting import generate_chart
 from app.document_registry import build_document_index, presign_document
 from app.s3_client import init_s3_client
@@ -141,6 +142,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Read once at import -- the file is baked into the image and never changes
+# for the life of the process.
+BUILD_SHA = read_build_sha()
+
 # Add Request ID middleware (must be added before other middleware)
 app.add_middleware(RequestIDMiddleware)
 
@@ -260,6 +265,19 @@ async def metrics():
     return Response(content=get_metrics(), media_type=get_metrics_content_type())
 
 
+@app.get("/version")
+async def version():
+    """Commit and app version of the running build.
+
+    Deliberately dependency-free. `/health` probes S3, BigQuery, and Gemini
+    and returns 503 when any is unhealthy, so it cannot be relied on to report
+    provenance at the moment provenance matters most -- during a release. The
+    release pipeline reads this endpoint to prove dev is serving the tagged
+    commit before it will ship anything to prod.
+    """
+    return {"commit": BUILD_SHA, "version": app.version}
+
+
 @app.get("/health")
 async def health_check():
     """
@@ -277,6 +295,7 @@ async def health_check():
     try:
         health_status = {
             "status": "healthy",
+            "commit": BUILD_SHA,
             "timestamp": time.time(),
             "components": {},
         }

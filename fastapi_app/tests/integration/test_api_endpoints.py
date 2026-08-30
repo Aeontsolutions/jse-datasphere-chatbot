@@ -56,6 +56,21 @@ class TestAPIEndpoints:
         # Request ID middleware should add headers (accept degraded in test env)
         assert response.status_code in [200, 503]
 
+    def test_version_endpoint(self, client):
+        """/version reports build provenance and never depends on S3/BigQuery/Gemini."""
+        response = client.get("/version")
+        assert response.status_code == 200
+        data = response.json()
+        assert "commit" in data
+        assert "version" in data
+        # Unstamped in the test environment -- CI writes BUILD_SHA only at deploy.
+        assert data["commit"] == "unknown"
+
+    def test_health_reports_commit(self, client):
+        """/health carries the same commit field, where operators look first."""
+        response = client.get("/health")
+        assert "commit" in response.json()
+
 
 @pytest.mark.integration
 class TestChatEndpoints:
