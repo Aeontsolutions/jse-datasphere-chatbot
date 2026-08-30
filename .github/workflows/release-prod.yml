@@ -60,11 +60,13 @@ jobs:
           # `|| true` (not `|| echo 000`): curl already writes "000" via
           # -w on a connection failure, so echoing another "000" only
           # duplicated it into "000\n000". But dropping the fallback
-          # outright is worse -- GitHub Actions runs this under
-          # `bash -eo pipefail`, and `VAR=$(failing_cmd)` aborts the step
-          # right here with no ::error:: at all once curl's own exit
-          # status is non-zero. `|| true` neutralises that exit status
-          # without touching curl's already-captured stdout.
+          # outright is worse -- GitHub's default for a `run:` step with no
+          # `shell:` key is `bash -e {0}` (pipefail is off unless `shell:
+          # bash` is set explicitly -- moot here, there's no pipe on this
+          # line anyway), and `VAR=$(failing_cmd)` aborts the step right
+          # here with no ::error:: at all once curl's own exit status is
+          # non-zero. `|| true` neutralises that exit status without
+          # touching curl's already-captured stdout.
           STATUS=$(curl -s --max-time 30 -o /tmp/version.json -w '%{http_code}' "${{ env.DEV_BASE_URL }}/version" || true)
           if [ "$STATUS" = "404" ]; then
             echo "::error::dev has no /version endpoint -- it predates this release pipeline. Merge to main, let dev redeploy, then re-tag."
@@ -175,7 +177,7 @@ jobs:
           # -f: a bad COPILOT_VERSION would otherwise silently write GitHub's
           # HTML 404 page to the binary path; chmod +x would still succeed,
           # and it would only fail later as a confusing exec error.
-          curl -sSLf -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
+          curl -sSLf --max-time 30 -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
           chmod +x /usr/local/bin/copilot
           copilot --version
 
@@ -207,7 +209,23 @@ jobs:
             echo "::error::prod /health did not turn healthy in time -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then redeploy the previous good tag or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover."
             exit 1
           fi
-          PROD_SHA=$(curl -fsS --max-time 30 "${{ env.PROD_BASE_URL }}/version" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))')
+          # Fetch and parse are split, and each guarded with `|| true`, so a
+          # curl failure or malformed JSON produces our own ::error:: below
+          # instead of aborting here with a raw traceback. A single
+          # `curl | python3` line has the same `bash -e` exposure as the
+          # STATUS line above even without pipefail: if curl fails, python3
+          # still runs on empty stdin, raises, and its own non-zero exit
+          # (last in the pipe) is what -e sees.
+          PROD_VERSION_BODY=$(curl -fsS --max-time 30 "${{ env.PROD_BASE_URL }}/version" || true)
+          if [ -z "$PROD_VERSION_BODY" ]; then
+            echo "::error::prod /version did not return a response -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then redeploy the previous good tag or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover."
+            exit 1
+          fi
+          PROD_SHA=$(printf '%s' "$PROD_VERSION_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
+          if [ -z "$PROD_SHA" ]; then
+            echo "::error::prod /version returned an unparseable response ($PROD_VERSION_BODY) -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then redeploy the previous good tag or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover."
+            exit 1
+          fi
           if [ "$PROD_SHA" != "$COMMIT_SHA" ]; then
             echo "::error::prod is serving $PROD_SHA, expected $COMMIT_SHA -- the deploy reported success but the rollout did not take. Re-run 'copilot svc deploy --name ${{ env.COPILOT_SVC }} --env prod', or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to restore the previous release."
             exit 1
