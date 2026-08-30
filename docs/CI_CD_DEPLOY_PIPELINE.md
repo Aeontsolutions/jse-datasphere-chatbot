@@ -1,6 +1,16 @@
 # CI/CD Deploy Pipeline Setup
 
-Covers one-time setup for [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml): push to `main` → `copilot svc deploy --env dev` → run the eval suite against dev → (score pass + human approval) → `copilot svc deploy --env prod`.
+Covers one-time setup for the two deploy workflows. The project uses
+trunk-based development — see [ADR 0004](adr/0004-trunk-based-development.md).
+
+- [`.github/workflows/deploy-dev.yml`](../.github/workflows/deploy-dev.yml) —
+  push to `main` → `copilot svc deploy --env dev` → eval suite against dev.
+  No approval. Every merge lands on dev.
+- [`.github/workflows/release-prod.yml`](../.github/workflows/release-prod.yml) —
+  push a `v*` tag → verify dev is serving the tagged commit → eval suite +
+  hard regression gate → human approval → `copilot svc deploy --env prod`.
+
+See [Cutting a release](#cutting-a-release) below for the day-to-day procedure.
 
 None of the steps below can be done by an agent — they touch IAM and repo/security settings. Run them yourself with the `ats-jse-elroy` SSO profile.
 
@@ -106,7 +116,27 @@ Save the printed ARN — it's `AWS_DEPLOY_ROLE_ARN` in step 3.
 
 Repo → **Settings → Environments**:
 - **`dev`** — no protection rules needed (auto-deploys on push to `main`).
-- **`prod`** — add **Required reviewers** (yourself, at minimum). This is the human half of the gate: `deploy-prod` won't run until both `eval-gate` passes *and* a reviewer approves.
+- **`prod`** — add **Required reviewers** (yourself, at minimum). This gates the
+  `deploy-prod` job of `release-prod.yml`, and it is the **only human gate in
+  the pipeline**. It is reached only after `verify-tag` and `release-eval` have
+  both passed, so an approver is never asked about a build that failed the
+  regression gate.
+
+**Without a required reviewer configured, the `prod` Environment enforces
+nothing.** GitHub Environments have no default protection — an environment
+with no rules attached lets any job that declares it run immediately. Skip
+this step and `deploy-prod` deploys to prod unattended the moment
+`release-eval` passes; there is no other approval step anywhere in this
+pipeline.
+
+There is deliberately **no ruleset restricting who may push `v*` tags** — the
+reviewer requirement is the control. If repo write access ever widens beyond
+people trusted to release, revisit that.
+
+The OIDC trust policy in step 1 matches on `environment:dev` / `environment:prod`
+and carries no branch or ref condition, so moving the prod deploy onto a tag
+trigger needs **no IAM change**. Jobs that declare `environment: prod` get the
+same `sub` claim whether they were started by a branch push or a tag push.
 
 ## 3. Repo secrets and variables
 
@@ -162,3 +192,44 @@ Re-baseline deliberately after any change that legitimately shifts scores (a rev
 - **New finding from the baseline seed run, unrelated to this pipeline:** several judge-flagged `hallucination` moments where the bot treats 2025/2026 events as futuristic and fabricates details (a nonexistent "2025 Annual Report," a fabricated hurricane) — e.g. `analyst_finds_latest_annual_report`, `diaspora_investor_jse_access`, `esg_conscious_investor` in `evals/runs/baseline_seed/`. Looks like a temporal-grounding bug (the model not being told "today" is actually in the past relative to these dates), separate from anything this pipeline fixes. Worth its own investigation.
 - `check_eval_gate.py` doesn't check the `record_count: 10557` red flag from [[reference_eval_suite]] (financial tool dumping the whole table) — a real regression could hide behind passing scores if the judge doesn't penalize it. Worth adding if it recurs. (Not seen in the baseline seed run.)
 - `eval-gate` costs ~$0.35 and ~10 min per run (26 personas, `--replicates 1`) — cheap enough to run on every push to `main`, per [[reference_eval_suite]].
+
+## Cutting a release
+
+Releases come off `main` HEAD. Tagging an older commit is rejected, because dev
+would no longer be serving that build and the eval results would describe code
+you are not shipping.
+
+```bash
+git checkout main && git pull
+git tag v2026.08.30
+git push origin v2026.08.30
+```
+
+Use `-2`, `-3` suffixes for multiple releases in one day (`v2026.08.30-2`).
+
+Pushing the tag starts `release-prod.yml`. Watch for:
+
+1. **verify-tag** — fails if dev is not serving the tagged commit. Fix by
+   waiting for the dev deploy to finish, or by tagging HEAD.
+2. **release-eval** — runs the suite against dev. Read the **step summary** on
+   the run page: dimension scores against baseline, fail-verdict delta, and
+   live dev URLs to exercise by hand before approving. A regression fails this
+   job and the release stops here.
+3. **deploy-prod** — waits for your approval, then deploys and verifies prod's
+   `/version` matches the tag.
+
+**Only one release can be in flight, and only one more can be queued behind
+it.** `release-prod.yml` serialises on a single concurrency group
+(`release-prod`), but GitHub holds at most one *queued* run per group in
+addition to the one in progress. If a release is running and a second tag is
+pushed, the second waits; if a third tag is pushed before the second starts,
+the third silently cancels the second in the queue — no error, no
+notification, it just never runs. A `deploy-prod` job sitting on your approval
+still counts as "in progress" for this purpose, so an unreviewed release holds
+the group indefinitely and blocks every tag pushed after it from starting.
+Approve or explicitly cancel a stuck release before relying on a later tag to
+go through.
+
+**Hotfix:** an ordinary PR into `main`, then a new tag. No hotfix branch.
+
+**Rollback:** tag the previous good commit. It ships through the same pipeline.

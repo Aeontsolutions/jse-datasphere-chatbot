@@ -1,7 +1,8 @@
 """Gate a deploy on eval-suite results: compares a run's summary.json against
 a checked-in baseline and fails (exit 1) on regression or hard-failure
-conditions. Used by .github/workflows/deploy.yml between the dev deploy and
-the prod deploy.
+conditions. Run by .github/workflows/deploy-dev.yml's eval-gate job (after the
+dev deploy) and .github/workflows/release-prod.yml's release-eval job (before
+the human approval on deploy-prod).
 
 Judge dimensions are scored 1-5 (see evals/judge.py). `overall` mixes in the
 negative/refusal personas, which score goal_completion=1.0 by design -- so
