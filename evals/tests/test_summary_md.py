@@ -86,6 +86,24 @@ def test_verify_block_lists_endpoints_against_base_url():
     assert "/chat/stream" in out
 
 
+def test_verify_block_tells_approver_to_check_version_first():
+    # deploy-prod waits on a human, possibly for days, while every merge to
+    # main redeploys dev. The approver must confirm /version still reports
+    # this commit before trusting the URLs, or they hand-test another build.
+    out = _render(_summary())
+    check_line = next(line for line in out.splitlines() if "it must return" in line)
+    assert "http://dev.example/version" in check_line
+    assert "abc123" in check_line
+    # The instruction has to come before the endpoint list, not after it.
+    assert out.index("it must return") < out.index("Swagger UI")
+
+
+def test_verify_block_says_what_a_mismatch_means():
+    out = _render(_summary())
+    assert "dev has moved on" in out
+    assert "no longer exercise this release" in out
+
+
 def test_missing_dimension_does_not_crash():
     summary = _summary()
     del summary["by_category"]["positive"]["mean_coherence"]

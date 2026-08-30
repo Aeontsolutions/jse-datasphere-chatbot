@@ -52,7 +52,11 @@ jobs:
 
       - name: Install AWS Copilot CLI
         run: |
-          curl -sSL -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
+          # Kept identical to release-prod.yml's install.
+          # -f: a bad COPILOT_VERSION would otherwise silently write GitHub's
+          # HTML 404 page to the binary path; chmod +x would still succeed,
+          # and it would only fail later as a confusing exec error.
+          curl -sSLf --max-time 30 -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
           chmod +x /usr/local/bin/copilot
           copilot --version
 

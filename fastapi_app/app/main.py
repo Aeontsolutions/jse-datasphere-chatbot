@@ -338,6 +338,9 @@ async def health_check():
             status_code=503,
             content={
                 "status": "unhealthy",
+                # Carried into the failure payload too: the degraded case is
+                # exactly when an operator needs to know which build this is.
+                "commit": BUILD_SHA,
                 "error": f"Health check failed: {str(e)}",
                 "timestamp": time.time(),
             },

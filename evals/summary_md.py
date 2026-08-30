@@ -98,8 +98,17 @@ def render_summary_markdown(
         "",
         "## Verify it yourself",
         "",
-        f"This release is running on dev at `{base_url}`. Exercise it with your own "
+        f"This release was evaluated on dev at `{base_url}`. Exercise it with your own "
         "client before approving — the scores above are a floor, not the whole picture.",
+        "",
+        # The approval gate can sit for days, and every merge to main redeploys
+        # dev in the meantime. Without this check the approver hand-tests a
+        # later build and approves on it, so /version is made load-bearing
+        # rather than just another link in the list below.
+        f"**Check [`GET {base_url}/version`]({base_url}/version) first — it must return "
+        f"`{commit}`.** If it returns anything else, dev has moved on since this report "
+        "was written and the URLs below no longer exercise this release; what you try by "
+        "hand would be a different build.",
         "",
     ]
     for path, note in GET_ENDPOINTS:
