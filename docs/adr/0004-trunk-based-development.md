@@ -31,7 +31,11 @@ deploys to dev with no approval. A release is a CalVer tag (`vYYYY.MM.DD`) on
 1. **Provenance** — dev's `GET /version` must report the tagged commit.
 2. **Quality** — the eval suite runs against dev and `check_eval_gate.py` must
    pass. This is a hard gate; a regression stops the release before any human
-   is asked.
+   is asked. Provenance is re-checked after the suite finishes as well: the
+   suite runs for 10–25 minutes and `deploy-dev.yml` deploys on its own
+   concurrency group, so a merge to `main` mid-suite would otherwise leave the
+   later personas exercising a build that is not the one being released, with
+   nothing recording it.
 3. **Judgement** — a required reviewer on the `prod` Environment approves,
    having read a rendered report of dimension scores, baseline deltas, fail
    counts, and a list of live dev endpoints to exercise by hand.
@@ -39,7 +43,17 @@ deploys to dev with no approval. A release is a CalVer tag (`vYYYY.MM.DD`) on
 There are **no release branches and no back-merges**. A release branch that
 merges back into trunk is GitFlow, and that merge-back is the specific practice
 this strategy exists to remove. A hotfix is an ordinary PR to `main` followed
-by a new tag; a rollback is a tag on the previous good commit.
+by a new tag.
+
+A rollback is deliberately **not** a tag on the previous good commit: gate 1
+rejects that, because dev is serving trunk's HEAD and not that commit, so the
+release would stop at the first gate in the middle of an incident. Rollback is
+two moves instead — `copilot svc rollback --name api --env prod` returns the
+prod service to its previous task definition immediately, outside this
+pipeline; then a revert commit on trunk, tagged once dev has redeployed it,
+ships the fix through the normal gates so that it is evaluated and reviewed
+like any other release. The runbook in
+[docs/CI_CD_DEPLOY_PIPELINE.md](../CI_CD_DEPLOY_PIPELINE.md) has the commands.
 
 ## Consequences
 

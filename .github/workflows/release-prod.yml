@@ -69,7 +69,7 @@ jobs:
           # touching curl's already-captured stdout.
           STATUS=$(curl -s --max-time 30 -o /tmp/version.json -w '%{http_code}' "${{ env.DEV_BASE_URL }}/version" || true)
           if [ "$STATUS" = "404" ]; then
-            echo "::error::dev has no /version endpoint -- it predates this release pipeline. Merge to main, let dev redeploy, then re-tag."
+            echo "::error::dev has no /version endpoint -- it predates this release pipeline. Merge to main, wait for dev to redeploy, then use 'Re-run jobs' on this run. Re-pushing the same tag unchanged is a no-op and starts nothing."
             exit 1
           fi
           if [ "$STATUS" != "200" ]; then
@@ -80,7 +80,7 @@ jobs:
           echo "tag commit: $TAG_SHA"
           echo "dev commit: $DEV_SHA"
           if [ "$DEV_SHA" != "$TAG_SHA" ]; then
-            echo "::error::dev is serving $DEV_SHA but tag ${{ github.ref_name }} points at $TAG_SHA. Tag HEAD of main, or wait for its dev deploy to finish."
+            echo "::error::dev is serving $DEV_SHA but tag ${{ github.ref_name }} points at $TAG_SHA. Wait for dev's deploy of $TAG_SHA to finish, then use 'Re-run jobs' on this run (Actions -> this run -> Re-run jobs). Re-pushing ${{ github.ref_name }} unchanged is a no-op and starts nothing; to move the tag onto a newer commit instead, 'git tag -f ${{ github.ref_name }} <commit> && git push -f origin ${{ github.ref_name }}'."
             exit 1
           fi
           echo "dev is serving the tagged commit."
@@ -132,6 +132,51 @@ jobs:
             --tag "${{ github.ref_name }}" \
             --commit "$COMMIT_SHA" \
             --base-url "${{ env.DEV_BASE_URL }}" >> "$GITHUB_STEP_SUMMARY"
+
+      # verify-tag proved dev was serving the tagged commit at T0. The suite
+      # above then ran for 10-25 minutes against dev, and deploy-dev.yml has
+      # its own concurrency group (keyed on github.ref, deliberately separate
+      # from this one), so any merge to main during that window redeploys dev
+      # underneath the running suite -- the later personas would exercise a
+      # different build and nothing would record it. Guarding only at T0
+      # leaves that whole window open.
+      #
+      # Ordering: after "Render report" (which is if: always(), so it still
+      # renders) and before "Regression gate". On drift the approver's report
+      # is still produced, the gate never passes or fails on results that
+      # describe the wrong build -- a regression verdict on drifted results
+      # would send the operator chasing a quality problem that isn't there --
+      # and this drift message is the single failure on the run page. The job
+      # fails, so deploy-prod (needs: release-eval) is never reached.
+      #
+      # Not fixable by putting deploy-dev.yml in the release-prod concurrency
+      # group: deploy-prod holds that group while waiting on human approval,
+      # so an unapproved release would block every dev deploy overnight.
+      - name: Re-verify dev is still serving the tagged commit
+        run: |
+          # Same shape as verify-tag's check, and for the same reasons: `|| true`
+          # neutralises curl's non-zero exit status (which would otherwise abort
+          # this step under `bash -e` with no ::error:: at all, since
+          # `VAR=$(failing_cmd)` is what -e sees) without discarding the "000"
+          # curl already wrote via -w; --max-time 30 keeps a hung dev ALB from
+          # eating the job timeout instead of reporting.
+          STATUS=$(curl -s --max-time 30 -o /tmp/version-after-eval.json -w '%{http_code}' "${{ env.DEV_BASE_URL }}/version" || true)
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::dev /version returned HTTP $STATUS after the suite ran -- cannot confirm these results describe $COMMIT_SHA. Re-run this workflow (Actions -> this run -> Re-run jobs) once dev is reachable."
+            exit 1
+          fi
+          DEV_SHA=$(python3 -c 'import json; print(json.load(open("/tmp/version-after-eval.json")).get("commit",""))' 2>/dev/null || true)
+          if [ -z "$DEV_SHA" ]; then
+            echo "::error::dev /version returned an unparseable response after the suite ran -- cannot confirm these results describe $COMMIT_SHA. Re-run this workflow (Actions -> this run -> Re-run jobs)."
+            exit 1
+          fi
+          echo "tag commit:              $COMMIT_SHA"
+          echo "dev commit after suite:  $DEV_SHA"
+          if [ "$DEV_SHA" != "$COMMIT_SHA" ]; then
+            echo "::error::dev moved to $DEV_SHA while the suite was running -- these results describe a different build, not $COMMIT_SHA. The report above is void. Re-run this workflow (Actions -> this run -> Re-run jobs) once dev is serving the tagged commit again."
+            exit 1
+          fi
+          echo "dev is still serving the tagged commit -- the results above describe $COMMIT_SHA."
 
       # Hard gate: a regression stops the release before any human is asked.
       - name: Regression gate
@@ -206,7 +251,7 @@ jobs:
             sleep 15
           done
           if [ "$HEALTHY" != "1" ]; then
-            echo "::error::prod /health did not turn healthy in time -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then redeploy the previous good tag or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover."
+            echo "::error::prod /health did not turn healthy in time -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover prod immediately. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
             exit 1
           fi
           # Fetch and parse are split, and each guarded with `|| true`, so a
@@ -218,16 +263,16 @@ jobs:
           # (last in the pipe) is what -e sees.
           PROD_VERSION_BODY=$(curl -fsS --max-time 30 "${{ env.PROD_BASE_URL }}/version" || true)
           if [ -z "$PROD_VERSION_BODY" ]; then
-            echo "::error::prod /version did not return a response -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then redeploy the previous good tag or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover."
+            echo "::error::prod /version did not return a response -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover prod immediately. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
             exit 1
           fi
           PROD_SHA=$(printf '%s' "$PROD_VERSION_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
           if [ -z "$PROD_SHA" ]; then
-            echo "::error::prod /version returned an unparseable response ($PROD_VERSION_BODY) -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then redeploy the previous good tag or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover."
+            echo "::error::prod /version returned an unparseable response ($PROD_VERSION_BODY) -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover prod immediately. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
             exit 1
           fi
           if [ "$PROD_SHA" != "$COMMIT_SHA" ]; then
-            echo "::error::prod is serving $PROD_SHA, expected $COMMIT_SHA -- the deploy reported success but the rollout did not take. Re-run 'copilot svc deploy --name ${{ env.COPILOT_SVC }} --env prod', or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to restore the previous release."
+            echo "::error::prod is serving $PROD_SHA, expected $COMMIT_SHA -- the deploy reported success but the rollout did not take. Re-run 'copilot svc deploy --name ${{ env.COPILOT_SVC }} --env prod', or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to restore the previous release. Do not tag an older commit -- verify-tag rejects it; the durable fix is a revert PR on main, then a new tag."
             exit 1
           fi
           echo "prod is serving $COMMIT_SHA (${{ github.ref_name }})"

@@ -43,11 +43,18 @@ strategy exists to remove.
 | Dev deploy | Automatic on merge. No gate. |
 | Release | CalVer tag on `main` HEAD: `vYYYY.MM.DD`, suffixed `-2`, `-3` for multiple releases in one day. |
 | Hotfix | An ordinary PR into `main`, then a new tag. No hotfix branch. |
-| Rollback | Tag the previous good commit. It redeploys through the same pipeline. |
+| Rollback | `copilot svc rollback --name api --env prod` for immediate recovery, then revert on trunk and tag the revert for the durable fix. Never a tag on an older commit. |
 
 Tags are cut from `main` HEAD. Tagging an older commit is rejected by
 `verify-tag` below, because dev would no longer be serving that build and the
-eval results would describe the wrong code.
+eval results would describe the wrong code. **This is why rollback cannot be
+"tag the previous good commit"** — that procedure fails at the first gate, and
+it fails while someone is trying to end an incident. Rollback is therefore two
+separate things: `copilot svc rollback` moves the prod service back to its
+previous task definition immediately, outside CI and outside this pipeline;
+and a revert commit on trunk, tagged once dev has redeployed it, is the durable
+fix that goes through the normal gates and is therefore evaluated and reviewed
+like any other release.
 
 ## Pipeline architecture
 
@@ -85,6 +92,15 @@ gate is hard: a regression against `evals/baselines/dev.json` fails the job and
 the release stops before any human is asked.** Regardless of outcome the job
 renders a step summary and uploads the run directory as an artifact, so a
 failed gate is as readable as a passing one.
+
+`verify-tag` only proves provenance at the moment it runs, and the suite then
+takes 10–25 minutes during which `deploy-dev.yml` — on its own concurrency
+group — can redeploy dev out from under it. The job therefore repeats the
+`/version` comparison after the suite finishes, between rendering the report
+and running the regression gate, and fails the release if dev moved. Putting
+`deploy-dev.yml` into the `release-prod` concurrency group is not an
+alternative: `deploy-prod` holds that group while it waits on human approval,
+so an unapproved release would block dev deploys for as long as it sat there.
 
 **Job `deploy-prod`** — `needs: release-eval`, `environment: prod` with required
 reviewers. Steps are lifted unchanged from today's `deploy-prod`: OIDC auth,
@@ -139,7 +155,11 @@ Contents:
   exercise the build with their own client rather than trusting the numbers
   alone: `/docs` (Swagger UI, interactive, already enabled), `/openapi.json`,
   `POST /chat/stream`, `POST /fast_chat_v2`, `POST /chat`,
-  `GET /financial/metadata`, `GET /health`, `GET /version`.
+  `GET /financial/metadata`, `GET /health`, `GET /version`. The block leads
+  with `GET /version`, which the approver must check returns this release's
+  commit before trusting any of the other URLs: approval can sit for days and
+  every merge to `main` redeploys dev in the meantime, so the endpoints may by
+  then be serving a different build.
 - A link to the uploaded run artifact, which contains the full transcripts and
   can be opened locally with `python evals/serve.py`.
 

@@ -46,7 +46,7 @@ EOF
 aws iam create-role \
   --role-name jse-datasphere-chatbot-gha-deploy \
   --assume-role-policy-document file:///tmp/gha-trust-policy.json \
-  --description "GitHub Actions OIDC role for jse-datasphere-chatbot deploy.yml"
+  --description "GitHub Actions OIDC role for jse-datasphere-chatbot deploys"
 ```
 
 Attach a permissions policy. `copilot svc deploy` drives a CloudFormation change set that touches ECS, ECR, SSM, logs, ELB target groups, and IAM role passing — this is a **scoped starting point**, not guaranteed complete. Expect an `AccessDenied` on the first real run; add the missing action (CloudTrail will name it) rather than widening broadly.
@@ -129,6 +129,20 @@ this step and `deploy-prod` deploys to prod unattended the moment
 `release-eval` passes; there is no other approval step anywhere in this
 pipeline.
 
+**Set `prod`'s "Deployment branches and tags" to allow the release tag.** The
+same Environment settings page carries a second rule that is easy to miss.
+`deploy-prod` runs on `refs/tags/v2026.08.30`, not on a branch, so either leave
+this set to **All branches** or choose **Selected branches and tags** and add a
+**tag** rule with the pattern `v*`. If `prod` is left on "Selected branches"
+with only `main` allowed — the natural state for an environment that was only
+ever deployed from `main`, which is what this repo had before the release
+pipeline — GitHub **refuses the job outright, before any reviewer is
+prompted**: the run fails with a branch/tag protection-rules error, no approval
+request is sent to anyone, and nothing in the message points at the tag
+pattern. `verify-tag` and `release-eval` will both have passed by then, so the
+release dies at the last step for a reason that looks nothing like its cause.
+This is the likeliest way a first release stalls.
+
 There is deliberately **no ruleset restricting who may push `v*` tags** — the
 reviewer requirement is the control. If repo write access ever widens beyond
 people trusted to release, revisit that.
@@ -209,12 +223,24 @@ Use `-2`, `-3` suffixes for multiple releases in one day (`v2026.08.30-2`).
 
 Pushing the tag starts `release-prod.yml`. Watch for:
 
-1. **verify-tag** — fails if dev is not serving the tagged commit. Fix by
-   waiting for the dev deploy to finish, or by tagging HEAD.
+1. **verify-tag** — fails if dev is not serving the tagged commit, usually
+   because dev's deploy of that commit has not finished yet. Wait for
+   `deploy-dev.yml` to go green, then hit **Re-run jobs** on the failed release
+   run in the Actions UI. **Re-pushing the same tag does nothing** — an
+   unchanged tag is not a new ref, GitHub emits no `push` event, and no run
+   starts; pushing and seeing nothing happen is the expected behaviour, not a
+   broken pipeline. If you actually need the tag on a *different* commit, move
+   it explicitly with `git tag -f v2026.08.30 <commit> && git push -f origin
+   v2026.08.30`.
 2. **release-eval** — runs the suite against dev. Read the **step summary** on
    the run page: dimension scores against baseline, fail-verdict delta, and
    live dev URLs to exercise by hand before approving. A regression fails this
-   job and the release stops here.
+   job and the release stops here. The job also **re-checks dev's `/version`
+   after the suite finishes**: the suite takes 10–25 minutes, and any merge to
+   `main` in that window redeploys dev underneath it. If dev moved, the job
+   fails with "dev moved to … while the suite was running" — the results
+   describe a different build, so the report is void. Re-run the workflow once
+   dev is serving the tagged commit again.
 3. **deploy-prod** — waits for your approval, then deploys and verifies prod's
    `/version` matches the tag.
 
@@ -232,4 +258,37 @@ go through.
 
 **Hotfix:** an ordinary PR into `main`, then a new tag. No hotfix branch.
 
-**Rollback:** tag the previous good commit. It ships through the same pipeline.
+### Rollback
+
+Two steps, in this order. **Do not tag an older commit** — `verify-tag` rejects
+it, because dev is serving trunk's HEAD and not that commit, so the release
+never gets past the first gate.
+
+1. **Immediate recovery — `copilot svc rollback`.** This is what works under
+   pressure: it moves the prod ECS service back to its previous task
+   definition, without CI, an approval, or a tag.
+
+   ```bash
+   export AWS_PROFILE=ats-jse-elroy AWS_DEFAULT_REGION=us-east-1
+   cd fastapi_app
+   copilot svc rollback --name api --env prod
+   curl -s http://jse-da-Publi-2tSlV7zf7Ysl-685234288.us-east-1.elb.amazonaws.com/version
+   ```
+
+   Confirm `/version` reports the commit you expected to roll back to. Note
+   that prod is now serving a commit that no tag points at, and that the next
+   release will move it forward again — so this buys time, it does not close
+   the incident.
+
+2. **Durable fix — revert on trunk, then tag.** `git revert` the bad commit
+   into `main` via PR. That deploys to dev automatically, and a new tag on the
+   reverted HEAD ships it to prod through the normal pipeline — meaning the
+   rollback is itself evaluated by the eval suite and reviewed by a human,
+   which a `copilot svc rollback` is not.
+
+   ```bash
+   git checkout main && git pull
+   git revert <bad-commit> && git push   # via PR, per the usual review rules
+   # wait for deploy-dev.yml to go green, then:
+   git tag v2026.08.31 && git push origin v2026.08.31
+   ```
