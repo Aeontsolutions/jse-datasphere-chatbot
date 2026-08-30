@@ -8,6 +8,15 @@ name: Release to prod
 #
 # See docs/adr/0004-trunk-based-development.md and
 # docs/CI_CD_DEPLOY_PIPELINE.md.
+#
+# Caution: this guarantees the same *source* is released, not the same
+# *artifact* dev was evaluated against. `copilot svc deploy` rebuilds the
+# image from the tagged commit rather than promoting dev's image, and
+# fastapi_app's dependencies float (`>=` floors in requirements.txt, an
+# unpinned `python:3.11-slim` base, unpinned apt packages) -- a build run
+# after a long approval wait can resolve a different dependency closure
+# than the one release-eval scored. BUILD_SHA / GET /version record the
+# commit only, so neither this pipeline nor prod can detect that.
 
 on:
   push:
@@ -36,13 +45,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
+
       # The eval suite below runs against dev. If dev is serving anything
       # other than the tagged commit, those results describe code that isn't
       # being released, and the human would approve on the wrong evidence.
       - name: Compare tag commit against dev /version
         run: |
-          TAG_SHA="${{ github.sha }}"
-          STATUS=$(curl -s -o /tmp/version.json -w '%{http_code}' "${{ env.DEV_BASE_URL }}/version" || echo 000)
+          # github.sha can be an annotated tag's own object SHA rather than
+          # the commit it points at. `actions/checkout` above resolves the
+          # ref, so HEAD is always the commit -- sidesteps the question
+          # instead of depending on which behavior GitHub gives us.
+          TAG_SHA=$(git rev-parse HEAD)
+          # `|| true` (not `|| echo 000`): curl already writes "000" via
+          # -w on a connection failure, so echoing another "000" only
+          # duplicated it into "000\n000". But dropping the fallback
+          # outright is worse -- GitHub Actions runs this under
+          # `bash -eo pipefail`, and `VAR=$(failing_cmd)` aborts the step
+          # right here with no ::error:: at all once curl's own exit
+          # status is non-zero. `|| true` neutralises that exit status
+          # without touching curl's already-captured stdout.
+          STATUS=$(curl -s --max-time 30 -o /tmp/version.json -w '%{http_code}' "${{ env.DEV_BASE_URL }}/version" || true)
           if [ "$STATUS" = "404" ]; then
             echo "::error::dev has no /version endpoint -- it predates this release pipeline. Merge to main, let dev redeploy, then re-tag."
             exit 1
@@ -67,6 +90,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      # github.sha can be an annotated tag's own object SHA rather than the
+      # commit it points at (see verify-tag) -- the report below must show
+      # the real commit, not a tag-object SHA that won't match anything.
+      - name: Resolve tag to commit
+        run: echo "COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v5
         with:
@@ -99,7 +128,7 @@ jobs:
         run: |
           python scripts/render_eval_summary.py "evals/runs/release-${{ github.run_id }}" \
             --tag "${{ github.ref_name }}" \
-            --commit "${{ github.sha }}" \
+            --commit "$COMMIT_SHA" \
             --base-url "${{ env.DEV_BASE_URL }}" >> "$GITHUB_STEP_SUMMARY"
 
       # Hard gate: a regression stops the release before any human is asked.
@@ -129,6 +158,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # github.sha can be an annotated tag's own object SHA rather than the
+      # commit it points at (see verify-tag). Resolve it once, the same way,
+      # rather than trusting github.sha anywhere it's compared or stamped.
+      - name: Resolve tag to commit
+        run: echo "COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -137,8 +172,12 @@ jobs:
 
       - name: Install AWS Copilot CLI
         run: |
-          curl -sSL -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
+          # -f: a bad COPILOT_VERSION would otherwise silently write GitHub's
+          # HTML 404 page to the binary path; chmod +x would still succeed,
+          # and it would only fail later as a confusing exec error.
+          curl -sSLf -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
           chmod +x /usr/local/bin/copilot
+          copilot --version
 
       - name: Write gitignored Copilot manifests
         run: |
@@ -151,7 +190,7 @@ jobs:
           COPILOT_PROD_ENV_MANIFEST_EOF
 
       - name: Stamp build commit
-        run: echo "${{ github.sha }}" > fastapi_app/app/BUILD_SHA
+        run: echo "$COMMIT_SHA" > fastapi_app/app/BUILD_SHA
 
       - name: copilot svc deploy --env prod
         working-directory: fastapi_app
@@ -161,16 +200,16 @@ jobs:
         run: |
           HEALTHY=0
           for i in $(seq 1 20); do
-            if curl -fsS "${{ env.PROD_BASE_URL }}/health" >/dev/null; then HEALTHY=1; break; fi
+            if curl -fsS --max-time 30 "${{ env.PROD_BASE_URL }}/health" >/dev/null; then HEALTHY=1; break; fi
             sleep 15
           done
           if [ "$HEALTHY" != "1" ]; then
-            echo "::error::prod /health did not turn healthy in time"
+            echo "::error::prod /health did not turn healthy in time -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then redeploy the previous good tag or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to recover."
             exit 1
           fi
-          PROD_SHA=$(curl -fsS "${{ env.PROD_BASE_URL }}/version" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))')
-          if [ "$PROD_SHA" != "${{ github.sha }}" ]; then
-            echo "::error::prod is serving $PROD_SHA, expected ${{ github.sha }}"
+          PROD_SHA=$(curl -fsS --max-time 30 "${{ env.PROD_BASE_URL }}/version" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))')
+          if [ "$PROD_SHA" != "$COMMIT_SHA" ]; then
+            echo "::error::prod is serving $PROD_SHA, expected $COMMIT_SHA -- the deploy reported success but the rollout did not take. Re-run 'copilot svc deploy --name ${{ env.COPILOT_SVC }} --env prod', or run 'copilot svc rollback --name ${{ env.COPILOT_SVC }} --env prod' to restore the previous release."
             exit 1
           fi
-          echo "prod is serving ${{ github.sha }} (${{ github.ref_name }})"
+          echo "prod is serving $COMMIT_SHA (${{ github.ref_name }})"
