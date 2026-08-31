@@ -140,6 +140,56 @@ async def test_evaluate_retries_on_invalid_schema():
 
 
 @pytest.mark.asyncio
+async def test_evaluate_retries_transient_gemini_error(monkeypatch):
+    """A 503 is the model being busy, not the judge failing.
+
+    Regression test for the 2026-08-31 CI gate failure: two conversations came
+    back `ServerError: 503 UNAVAILABLE` ("high demand ... please try again
+    later"), nothing retried them, and the gate failed on
+    `judge_failed_count` in a run where every quality dimension improved.
+    """
+    from google.genai import errors
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("evals._genai_retry.asyncio.sleep", _no_sleep)
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content = MagicMock(
+        side_effect=[
+            errors.ServerError(503, {"error": {"status": "UNAVAILABLE"}}),
+            _async_value(_mock_genai_response(_judge_response_json())),
+        ]
+    )
+    judge = Judge(client=fake_client, model="gemini-2.5-pro", temperature=0.2)
+    output = await judge.evaluate(persona=_persona(), transcript=_transcript())
+
+    assert output.verdict == "pass"
+    assert fake_client.aio.models.generate_content.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_evaluate_does_not_retry_a_bad_request(monkeypatch):
+    """A malformed prompt will fail identically next time -- surface it fast."""
+    from google.genai import errors
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("evals._genai_retry.asyncio.sleep", _no_sleep)
+
+    fake_client = MagicMock()
+    fake_client.aio.models.generate_content = MagicMock(
+        side_effect=errors.ClientError(400, {"error": {"message": "bad request"}})
+    )
+    judge = Judge(client=fake_client, model="gemini-2.5-pro", temperature=0.2)
+    with pytest.raises(errors.ClientError):
+        await judge.evaluate(persona=_persona(), transcript=_transcript())
+    assert fake_client.aio.models.generate_content.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_evaluate_raises_after_second_failure():
     fake_client = MagicMock()
     fake_client.aio.models.generate_content = MagicMock(

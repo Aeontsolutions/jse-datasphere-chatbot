@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from functools import partial
 from typing import Any
 
 from pydantic import BaseModel
 
+from evals._genai_retry import call_with_retry
 from evals.metrics import estimate_gemini_cost_usd, usage_tokens_from_response
 from evals.persona import PersonaSpec
 
@@ -70,6 +72,17 @@ class PersonaActor:
         self._model = model
         self._temperature = temperature
 
+    async def _generate(self, text: str, temperature: float, seed: int) -> Any:
+        return await self._client.aio.models.generate_content(
+            model=self._model,
+            contents=[{"role": "user", "parts": [{"text": text}]}],
+            config={
+                "temperature": temperature,
+                "response_mime_type": "application/json",
+                "seed": seed,
+            },
+        )
+
     async def act(
         self,
         persona: PersonaSpec,
@@ -84,16 +97,17 @@ class PersonaActor:
         seed = _seed_for(persona.id, replicate_index)
 
         for attempt in range(2):
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
-                contents=[
-                    {"role": "user", "parts": [{"text": system_text + "\n\n" + history_text}]}
-                ],
-                config={
-                    "temperature": self._temperature if attempt == 0 else 0.0,
-                    "response_mime_type": "application/json",
-                    "seed": seed,
-                },
+            # A transient 503 here kills the whole conversation, not just one
+            # turn -- it lands in incomplete_count and the conversation is
+            # dropped from the run. See evals/_genai_retry.py.
+            response = await call_with_retry(
+                partial(
+                    self._generate,
+                    system_text + "\n\n" + history_text,
+                    self._temperature if attempt == 0 else 0.0,
+                    seed,
+                ),
+                label=f"persona:{persona.id}",
             )
             try:
                 data = json.loads(response.text)

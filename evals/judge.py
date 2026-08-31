@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
 
+from evals._genai_retry import call_with_retry
 from evals.metrics import estimate_gemini_cost_usd, usage_tokens_from_response
 from evals.persona import PersonaSpec
 from evals.transcript import Transcript
@@ -191,6 +193,16 @@ class Judge:
         # pointless.
         self._today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    async def _generate(self, prompt: str, temperature: float) -> Any:
+        return await self._client.aio.models.generate_content(
+            model=self._model,
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            config={
+                "temperature": temperature,
+                "response_mime_type": "application/json",
+            },
+        )
+
     async def evaluate(
         self,
         persona: PersonaSpec,
@@ -215,13 +227,18 @@ class Judge:
         )
 
         for attempt in range(2):
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
-                contents=[{"role": "user", "parts": [{"text": prompt}]}],
-                config={
-                    "temperature": self._temperature if attempt == 0 else 0.0,
-                    "response_mime_type": "application/json",
-                },
+            # Each parse attempt retries transient Gemini errors of its own.
+            # A 503 means the model is busy, not that the judge failed -- and
+            # an unjudged conversation is dropped from the scored sample, so
+            # letting one through quietly shrinks the evidence a release rests
+            # on. See evals/_genai_retry.py.
+            response = await call_with_retry(
+                partial(
+                    self._generate,
+                    prompt,
+                    self._temperature if attempt == 0 else 0.0,
+                ),
+                label=f"judge:{transcript.conversation_id}",
             )
             try:
                 data = json.loads(response.text)

@@ -92,10 +92,15 @@ def main() -> int:
         "or fields the DB doesn't have), not app bugs, so an absolute cap of 0 would fail every run.",
     )
     parser.add_argument(
-        "--max-judge-failed",
-        type=int,
-        default=0,
-        help="Max allowed judge_failed_count (LLM-judge errors, not app failures) before failing (default: 0)",
+        "--max-judge-failed-pct",
+        type=float,
+        default=10.0,
+        help="Max %% of conversations allowed to go unjudged (LLM-judge errors, not app "
+        "failures) before failing (default: 10.0). Proportional rather than absolute for "
+        "the same reason --max-fail-increase is relative: Gemini returns transient 503s "
+        "under load, and an absolute cap of 0 failed a real run (2026-08-31) in which "
+        "every quality dimension improved. evals/_genai_retry.py retries those errors "
+        "first; this is the backstop for when the retries are also exhausted.",
     )
     parser.add_argument(
         "--update-baseline",
@@ -150,9 +155,26 @@ def main() -> int:
             f"max allowed increase {args.max_fail_increase})"
         )
 
+    # Proportional, not absolute: an unjudged conversation is dropped from the
+    # scored sample, so what matters is how much of the evidence went missing,
+    # not the raw count. Printed on every run, passing or not -- tolerating a
+    # shrinking sample silently is the failure mode this threshold trades for.
     judge_failed = summary.get("overall", {}).get("judge_failed_count", 0)
-    if judge_failed > args.max_judge_failed:
-        failures.append(f"{judge_failed} judge_failed_count (max allowed {args.max_judge_failed})")
+    total_convos = summary.get("conversation_count", 0)
+    if not total_convos:
+        failures.append("summary reports conversation_count=0 -- the run produced nothing to gate on")
+    else:
+        judge_failed_pct = judge_failed / total_convos * 100
+        print(
+            f"  judge_failed       {judge_failed}/{total_convos} unjudged "
+            f"({judge_failed_pct:.1f}%, max allowed {args.max_judge_failed_pct:.1f}%)"
+        )
+        if judge_failed_pct > args.max_judge_failed_pct:
+            failures.append(
+                f"{judge_failed} of {total_convos} conversations went unjudged "
+                f"({judge_failed_pct:.1f}%, max allowed {args.max_judge_failed_pct:.1f}%) -- "
+                "the scored means rest on a smaller sample than the suite intended"
+            )
 
     incomplete = summary.get("overall", {}).get("incomplete_count", 0)
     if incomplete:
