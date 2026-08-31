@@ -1,12 +1,23 @@
 {
-  "source_run_id": "baseline_seed",
+  "source_run_ids": [
+    "ci-33441069571",
+    "ci-33445015851"
+  ],
   "category": "positive",
   "means": {
-    "groundedness": 3.3333333333333335,
-    "factfulness": 3.380952380952381,
-    "goal_completion": 3.238095238095238,
-    "persona_handling": 3.4285714285714284,
-    "coherence": 3.2857142857142856
+    "groundedness": 3.95,
+    "factfulness": 3.625,
+    "goal_completion": 3.375,
+    "persona_handling": 3.625,
+    "coherence": 4.025
   },
-  "fail_verdicts": 10
+  "stds": {
+    "groundedness": 1.3765434228064855,
+    "factfulness": 1.7348243094375249,
+    "goal_completion": 1.7495420646264654,
+    "persona_handling": 1.5638135504313873,
+    "coherence": 1.310460870193266
+  },
+  "n": 40,
+  "fail_verdicts": 8
 }
