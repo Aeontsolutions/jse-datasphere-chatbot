@@ -111,3 +111,7 @@ data/
 
 # Claude Code
 .claude/
+
+# Written by CI immediately before `copilot svc deploy` so the Dockerfile's
+# COPY . . bakes the commit into the image. Never committed.
+fastapi_app/app/BUILD_SHA

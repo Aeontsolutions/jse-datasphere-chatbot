@@ -1,0 +1,287 @@
+name: Release to prod
+
+# Trunk-based development: merges to main deploy to dev unattended
+# (deploy-dev.yml). A release is a tag on main. Pushing a v* tag runs three
+# gates in order -- dev is provably serving the tagged commit, the eval suite
+# passes its regression gate, then a human approves after reading the report.
+# Only the third gate exercises discretion; the first two are preconditions.
+#
+# See docs/adr/0004-trunk-based-development.md and
+# docs/CI_CD_DEPLOY_PIPELINE.md.
+#
+# Caution: this guarantees the same *source* is released, not the same
+# *artifact* dev was evaluated against. `copilot svc deploy` rebuilds the
+# image from the tagged commit rather than promoting dev's image, and
+# fastapi_app's dependencies float (`>=` floors in requirements.txt, an
+# unpinned `python:3.11-slim` base, unpinned apt packages) -- a build run
+# after a long approval wait can resolve a different dependency closure
+# than the one release-eval scored. BUILD_SHA / GET /version record the
+# commit only, so neither this pipeline nor prod can detect that.
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  AWS_REGION: us-east-1
+  COPILOT_APP: jse-datasphere-chatbot
+  COPILOT_SVC: api
+  COPILOT_VERSION: v1.34.1
+  DEV_BASE_URL: ${{ vars.DEV_BASE_URL || 'http://jse-da-Publi-3w4oxbvTf5j0-374994583.us-east-1.elb.amazonaws.com' }}
+  PROD_BASE_URL: ${{ vars.PROD_BASE_URL || 'http://jse-da-Publi-2tSlV7zf7Ysl-685234288.us-east-1.elb.amazonaws.com' }}
+
+permissions:
+  contents: read
+
+# A constant group, not github.ref -- two releases must serialise rather than
+# race on prod.
+concurrency:
+  group: release-prod
+  cancel-in-progress: false
+
+jobs:
+  verify-tag:
+    name: Verify dev is serving the tagged commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # The eval suite below runs against dev. If dev is serving anything
+      # other than the tagged commit, those results describe code that isn't
+      # being released, and the human would approve on the wrong evidence.
+      - name: Compare tag commit against dev /version
+        run: |
+          # github.sha can be an annotated tag's own object SHA rather than
+          # the commit it points at. `actions/checkout` above resolves the
+          # ref, so HEAD is always the commit -- sidesteps the question
+          # instead of depending on which behavior GitHub gives us.
+          TAG_SHA=$(git rev-parse HEAD)
+          # `|| true` (not `|| echo 000`): curl already writes "000" via
+          # -w on a connection failure, so echoing another "000" only
+          # duplicated it into "000\n000". But dropping the fallback
+          # outright is worse -- GitHub's default for a `run:` step with no
+          # `shell:` key is `bash -e {0}` (pipefail is off unless `shell:
+          # bash` is set explicitly -- moot here, there's no pipe on this
+          # line anyway), and `VAR=$(failing_cmd)` aborts the step right
+          # here with no ::error:: at all once curl's own exit status is
+          # non-zero. `|| true` neutralises that exit status without
+          # touching curl's already-captured stdout.
+          STATUS=$(curl -s --max-time 30 -o /tmp/version.json -w '%{http_code}' "${{ env.DEV_BASE_URL }}/version" || true)
+          if [ "$STATUS" = "404" ]; then
+            echo "::error::dev has no /version endpoint -- it predates this release pipeline. Merge to main, wait for dev to redeploy, then use 'Re-run jobs' on this run. Re-pushing the same tag unchanged is a no-op and starts nothing."
+            exit 1
+          fi
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::dev /version returned HTTP $STATUS -- cannot confirm what dev is running."
+            exit 1
+          fi
+          # Same guard as the post-suite re-check in release-eval: without
+          # `|| true` a malformed body (an ALB error page rather than JSON)
+          # makes python3 raise, and `VAR=$(failing_cmd)` aborts the step under
+          # `bash -e` with a raw traceback and no ::error:: at all -- the very
+          # failure mode the STATUS line above is written to avoid.
+          DEV_SHA=$(python3 -c 'import json; print(json.load(open("/tmp/version.json")).get("commit",""))' 2>/dev/null || true)
+          if [ -z "$DEV_SHA" ]; then
+            echo "::error::dev /version returned an unparseable response -- cannot confirm what dev is running. Check dev is healthy, then use 'Re-run jobs' on this run."
+            exit 1
+          fi
+          echo "tag commit: $TAG_SHA"
+          echo "dev commit: $DEV_SHA"
+          if [ "$DEV_SHA" != "$TAG_SHA" ]; then
+            echo "::error::dev is serving $DEV_SHA but tag ${{ github.ref_name }} points at $TAG_SHA. Wait for dev's deploy of $TAG_SHA to finish, then use 'Re-run jobs' on this run (Actions -> this run -> Re-run jobs). Re-pushing ${{ github.ref_name }} unchanged is a no-op and starts nothing; to move the tag onto a newer commit instead, 'git tag -f ${{ github.ref_name }} <commit> && git push -f origin ${{ github.ref_name }}'."
+            exit 1
+          fi
+          echo "dev is serving the tagged commit."
+
+  release-eval:
+    name: Release eval suite (hard gate)
+    runs-on: ubuntu-latest
+    needs: verify-tag
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # github.sha can be an annotated tag's own object SHA rather than the
+      # commit it points at (see verify-tag) -- the report below must show
+      # the real commit, not a tag-object SHA that won't match anything.
+      - name: Resolve tag to commit
+        run: echo "COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install eval suite
+        run: |
+          cd evals
+          python -m pip install --upgrade pip
+          pip install -e .
+          # python-dotenv: a dependency of scripts/run_eval.py, not of the
+          # evals package itself -- absent on a clean CI runner.
+          pip install python-dotenv
+
+      - name: Run eval suite against dev
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python scripts/run_eval.py \
+            --base-url "${{ env.DEV_BASE_URL }}" \
+            --replicates 1 \
+            --concurrency 3 \
+            --max-cost-usd 5 \
+            --run-id "release-${{ github.run_id }}"
+
+      # Rendered before the gate and with if: always(), so a FAILED gate is as
+      # readable as a passing one. The human needs to see why a release stopped.
+      - name: Render report for the approver
+        if: always()
+        run: |
+          python scripts/render_eval_summary.py "evals/runs/release-${{ github.run_id }}" \
+            --tag "${{ github.ref_name }}" \
+            --commit "$COMMIT_SHA" \
+            --base-url "${{ env.DEV_BASE_URL }}" >> "$GITHUB_STEP_SUMMARY"
+
+      # verify-tag proved dev was serving the tagged commit at T0. The suite
+      # above then ran for 10-25 minutes against dev, and deploy-dev.yml has
+      # its own concurrency group (keyed on github.ref, deliberately separate
+      # from this one), so any merge to main during that window redeploys dev
+      # underneath the running suite -- the later personas would exercise a
+      # different build and nothing would record it. Guarding only at T0
+      # leaves that whole window open.
+      #
+      # Ordering: after "Render report" (which is if: always(), so it still
+      # renders) and before "Regression gate". On drift the approver's report
+      # is still produced, the gate never passes or fails on results that
+      # describe the wrong build -- a regression verdict on drifted results
+      # would send the operator chasing a quality problem that isn't there --
+      # and this drift message is the single failure on the run page. The job
+      # fails, so deploy-prod (needs: release-eval) is never reached.
+      #
+      # Not fixable by putting deploy-dev.yml in the release-prod concurrency
+      # group: deploy-prod holds that group while waiting on human approval,
+      # so an unapproved release would block every dev deploy overnight.
+      - name: Re-verify dev is still serving the tagged commit
+        run: |
+          # Same shape as verify-tag's check, and for the same reasons: `|| true`
+          # neutralises curl's non-zero exit status (which would otherwise abort
+          # this step under `bash -e` with no ::error:: at all, since
+          # `VAR=$(failing_cmd)` is what -e sees) without discarding the "000"
+          # curl already wrote via -w; --max-time 30 keeps a hung dev ALB from
+          # eating the job timeout instead of reporting.
+          STATUS=$(curl -s --max-time 30 -o /tmp/version-after-eval.json -w '%{http_code}' "${{ env.DEV_BASE_URL }}/version" || true)
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::dev /version returned HTTP $STATUS after the suite ran -- cannot confirm these results describe $COMMIT_SHA. Re-run this workflow (Actions -> this run -> Re-run jobs) once dev is reachable."
+            exit 1
+          fi
+          DEV_SHA=$(python3 -c 'import json; print(json.load(open("/tmp/version-after-eval.json")).get("commit",""))' 2>/dev/null || true)
+          if [ -z "$DEV_SHA" ]; then
+            echo "::error::dev /version returned an unparseable response after the suite ran -- cannot confirm these results describe $COMMIT_SHA. Re-run this workflow (Actions -> this run -> Re-run jobs)."
+            exit 1
+          fi
+          echo "tag commit:              $COMMIT_SHA"
+          echo "dev commit after suite:  $DEV_SHA"
+          if [ "$DEV_SHA" != "$COMMIT_SHA" ]; then
+            echo "::error::dev moved to $DEV_SHA while the suite was running -- these results describe a different build, not $COMMIT_SHA. The report above is void. Re-run this workflow (Actions -> this run -> Re-run jobs) once dev is serving the tagged commit again."
+            exit 1
+          fi
+          echo "dev is still serving the tagged commit -- the results above describe $COMMIT_SHA."
+
+      # Hard gate: a regression stops the release before any human is asked.
+      - name: Regression gate
+        run: python scripts/check_eval_gate.py "evals/runs/release-${{ github.run_id }}"
+
+      - name: Upload eval run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-eval-${{ github.ref_name }}
+          path: evals/runs/release-${{ github.run_id }}
+          retention-days: 90
+
+  deploy-prod:
+    name: Deploy to prod
+    runs-on: ubuntu-latest
+    needs: release-eval
+    timeout-minutes: 25
+    # Required reviewers on this Environment are the human gate -- the only
+    # gate in this pipeline that exercises discretion. The job does not start
+    # until release-eval succeeds; it then waits for approval.
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # github.sha can be an annotated tag's own object SHA rather than the
+      # commit it points at (see verify-tag). Resolve it once, the same way,
+      # rather than trusting github.sha anywhere it's compared or stamped.
+      - name: Resolve tag to commit
+        run: echo "COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install AWS Copilot CLI
+        run: |
+          # -f: a bad COPILOT_VERSION would otherwise silently write GitHub's
+          # HTML 404 page to the binary path; chmod +x would still succeed,
+          # and it would only fail later as a confusing exec error.
+          curl -sSLf --max-time 30 -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
+          chmod +x /usr/local/bin/copilot
+          copilot --version
+
+      - name: Write gitignored Copilot manifests
+        run: |
+          mkdir -p fastapi_app/copilot/api fastapi_app/copilot/environments/prod
+          cat > fastapi_app/copilot/api/manifest.yml <<'COPILOT_API_MANIFEST_EOF'
+          ${{ secrets.COPILOT_API_MANIFEST }}
+          COPILOT_API_MANIFEST_EOF
+          cat > fastapi_app/copilot/environments/prod/manifest.yml <<'COPILOT_PROD_ENV_MANIFEST_EOF'
+          ${{ secrets.COPILOT_PROD_ENV_MANIFEST }}
+          COPILOT_PROD_ENV_MANIFEST_EOF
+
+      - name: Stamp build commit
+        run: echo "$COMMIT_SHA" > fastapi_app/app/BUILD_SHA
+
+      - name: copilot svc deploy --env prod
+        working-directory: fastapi_app
+        run: copilot svc deploy --name "${{ env.COPILOT_SVC }}" --env prod
+
+      - name: Verify prod is serving the tagged commit
+        run: |
+          HEALTHY=0
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 30 "${{ env.PROD_BASE_URL }}/health" >/dev/null; then HEALTHY=1; break; fi
+            sleep 15
+          done
+          if [ "$HEALTHY" != "1" ]; then
+            echo "::error::prod /health did not turn healthy in time -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then roll prod back on ECS directly -- there is no 'copilot svc rollback' command. While the deployment is still rolling out: ECS console -> the service -> Deployments -> Roll back, or 'aws ecs stop-service-deployment --service-deployment-arn <arn> --stop-type ROLLBACK'. Once it has completed: 'aws ecs update-service --cluster <cluster> --service <service> --task-definition <family>:<previous-revision>'. Full runbook with the discovery commands: docs/CI_CD_DEPLOY_PIPELINE.md, 'Rollback'. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
+            exit 1
+          fi
+          # Fetch and parse are split, and each guarded with `|| true`, so a
+          # curl failure or malformed JSON produces our own ::error:: below
+          # instead of aborting here with a raw traceback. A single
+          # `curl | python3` line has the same `bash -e` exposure as the
+          # STATUS line above even without pipefail: if curl fails, python3
+          # still runs on empty stdin, raises, and its own non-zero exit
+          # (last in the pipe) is what -e sees.
+          PROD_VERSION_BODY=$(curl -fsS --max-time 30 "${{ env.PROD_BASE_URL }}/version" || true)
+          if [ -z "$PROD_VERSION_BODY" ]; then
+            echo "::error::prod /version did not return a response -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then roll prod back on ECS directly -- there is no 'copilot svc rollback' command. While the deployment is still rolling out: ECS console -> the service -> Deployments -> Roll back, or 'aws ecs stop-service-deployment --service-deployment-arn <arn> --stop-type ROLLBACK'. Once it has completed: 'aws ecs update-service --cluster <cluster> --service <service> --task-definition <family>:<previous-revision>'. Full runbook with the discovery commands: docs/CI_CD_DEPLOY_PIPELINE.md, 'Rollback'. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
+            exit 1
+          fi
+          PROD_SHA=$(printf '%s' "$PROD_VERSION_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
+          if [ -z "$PROD_SHA" ]; then
+            echo "::error::prod /version returned an unparseable response ($PROD_VERSION_BODY) -- check ECS task events/logs for the ${{ env.COPILOT_SVC }} service, then roll prod back on ECS directly -- there is no 'copilot svc rollback' command. While the deployment is still rolling out: ECS console -> the service -> Deployments -> Roll back, or 'aws ecs stop-service-deployment --service-deployment-arn <arn> --stop-type ROLLBACK'. Once it has completed: 'aws ecs update-service --cluster <cluster> --service <service> --task-definition <family>:<previous-revision>'. Full runbook with the discovery commands: docs/CI_CD_DEPLOY_PIPELINE.md, 'Rollback'. Do not tag an older commit -- verify-tag rejects it. The durable fix is a revert PR on main, then a new tag."
+            exit 1
+          fi
+          if [ "$PROD_SHA" != "$COMMIT_SHA" ]; then
+            echo "::error::prod is serving $PROD_SHA, expected $COMMIT_SHA -- the deploy reported success but the rollout did not take. Re-run 'copilot svc deploy --name ${{ env.COPILOT_SVC }} --env prod', or restore the previous release by rolling the ECS service back to its previous task definition ('aws ecs update-service --task-definition <family>:<previous-revision>'; see docs/CI_CD_DEPLOY_PIPELINE.md, 'Rollback'). There is no 'copilot svc rollback' command. Do not tag an older commit -- verify-tag rejects it; the durable fix is a revert PR on main, then a new tag."
+            exit 1
+          fi
+          echo "prod is serving $COMMIT_SHA (${{ github.ref_name }})"

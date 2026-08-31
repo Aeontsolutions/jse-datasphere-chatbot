@@ -1,16 +1,17 @@
-name: Deploy
+name: Deploy to dev
 
-# Auto-deploys to dev on every push to main, runs the live persona eval suite
-# against that dev deployment, and only then offers a prod deploy -- gated on
-# both the eval score (scripts/check_eval_gate.py) and a human approval
-# (the "prod" GitHub Environment's required reviewers).
+# Trunk-based development: every merge to main lands on dev immediately, with
+# no approval, so the team can keep merging. Prod is a separate pipeline
+# triggered by a release tag -- see .github/workflows/release-prod.yml and
+# docs/adr/0004-trunk-based-development.md.
+#
+# The eval gate stays here as a fast regression tripwire: it catches a bad
+# merge on the day it lands rather than at release time a week later.
 #
 # One-time setup required before this workflow can run -- see
 # docs/CI_CD_DEPLOY_PIPELINE.md for exact commands:
 #   - An IAM role for GitHub OIDC (repo variable AWS_DEPLOY_ROLE_ARN)
-#   - Secrets: COPILOT_API_MANIFEST, COPILOT_DEV_ENV_MANIFEST,
-#     COPILOT_PROD_ENV_MANIFEST, GEMINI_API_KEY
-#   - A "prod" GitHub Environment with required reviewers configured
+#   - Secrets: COPILOT_API_MANIFEST, COPILOT_DEV_ENV_MANIFEST, GEMINI_API_KEY
 #   - A seeded baseline at evals/baselines/dev.json
 
 on:
@@ -51,7 +52,11 @@ jobs:
 
       - name: Install AWS Copilot CLI
         run: |
-          curl -sSL -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
+          # Kept identical to release-prod.yml's install.
+          # -f: a bad COPILOT_VERSION would otherwise silently write GitHub's
+          # HTML 404 page to the binary path; chmod +x would still succeed,
+          # and it would only fail later as a confusing exec error.
+          curl -sSLf --max-time 30 -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
           chmod +x /usr/local/bin/copilot
           copilot --version
 
@@ -67,6 +72,13 @@ jobs:
           cat > fastapi_app/copilot/environments/dev/manifest.yml <<'COPILOT_DEV_ENV_MANIFEST_EOF'
           ${{ secrets.COPILOT_DEV_ENV_MANIFEST }}
           COPILOT_DEV_ENV_MANIFEST_EOF
+
+      # .dockerignore excludes .git/, so the container cannot derive its own
+      # commit. Write it into the build context instead -- the Dockerfile's
+      # COPY . . bakes it in, and GET /version reads it back. The release
+      # pipeline uses that to prove dev is serving a given commit.
+      - name: Stamp build commit
+        run: echo "${{ github.sha }}" > fastapi_app/app/BUILD_SHA
 
       - name: copilot svc deploy --env dev
         working-directory: fastapi_app
@@ -132,53 +144,3 @@ jobs:
           name: eval-run-ci-${{ github.run_id }}
           path: evals/runs/ci-${{ github.run_id }}
           retention-days: 30
-
-  deploy-prod:
-    name: Deploy to prod
-    runs-on: ubuntu-latest
-    needs: eval-gate
-    timeout-minutes: 25
-    # Configure required reviewers on this Environment in repo settings --
-    # that's the manual-approval half of the gate. The job won't even start
-    # until eval-gate succeeds; it then waits for approval.
-    environment: prod
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Install AWS Copilot CLI
-        run: |
-          curl -sSL -o /usr/local/bin/copilot "https://github.com/aws/copilot-cli/releases/download/${{ env.COPILOT_VERSION }}/copilot-linux"
-          chmod +x /usr/local/bin/copilot
-
-      - name: Write gitignored Copilot manifests
-        run: |
-          mkdir -p fastapi_app/copilot/api fastapi_app/copilot/environments/prod
-          cat > fastapi_app/copilot/api/manifest.yml <<'COPILOT_API_MANIFEST_EOF'
-          ${{ secrets.COPILOT_API_MANIFEST }}
-          COPILOT_API_MANIFEST_EOF
-          cat > fastapi_app/copilot/environments/prod/manifest.yml <<'COPILOT_PROD_ENV_MANIFEST_EOF'
-          ${{ secrets.COPILOT_PROD_ENV_MANIFEST }}
-          COPILOT_PROD_ENV_MANIFEST_EOF
-
-      - name: copilot svc deploy --env prod
-        working-directory: fastapi_app
-        run: copilot svc deploy --name "${{ env.COPILOT_SVC }}" --env prod
-
-      - name: Verify prod /health
-        run: |
-          BASE_URL="${{ vars.PROD_BASE_URL || 'http://jse-da-Publi-2tSlV7zf7Ysl-685234288.us-east-1.elb.amazonaws.com' }}"
-          for i in $(seq 1 20); do
-            if curl -fsS "$BASE_URL/health"; then exit 0; fi
-            sleep 15
-          done
-          echo "::error::prod /health did not turn healthy in time"
-          exit 1
