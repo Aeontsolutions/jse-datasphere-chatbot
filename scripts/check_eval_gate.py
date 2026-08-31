@@ -9,14 +9,18 @@ negative/refusal personas, which score goal_completion=1.0 by design -- so
 this gate reads `by_category.positive` only, per evals/README and
 [[reference_eval_suite]].
 
-Usage:
-    # First time (or deliberately promoting a new baseline after a reviewed
-    # improvement): run the suite, then record it as the baseline to diff
-    # future runs against.
-    python scripts/check_eval_gate.py evals/runs/<run-id> --update-baseline
+The per-dimension regression threshold is derived from the spread the runs
+actually measured, not asserted -- see evals/gate_stats.py for why a fixed 0.4
+sat below the noise floor.
 
+Usage:
     # Normal gate check (what CI runs):
     python scripts/check_eval_gate.py evals/runs/<run-id>
+
+    # Seed or promote the baseline, after reviewing the runs. Pass several
+    # runs: a baseline from one run enshrines that run's luck, and its own
+    # standard error is what floors the gate's threshold.
+    python scripts/check_eval_gate.py evals/runs/<a> evals/runs/<b> evals/runs/<c> --update-baseline
 """
 
 from __future__ import annotations
@@ -27,9 +31,19 @@ import os
 import sys
 from pathlib import Path
 
+# The `evals` package is pip-installed (`cd evals && pip install -e .`), which
+# both CI jobs do before invoking this script. The threshold maths lives there
+# rather than here so the eval-suite unit-test job covers it -- scripts/ has no
+# test job of its own.
+from evals.gate_stats import (
+    DIMENSIONS,
+    combined_standard_error,
+    pool_runs,
+    regression_threshold,
+)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASELINE = REPO_ROOT / "evals" / "baselines" / "dev.json"
-DIMENSIONS = ("groundedness", "factfulness", "goal_completion", "persona_handling", "coherence")
 
 
 def load_summary(run_dir: Path) -> dict:
@@ -46,24 +60,40 @@ def category_means(summary: dict, category: str) -> dict:
     return {dim: cat.get(f"mean_{dim}") for dim in DIMENSIONS}
 
 
-def write_baseline(path: Path, summary: dict, category: str) -> None:
-    means = category_means(summary, category)
-    fail_verdicts = summary["by_category"][category].get("verdict_counts", {}).get("fail", 0)
+def write_baseline(path: Path, summaries: list[dict], category: str) -> None:
+    """Pool one or more reviewed runs into a baseline.
+
+    Prefer several runs. A baseline from a single run enshrines that run's
+    luck, and its own standard error is what floors the threshold the gate
+    derives -- two consecutive runs of identical code have differed by 0.41 on
+    a dimension here.
+    """
+    baseline = pool_runs(summaries, category=category)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "source_run_id": summary.get("run_id"),
-                "category": category,
-                "means": means,
-                "fail_verdicts": fail_verdicts,
-            },
-            indent=2,
+    path.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+
+    runs = ", ".join(str(r) for r in baseline["source_run_ids"])
+    print(f"Wrote baseline to {path} pooled from {len(summaries)} run(s) [{runs}], n={baseline['n']}")
+    for dim in DIMENSIONS:
+        mean, std = baseline["means"].get(dim), baseline["stds"].get(dim)
+        if mean is None:
+            continue
+        print(f"  {dim:18s} mean={mean:.2f} std={std:.2f}")
+    print(f"  fail_verdicts={baseline['fail_verdicts']}")
+    if len(summaries) < 3:
+        annotate(
+            "warning",
+            f"Baseline pooled from only {len(summaries)} run(s). Three or more gives a tighter "
+            "gate, because the baseline's own standard error floors the threshold.",
         )
-        + "\n",
-        encoding="utf-8",
-    )
-    print(f"Wrote baseline to {path} from run {summary.get('run_id')}: {means}, fail_verdicts={fail_verdicts}")
+
+
+def _baseline_label(baseline: dict) -> str:
+    """Pooled baselines record source_run_ids; ones written before pooling record source_run_id."""
+    ids = baseline.get("source_run_ids")
+    if ids:
+        return ", ".join(str(i) for i in ids)
+    return str(baseline.get("source_run_id"))
 
 
 def annotate(level: str, message: str) -> None:
@@ -74,14 +104,39 @@ def annotate(level: str, message: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("run_dir", type=Path, help="evals/runs/<run-id> directory to check")
+    parser.add_argument(
+        "run_dirs",
+        type=Path,
+        nargs="+",
+        metavar="RUN_DIR",
+        help="evals/runs/<run-id> directory to check. Several may be given only with --update-baseline, which pools them.",
+    )
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     parser.add_argument("--category", default="positive", help="by_category key to gate on (default: positive)")
+    parser.add_argument(
+        "--regression-sigma",
+        type=float,
+        default=2.0,
+        help="How many standard errors a dimension may drop before it counts as a regression "
+        "(default: 2.0). The threshold is derived from the spread the runs actually measured "
+        "rather than asserted -- see evals/gate_stats.py. At sigma 2.0 across five dimensions "
+        "roughly one run in nine trips on noise alone; re-run before investigating a single "
+        "tripped dimension.",
+    )
+    parser.add_argument(
+        "--min-effect",
+        type=float,
+        default=0.15,
+        help="Practical-significance floor on the regression threshold (default: 0.15). "
+        "Statistical significance scales with sample size, so without this a large enough "
+        "run would eventually block releases over a drop nobody can perceive.",
+    )
     parser.add_argument(
         "--max-regression",
         type=float,
         default=0.4,
-        help="Max allowed drop (1-5 scale) per dimension vs baseline before failing (default: 0.4)",
+        help="Fixed fallback threshold, used only against a legacy baseline that records no "
+        "`stds`/`n` (default: 0.4). Re-seed the baseline to get the variance-derived threshold.",
     )
     parser.add_argument(
         "--max-fail-increase",
@@ -111,23 +166,47 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    summary = load_summary(args.run_dir)
-
     if args.update_baseline:
-        write_baseline(args.baseline, summary, args.category)
+        write_baseline(args.baseline, [load_summary(d) for d in args.run_dirs], args.category)
         return 0
+
+    if len(args.run_dirs) > 1:
+        annotate("error", "Several run dirs are only accepted with --update-baseline; gate one run at a time.")
+        return 1
+
+    run_dir = args.run_dirs[0]
+    summary = load_summary(run_dir)
 
     if not args.baseline.exists():
         annotate(
             "error",
             f"No baseline at {args.baseline}. Seed one first: "
-            f"python scripts/check_eval_gate.py {args.run_dir} --update-baseline",
+            f"python scripts/check_eval_gate.py {run_dir} [<run-dir> ...] --update-baseline",
         )
         return 1
 
     baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
     baseline_means = baseline["means"]
     current = category_means(summary, args.category)
+
+    cat_stats = summary["by_category"][args.category]
+    baseline_stds = baseline.get("stds")
+    baseline_n = baseline.get("n")
+    cur_n = cat_stats.get("judged_count") or 0
+
+    # A baseline written before the variance-derived threshold records no
+    # spread, so there is nothing to derive from. Fall back to the old fixed
+    # number rather than inventing one, and say so loudly -- a gate quietly
+    # running looser than the operator believes is the failure this whole
+    # change exists to remove.
+    variance_mode = bool(baseline_stds) and bool(baseline_n) and cur_n > 0
+    if not variance_mode:
+        annotate(
+            "warning",
+            f"Baseline {args.baseline} records no stds/n -- falling back to the fixed "
+            f"--max-regression {args.max_regression}, which is below the measured noise floor. "
+            f"Re-seed it: python scripts/check_eval_gate.py <run-dir> [<run-dir> ...] --update-baseline",
+        )
 
     failures: list[str] = []
     for dim in DIMENSIONS:
@@ -139,12 +218,29 @@ def main() -> int:
             failures.append(f"{dim}: no score in current run (baseline was {base_val})")
             continue
         drop = base_val - cur_val
-        flag = "REGRESSION" if drop > args.max_regression else "ok"
-        print(f"  {dim:18s} baseline={base_val:.2f} current={cur_val:.2f} drop={drop:+.2f}  [{flag}]")
-        if drop > args.max_regression:
-            failures.append(f"{dim} dropped {drop:.2f} (baseline {base_val:.2f} -> {cur_val:.2f}, max allowed {args.max_regression})")
 
-    cat_stats = summary["by_category"][args.category]
+        if variance_mode:
+            se = combined_standard_error(
+                cur_std=cat_stats.get(f"std_{dim}") or 0.0,
+                cur_n=cur_n,
+                base_std=baseline_stds.get(dim) or 0.0,
+                base_n=baseline_n,
+            )
+            threshold = regression_threshold(se=se, sigma=args.regression_sigma, min_effect=args.min_effect)
+        else:
+            threshold = args.max_regression
+
+        flag = "REGRESSION" if drop > threshold else "ok"
+        print(
+            f"  {dim:18s} baseline={base_val:.2f} current={cur_val:.2f} "
+            f"drop={drop:+.2f} allowed={threshold:.2f}  [{flag}]"
+        )
+        if drop > threshold:
+            failures.append(
+                f"{dim} dropped {drop:.2f} (baseline {base_val:.2f} -> {cur_val:.2f}, "
+                f"max allowed {threshold:.2f})"
+            )
+
     fail_verdicts = cat_stats.get("verdict_counts", {}).get("fail", 0)
     baseline_fail_verdicts = baseline.get("fail_verdicts", 0)
     fail_increase = fail_verdicts - baseline_fail_verdicts
@@ -181,12 +277,12 @@ def main() -> int:
         annotate("warning", f"{incomplete} incomplete conversation(s) (transport errors) -- not gating on this, but worth a look.")
 
     if failures:
-        annotate("error", f"EVAL GATE FAILED ({args.run_dir}, baseline {baseline.get('source_run_id')}):")
+        annotate("error", f"EVAL GATE FAILED ({run_dir}, baseline {_baseline_label(baseline)}):")
         for f in failures:
             print(f"  - {f}")
         return 1
 
-    print(f"EVAL GATE PASSED ({args.run_dir}, baseline {baseline.get('source_run_id')})")
+    print(f"EVAL GATE PASSED ({run_dir}, baseline {_baseline_label(baseline)})")
     return 0
 
 

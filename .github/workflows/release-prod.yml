@@ -125,11 +125,19 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
+          # Three replicates, where deploy-dev.yml uses one. Per-conversation
+          # spread is 1.2-1.8 on a 1-5 scale, so a single replicate leaves the
+          # mean with a standard error of ~0.34 -- two consecutive runs of
+          # identical code have differed by 0.41 on a dimension. The gate
+          # derives its threshold from that spread (evals/gate_stats.py), so
+          # more replicates buy a tighter bar automatically. The merge gate
+          # stays at one replicate on purpose: it is a same-day tripwire, and
+          # this cost is only worth paying on the weekly release path.
           python scripts/run_eval.py \
             --base-url "${{ env.DEV_BASE_URL }}" \
-            --replicates 1 \
+            --replicates 3 \
             --concurrency 3 \
-            --max-cost-usd 5 \
+            --max-cost-usd 15 \
             --run-id "release-${{ github.run_id }}"
 
       # Rendered before the gate and with if: always(), so a FAILED gate is as
