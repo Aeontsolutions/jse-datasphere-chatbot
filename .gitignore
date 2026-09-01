@@ -1,6 +1,18 @@
 # Environment variables
 .env
 
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
 # Google Cloud service account
 *.json
 !metadata-example.json
