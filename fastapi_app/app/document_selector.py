@@ -7,6 +7,7 @@ and supports both synchronous and asynchronous document loading operations.
 
 import asyncio
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -76,7 +77,9 @@ def _build_extraction_request(
     Shared by the sync and async variants of extract_companies_from_query so
     the prompt only exists in one place.
     """
-    model_name = "gemini-2.5-flash"  # Fast model for simple extraction
+    # Fast model for simple extraction; GEMINI_MODEL_NAME pins a candidate
+    # without a code change (same override financial_utils.py reads).
+    model_name = os.getenv("GEMINI_MODEL_NAME", "").strip() or "gemini-3.7-flash"
 
     # Format conversation history if available
     conversation_context = ""
@@ -372,7 +375,8 @@ def select_documents_from_filtered(
     start_time = time.time()
     try:
         client = get_genai_client()
-        model_name = "gemini-2.5-flash"  # Fast model for selection
+        # Fast model for selection; see GEMINI_MODEL_NAME note above.
+        model_name = os.getenv("GEMINI_MODEL_NAME", "").strip() or "gemini-3.7-flash"
 
         # Format the filtered metadata (much smaller than full metadata)
         metadata_str = json.dumps(filtered_metadata, indent=2)

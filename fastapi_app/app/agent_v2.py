@@ -1,7 +1,7 @@
 """
 Simplified Agent V2 - Google Search Grounding Only.
 
-This module provides a streamlined agent that uses Gemini 2.5 Pro with native
+This module provides a streamlined agent that uses Gemini 3.7 Flash with native
 Google Search grounding for JSE financial research. Unlike the original agent,
 this uses a single generate_content call with the GoogleSearch tool.
 
@@ -82,11 +82,9 @@ SYSTEM_PROMPT_NO_SEARCH = SYSTEM_PROMPT.replace(
 
 # Model used for the cheap route + refusal calls (Phase A).
 # Router/refusal calls run on a small output budget, so the model must not spend
-# that budget thinking. Gemini 2.5 honours thinking_budget=0; Gemini 3.x ignores
-# it (it uses thinking_level, whose lowest supported value still spends ~250
-# tokens), which is why the router stays pinned to 2.5 for now. Issue #72 has
-# the measurements behind this.
-DEFAULT_ROUTER_MODEL = "gemini-2.5-flash"
+# that budget thinking -- see _THINKING_FLOOR below for how each model family is
+# told to stop, and issue #72 for the truncation that motivated it.
+DEFAULT_ROUTER_MODEL = "gemini-3.7-flash"
 
 # Budget shared between thinking and visible output on the refusal call. The
 # original 256 was exhausted by thinking alone, truncating the answer mid-word.
@@ -95,7 +93,39 @@ ROUTER_MAX_OUTPUT_TOKENS = 256
 
 # Thinking disabled outright: the router emits one word and a refusal is one or
 # two sentences. Neither needs deliberation, and both paid for it in truncations.
-NO_THINKING = types.ThinkingConfig(thinking_budget=0)
+# The knob that minimises thinking differs PER MODEL, not per family, and the
+# wrong one fails a different way on each. Measured 2026-08-29 on the router call
+# (thinking tokens spent, or the error returned):
+#
+#   gemini-2.5-*   thinking_budget=0      -> 0
+#   gemini-3.6-*   thinking_budget=0      -> 400 INVALID_ARGUMENT
+#                  thinking_level=MINIMAL -> 0
+#   gemini-3.7-*   thinking_level=MINIMAL -> 400 "not supported for this model"
+#                  thinking_budget=0      -> accepted but IGNORED (~50 spent)
+#                  thinking_level=LOW     -> ~45, the floor for this model
+#
+# 3.7 has no zero-thinking setting, and its silent-ignore of thinking_budget=0
+# is the dangerous case: it looks like it worked. Keep this a per-model map so a
+# new model cannot inherit a setting that quietly does nothing.
+_THINKING_FLOOR: Dict[str, types.ThinkingConfig] = {
+    "gemini-3.6": types.ThinkingConfig(thinking_level="MINIMAL"),
+    "gemini-3.7": types.ThinkingConfig(thinking_level="LOW"),
+}
+
+
+def resolve_no_thinking(model: str) -> types.ThinkingConfig:
+    """The lowest-thinking config `model` actually honours.
+
+    Falls back to thinking_budget=0 (correct for 2.5, and the pre-3.x default).
+    A model not listed in _THINKING_FLOOR that rejects or ignores that field
+    will show up as a 400 or as unexplained thinking spend -- measure a new
+    model against the table above before pinning it.
+    """
+    key = model.lower()
+    for prefix, config in _THINKING_FLOOR.items():
+        if key.startswith(prefix):
+            return config
+    return types.ThinkingConfig(thinking_budget=0)
 
 
 def resolve_router_model() -> str:
@@ -127,9 +157,26 @@ def extract_finish_reason(response: Any) -> Optional[str]:
 
 
 ROUTER_MODEL = resolve_router_model()
+NO_THINKING = resolve_no_thinking(ROUTER_MODEL)
+
+DEFAULT_SYNTHESIS_MODEL = "gemini-3.7-flash"
+
+
+def resolve_synthesis_model() -> str:
+    """Synthesis/web model, overridable per environment for trialling a candidate.
+
+    Set SYNTHESIS_MODEL_NAME to pin a different model without a code change.
+    The prompt caches below bind to the same value on purpose: Gemini rejects a
+    cached_content entry that was created for a different model than the
+    request uses, so the two must never drift apart.
+    """
+    return os.getenv("SYNTHESIS_MODEL_NAME", "").strip() or DEFAULT_SYNTHESIS_MODEL
+
+
+SYNTHESIS_MODEL = resolve_synthesis_model()
 
 # Phase-A step 1 — ROUTE: a plain-text 2-way classifier (no tools, no grounding).
-# Every query answers via Gemini 2.5 Pro + Google Search grounding; the router's
+# Every query answers via the synthesis model + Google Search grounding; the router's
 # only job is to catch out-of-scope/unsafe requests cheaply before they reach Pro.
 QUERY_ROUTER_PROMPT = """You are a router for a Jamaica Stock Exchange (JSE) assistant. Classify the user's latest question into exactly one label.
 
@@ -154,11 +201,11 @@ When a request is out of scope, respond briefly and politely:
 # Module-level caches — shared across per-request AgentV2 instances.
 # QUERY_ROUTER_PROMPT is not cached: ~300 tokens, below Gemini's 1024-token minimum.
 _SYSTEM_PROMPT_CACHE = PromptCache(
-    model_name="gemini-2.5-pro",
+    model_name=SYNTHESIS_MODEL,
     display_name="agent-v2-system-prompt",
 )
 _SYSTEM_PROMPT_NO_SEARCH_CACHE = PromptCache(
-    model_name="gemini-2.5-pro",
+    model_name=SYNTHESIS_MODEL,
     display_name="agent-v2-system-prompt-no-search",
 )
 
@@ -169,7 +216,7 @@ _SYSTEM_PROMPT_NO_SEARCH_CACHE = PromptCache(
 
 class AgentV2:
     """
-    Simplified agent using Gemini 2.5 Pro with native Google Search grounding.
+    Simplified agent using Gemini 3.7 Flash with native Google Search grounding.
 
     This follows the pattern from the example script - a single generate_content
     call with the GoogleSearch tool for web grounding.
@@ -177,13 +224,13 @@ class AgentV2:
 
     def __init__(
         self,
-        model_name: str = "gemini-2.5-pro",
+        model_name: str = SYNTHESIS_MODEL,
     ):
         """
         Initialize the agent.
 
         Args:
-            model_name: Gemini model for synthesis/web. Defaults to gemini-2.5-pro.
+            model_name: Gemini model for synthesis/web. Defaults to DEFAULT_SYNTHESIS_MODEL.
         """
         self.client = get_genai_client()
         self.model_name = model_name
@@ -301,8 +348,21 @@ class AgentV2:
                         types.Content(role=role, parts=[types.Part.from_text(text=content)])
                     )
 
-        # Add the new user message
-        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=new_message)]))
+        # An empty new message must NOT be appended: the SDK drops the empty
+        # part, leaving the array ending on a model turn. Gemini 2.5 tolerates
+        # that; every 3.x model rejects the request outright with 400
+        # INVALID_ARGUMENT "Requests ending with a model turn are not
+        # supported" (issue #82).
+        if new_message and new_message.strip():
+            contents.append(
+                types.Content(role="user", parts=[types.Part.from_text(text=new_message)])
+            )
+
+        # History alone can also end on a model turn -- e.g. history that opens
+        # with an assistant message and carries no trailing user turn. Trim so
+        # the array always ends on a user turn, or is empty.
+        while contents and contents[-1].role != "user":
+            contents.pop()
 
         return contents
 
@@ -549,6 +609,35 @@ class AgentV2:
             logger.error(f"AgentV2 fast_path failed: {e}", exc_info=True)
             return None
 
+    def _blank_query_response(
+        self, conversation_history: Optional[List[Dict[str, str]]]
+    ) -> Dict[str, Any]:
+        """Response for an empty query, shaped like AgentChatResponse.
+
+        History is returned unchanged: an empty user turn is not worth
+        recording, and appending one would recreate the trailing-model-turn
+        shape that _build_contents now guards against (issue #82).
+        """
+        message = "I didn't catch a question there — what would you like to know about the JSE?"
+        return {
+            "response": message,
+            "data_found": False,
+            "record_count": 0,
+            "needs_clarification": True,
+            "clarification_question": message,
+            "tools_executed": [],
+            "sources": None,
+            "filters_used": None,
+            "data_preview": None,
+            "chart": None,
+            "web_search_results": None,
+            "suggestions": None,
+            "conversation_history": list(conversation_history) if conversation_history else [],
+            "warnings": None,
+            "finish_reason": None,
+            "cost_summary": self._build_cost_summary(),
+        }
+
     async def run(
         self,
         query: str,
@@ -575,6 +664,11 @@ class AgentV2:
         logger.info(f"AgentV2 run: {query[:100]}...")
 
         self._reset_cost_tracking()
+
+        # A blank query has no answer to generate and costs a round trip to
+        # find that out -- ask for the question instead of calling the model.
+        if not query or not query.strip():
+            return self._blank_query_response(conversation_history)
 
         # Kick off symbol extraction now so its network call overlaps with the
         # router call below instead of adding to total latency.
