@@ -45,7 +45,7 @@ _PURE_RATIO_ITEMS = frozenset({"current_ratio", "debt_to_equity_ratio"})
 
 # Module-level cache for the stable parse_user_query system instruction.
 _PARSE_QUERY_CACHE = PromptCache(
-    model_name=os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash"),
+    model_name=os.getenv("GEMINI_MODEL_NAME", "gemini-3.7-flash"),
     display_name="parse-query-system-instruction",
 )
 
@@ -150,7 +150,7 @@ class FinancialDataManager:
                 )
                 genai.configure(api_key=api_key)
                 # Use configured model name or default
-                model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+                model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3.7-flash")
                 self.model = genai.GenerativeModel(model_name)
                 logger.info(f"✅ Gemini AI model initialized successfully: {model_name}")
             else:
@@ -542,7 +542,7 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
             return self._fallback_parse_query(query, last_query_data)
 
         start_time = time.time()
-        model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+        model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3.7-flash")
 
         # Get conversation context
         conversation_context = self.get_conversation_context(conversation_history)
@@ -1366,7 +1366,7 @@ Do NOT provide any analysis, data, or commentary regarding share prices, dividen
 
             Keep the response concise but informative. Be conversational and natural.
         """
-        model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+        model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-3.7-flash")
         start_time = time.time()
         try:
             with traced_observation(

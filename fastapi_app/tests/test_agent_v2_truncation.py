@@ -18,7 +18,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.agent_v2 import AgentV2, extract_finish_reason, resolve_router_model
+from app.agent_v2 import (
+    DEFAULT_ROUTER_MODEL,
+    ROUTER_MODEL,
+    AgentV2,
+    extract_finish_reason,
+    resolve_no_thinking,
+    resolve_router_model,
+)
 
 
 @pytest.fixture
@@ -103,7 +110,11 @@ def test_router_call_disables_thinking(mock_genai_client):
 
     route_cfg = mock_genai_client.aio.models.generate_content.call_args_list[0].kwargs["config"]
     assert route_cfg.thinking_config is not None
-    assert route_cfg.thinking_config.thinking_budget == 0
+    # Asserted against the resolver rather than a literal: the knob that
+    # minimises thinking differs per model (thinking_budget=0 on 2.5,
+    # thinking_level on 3.x), and sending the wrong one is a 400 or a silent
+    # no-op. What matters for issue #72 is that the floor is requested at all.
+    assert route_cfg.thinking_config == resolve_no_thinking(ROUTER_MODEL)
 
 
 def test_refusal_call_disables_thinking(mock_genai_client):
@@ -116,7 +127,7 @@ def test_refusal_call_disables_thinking(mock_genai_client):
 
     refusal_cfg = mock_genai_client.aio.models.generate_content.call_args_list[1].kwargs["config"]
     assert refusal_cfg.thinking_config is not None
-    assert refusal_cfg.thinking_config.thinking_budget == 0
+    assert refusal_cfg.thinking_config == resolve_no_thinking(ROUTER_MODEL)
 
 
 def test_refusal_output_cap_leaves_headroom(mock_genai_client):
@@ -181,7 +192,7 @@ def test_error_path_finish_reason_is_none(mock_genai_client):
 
 def test_router_model_defaults_to_pinned_flash(monkeypatch):
     monkeypatch.delenv("ROUTER_MODEL_NAME", raising=False)
-    assert resolve_router_model() == "gemini-2.5-flash"
+    assert resolve_router_model() == DEFAULT_ROUTER_MODEL
 
 
 def test_router_model_overridable_by_env(monkeypatch):
@@ -192,7 +203,7 @@ def test_router_model_overridable_by_env(monkeypatch):
 
 def test_router_model_blank_env_falls_back(monkeypatch):
     monkeypatch.setenv("ROUTER_MODEL_NAME", "   ")
-    assert resolve_router_model() == "gemini-2.5-flash"
+    assert resolve_router_model() == DEFAULT_ROUTER_MODEL
 
 
 def test_cost_summary_totals_thinking_tokens(mock_genai_client):
