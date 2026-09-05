@@ -62,6 +62,47 @@ between Medical Disposables & Supplies and Mailpac Group — was probed directly
 on arm B, three times. All three resolved to Medical Disposables & Supplies
 Limited; none mentioned Mailpac.
 
+## Full-suite check for collateral damage
+
+All 31 personas, 1 replicate, baseline vs arm B on the same local build.
+
+| | baseline | arm B |
+|---|---|---|
+| pass | 19 | 23 |
+| partial | 4 | 2 |
+| fail | 8 | 6 |
+
+Positive-category dimension means (arm B minus baseline):
+
+| dimension | baseline | arm B | delta |
+|---|---|---|---|
+| groundedness | 3.58 | 3.96 | +0.38 |
+| tool_use_appropriateness | 3.83 | 4.16 | +0.33 |
+| factfulness | 3.96 | 4.20 | +0.24 |
+| persona_handling | 4.12 | 4.36 | +0.24 |
+| goal_completion | 3.88 | 4.08 | +0.21 |
+| coherence | 4.75 | 4.64 | -0.11 |
+
+**Read this as "no detectable harm", not as "arm B is better."** Every delta is
+inside the noise floor this repo already documents: `evals/gate_stats.py` records
+that two consecutive runs of identical code have differed by 0.41 on a dimension.
+
+Two independent reasons to distrust the apparent improvement:
+
+- Seven of 31 personas changed verdict, and **two of those seven are on
+  `fast_chat_v2`** — an endpoint that does not go through AgentV2 at all, so the
+  flags cannot reach it. `negative_price_prediction` went partial→pass and
+  `senior_analyst_ncb_financials` fail→partial with nothing in their path
+  changed. That is the noise floor making itself visible.
+- One replicate per persona. The suite's own default is three, and the CI gate
+  uses one only because it is a tripwire, not a measurement.
+
+Of the six arm-B failures, five are `fast_chat_v2` personas — `dividend_income_investor`,
+`investor_compare_ncb_vs_jmmb`, `sme_owner_ipo_curiosity`, `technical_trader_market_data`,
+`user_asks_about_delisted_stock` — matching the known data-coverage gaps named in the
+2026-06-04 spec as blocked on the R13/R14 backfill. The sixth is
+`disambiguation_recent_listing_not_in_database`, the defect under study.
+
 ## What this does and does not show
 
 **Does show.** For companies that exist on the public web, Google Search
