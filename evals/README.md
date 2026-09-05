@@ -87,9 +87,31 @@ edit dimension descriptions to tune scoring without touching code.
 `computed_verdict` per conversation from the six dimension scores, and flags
 `verdict_agreement` (whether it matches the judge LLM's own holistic
 `pass`/`fail`/`partial` call). Check `summary.json`'s `verdict_agreement_rate`
-after a run; a low rate means either the judge is drifting from the
-documented rubric or the rubric no longer reflects what actually matters —
-worth investigating either way, not just noise.
+(under `overall`, and per category) after a run; a low rate means either the
+judge is drifting from the documented rubric or the rubric no longer reflects
+what actually matters — worth investigating either way, not just noise.
+
+**The deploy gate counts failures from `computed_verdict`, not the judge's
+holistic verdict.** The two disagree on roughly one conversation in six —
+measured at 84% and 87% agreement over two 93-conversation runs — and the
+judge is consistently the harsher of the pair. Gating on it put the judge's
+scoring drift in the release path. Across twelve CI-shaped slices (one
+replicate over all personas) drawn from four runs:
+
+| verdict source | fail counts | spread | stdev |
+|---|---|---|---|
+| judge holistic | 8,9,4,4,5,5,6,6,4,6,7,6 | 5 | 1.52 |
+| `computed_verdict` | 5,3,3,3,3,3,2,3,3,3,3,5 | 3 | 0.83 |
+
+`--max-fail-increase` defaults to 2, so the judge metric swung wider than the
+gate's entire tolerance. Both counts appear in `summary.json`
+(`verdict_counts` and `computed_verdict_counts`) and both are printed by
+`check_eval_gate.py`; only the computed one gates.
+
+Baselines record `verdict_source: "computed"`. A baseline seeded before this
+change counted judge verdicts, so the gate **refuses** to compare against it
+rather than silently mixing two metrics — re-seed with `--update-baseline`
+over three or more reviewed runs.
 
 ## Cost accounting
 

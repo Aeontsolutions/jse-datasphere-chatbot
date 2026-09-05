@@ -241,10 +241,41 @@ def main() -> int:
                 f"max allowed {threshold:.2f})"
             )
 
-    fail_verdicts = cat_stats.get("verdict_counts", {}).get("fail", 0)
+    # Counted from the deterministic rubric-weighted verdict. The judge's own
+    # holistic verdict disagrees with the rubric's documented weights on ~1
+    # conversation in 6 (measured 84% and 87% over two 93-conversation runs)
+    # and is the harsher of the two, so gating on it put the judge's scoring
+    # drift in the release path. Both are printed; only the computed one gates.
+    computed_counts = cat_stats.get("computed_verdict_counts")
+    judge_fail = cat_stats.get("verdict_counts", {}).get("fail", 0)
+    if computed_counts is None:
+        annotate(
+            "error",
+            "summary has no computed_verdict_counts -- it came from a build that gated on "
+            "the judge's holistic verdict. Re-run the suite on a current build; silently "
+            "comparing the two metrics would be worse than failing here.",
+        )
+        return 1
+    if baseline.get("verdict_source") != "computed":
+        annotate(
+            "error",
+            f"baseline {args.baseline} was seeded from judge verdicts (no "
+            "verdict_source='computed'). Its fail_verdicts is not comparable with the "
+            "computed count. Re-seed it with --update-baseline over three or more runs.",
+        )
+        return 1
+
+    fail_verdicts = computed_counts.get("fail", 0)
     baseline_fail_verdicts = baseline.get("fail_verdicts", 0)
     fail_increase = fail_verdicts - baseline_fail_verdicts
-    print(f"  fail_verdicts      baseline={baseline_fail_verdicts} current={fail_verdicts} increase={fail_increase:+d}")
+    print(
+        f"  fail_verdicts      baseline={baseline_fail_verdicts} current={fail_verdicts} "
+        f"increase={fail_increase:+d}  [computed verdict]"
+    )
+    print(
+        f"  (judge holistic fail count for reference: {judge_fail}; "
+        f"agreement={cat_stats.get('verdict_agreement_rate')})"
+    )
     if fail_increase > args.max_fail_increase:
         failures.append(
             f"fail_verdicts rose by {fail_increase} (baseline {baseline_fail_verdicts} -> {fail_verdicts}, "

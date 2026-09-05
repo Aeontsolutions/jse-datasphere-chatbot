@@ -77,9 +77,29 @@ def pool_runs(summaries: list[dict[str, Any]], *, category: str) -> dict[str, An
         means[dim] = pooled_mean
         stds[dim] = math.sqrt(variance)
 
+    # Counted from the deterministic rubric-weighted verdict, not the judge's
+    # holistic one. The two disagree on ~1 conversation in 6 and the judge is
+    # the harsher of the pair, so gating on it imported the judge's scoring
+    # drift into the release decision: across twelve CI-shaped slices the
+    # judge's fail count had stdev 1.52 and swung by 5, against a
+    # --max-fail-increase tolerance of 2. The computed count had stdev 0.83.
+    #
+    # A summary written before computed_verdict_counts existed cannot be
+    # pooled: silently falling back to verdict_counts would produce a baseline
+    # that looks current while mixing two different metrics.
+    missing = [
+        s.get("run_id") for s, c in zip(summaries, cats) if "computed_verdict_counts" not in c
+    ]
+    if missing:
+        raise ValueError(
+            "cannot pool a baseline from runs without computed_verdict_counts "
+            f"(missing in: {', '.join(str(m) for m in missing)}). Re-run the suite "
+            "on a build that emits it rather than mixing verdict sources."
+        )
+
     # Averaged, not summed: the gate compares this against a single run's
     # fail count, so a pooled baseline must stay on that scale.
-    fail_counts = [c.get("verdict_counts", {}).get("fail", 0) for c in cats]
+    fail_counts = [c["computed_verdict_counts"].get("fail", 0) for c in cats]
     fail_verdicts = round(sum(fail_counts) / len(fail_counts))
 
     return {
@@ -89,6 +109,9 @@ def pool_runs(summaries: list[dict[str, Any]], *, category: str) -> dict[str, An
         "stds": stds,
         "n": total_n,
         "fail_verdicts": fail_verdicts,
+        # Stamped so a baseline seeded under the old counting is detectable
+        # rather than silently compared against the new metric.
+        "verdict_source": "computed",
     }
 
 
