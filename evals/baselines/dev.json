@@ -1,23 +1,25 @@
 {
   "source_run_ids": [
-    "ci-33441069571",
-    "ci-33445015851"
+    "seed1",
+    "seed2",
+    "seed3"
   ],
   "category": "positive",
   "means": {
-    "groundedness": 3.95,
-    "factfulness": 3.625,
-    "goal_completion": 3.375,
-    "persona_handling": 3.625,
-    "coherence": 4.025
+    "groundedness": 4.373333333333333,
+    "factfulness": 4.386666666666667,
+    "goal_completion": 4.16,
+    "persona_handling": 4.413333333333333,
+    "coherence": 4.4
   },
   "stds": {
-    "groundedness": 1.3765434228064855,
-    "factfulness": 1.7348243094375249,
-    "goal_completion": 1.7495420646264654,
-    "persona_handling": 1.5638135504313873,
-    "coherence": 1.310460870193266
+    "groundedness": 1.2921105020661157,
+    "factfulness": 1.2722966394433095,
+    "goal_completion": 1.5160403617247062,
+    "persona_handling": 1.1635608595487708,
+    "coherence": 1.115008180796555
   },
-  "n": 40,
-  "fail_verdicts": 8
+  "n": 75,
+  "fail_verdicts": 3,
+  "verdict_source": "computed"
 }
