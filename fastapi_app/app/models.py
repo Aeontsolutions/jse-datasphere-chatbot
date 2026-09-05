@@ -297,7 +297,14 @@ class AgentChatResponse(BaseModel):
 
     # === EXISTING FIELDS (from FinancialDataResponse for backward compatibility) ===
     response: str = Field(..., description="AI-generated response with source citations")
-    data_found: bool = Field(..., description="Whether any financial data was found")
+    data_found: bool = Field(
+        ...,
+        description=(
+            "Whether the answer is backed by retrieved data: financial records on "
+            "/fast_chat_v2, or web sources on /chat/stream. Not a measure of answer "
+            "length or confidence."
+        ),
+    )
     record_count: int = Field(..., description="Number of financial records found")
     filters_used: Optional[FinancialDataFilters] = Field(
         default=None, description="Filters that were applied to SQL query"

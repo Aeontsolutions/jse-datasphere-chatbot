@@ -739,7 +739,7 @@ class AgentV2:
             "chart": None,
             "web_search_results": None,
             "suggestions": None,
-            "conversation_history": list(conversation_history) if conversation_history else [],
+            "conversation_history": (list(conversation_history) if conversation_history else []),
             "warnings": None,
             "finish_reason": None,
             "cost_summary": self._build_cost_summary(),
@@ -868,7 +868,13 @@ class AgentV2:
 
             return {
                 "response": response_text,
-                "data_found": bool(response_text and len(response_text) > 50),
+                # Retrieval, not length. This was `len(response_text) > 50`, which
+                # called any answer over a sentence "data" -- including one the model
+                # produced from its priors with no search. /fast_chat_v2 sets the same
+                # field from bool(results), so the two endpoints disagreed on what it
+                # meant, and the eval judge read it as proof a data tool had returned
+                # something. It is written to the interactions table too.
+                "data_found": bool(sources),
                 "record_count": 0,  # No financial records in this version
                 "needs_clarification": False,
                 "clarification_question": None,

@@ -8,6 +8,17 @@ dimensions:
       to an item in the response's `sources` (or `data_preview` for
       financial endpoint). A score of 1 means most claims are unsupported
       or contradict the sources.
+
+      Judge ONLY from `sources` and `data_preview`. `data_found` is not
+      evidence that a claim is supported and must never be cited as if it
+      were: it is a coarse per-response flag, it says nothing about any
+      individual claim, and on /chat/stream it was for a long time set from
+      the response's length alone. A response carrying specific figures with
+      an empty `sources` list is ungrounded, whatever `data_found` says.
+
+      A response that makes no factual claims has nothing to ground and
+      scores 5 -- for example, one that plainly states it has no data for
+      the question. Saying "I don't have that" is not a groundedness failure.
   factfulness:
     description: |
       Score only if the persona declares `expected_facts`. For each fact,
