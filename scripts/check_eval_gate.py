@@ -35,7 +35,13 @@ from pathlib import Path
 # both CI jobs do before invoking this script. The threshold maths lives there
 # rather than here so the eval-suite unit-test job covers it -- scripts/ has no
 # test job of its own.
-from evals.gate_stats import (
+# Run THIS checkout's evals package, not whichever worktree last ran
+# `pip install -e evals/`. See scripts/_local_evals.py.
+from _local_evals import use_local_evals  # noqa: E402
+
+use_local_evals()
+
+from evals.gate_stats import (  # noqa: E402  -- must follow use_local_evals()
     DIMENSIONS,
     combined_standard_error,
     pool_runs,

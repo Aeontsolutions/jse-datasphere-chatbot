@@ -146,11 +146,12 @@ DISABLE_REGISTRY_GROUNDING=true DISABLE_PROMPT_COMPANY_LIST=true \
 ```
 
 ```bash
-PYTHONPATH="$PWD" python scripts/run_eval.py --base-url http://127.0.0.1:8000 \
-  --personas-dir "$PWD/evals/personas" --output-dir "$PWD/evals/runs" \
-  --replicates 3 --run-id local_arm_b --persona disambiguation_ticker_shared_with_foreign_issuer
+python scripts/run_eval.py --base-url http://127.0.0.1:8000 --replicates 3 --run-id local_arm_b --persona disambiguation_ticker_shared_with_foreign_issuer
 ```
 
-`PYTHONPATH` and `--personas-dir` are both required: `run_eval.py` otherwise
-resolves the `evals` package through the editable install, which points at
-whichever worktree installed it last — personas *and* harness code.
+The runs recorded above predate that simplification and were driven with an
+explicit `PYTHONPATH` and `--personas-dir`, because `run_eval.py` used to
+resolve the `evals` package through the editable install — which points at
+whichever worktree installed it last, swapping both the harness code and the
+persona set. `scripts/_local_evals.py` now forces this checkout to win, so
+neither flag is needed.

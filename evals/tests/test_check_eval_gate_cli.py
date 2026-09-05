@@ -270,7 +270,9 @@ def test_update_baseline_pools_several_runs(tmp_path):
     assert set(written["stds"]) == set(DIMS)
     # Pooled fail verdicts stay on a single run's scale, not summed -- and are
     # counted from computed_verdict_counts (3 per run in the fixture), not the
-    # judge's verdict_counts (8).
+    # judge's verdict_counts (8). This assertion said 8 and passed anyway until
+    # scripts/_local_evals.py landed, because the subprocess was resolving the
+    # evals package to another worktree's gate_stats.
     assert written["fail_verdicts"] == 3
     assert written["verdict_source"] == "computed"
 
