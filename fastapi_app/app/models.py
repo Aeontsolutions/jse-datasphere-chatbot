@@ -221,6 +221,10 @@ class FinancialDataResponse(BaseModel):
     sources: Optional[List[Source]] = Field(
         default=None, description="Provenance for the answer (dataset sources)"
     )
+    cost_summary: Optional["CostSummary"] = Field(
+        default=None,
+        description="Internal: Cost tracking summary for this request (developer/ops monitoring)",
+    )
 
 
 class JobStatus(str, Enum):

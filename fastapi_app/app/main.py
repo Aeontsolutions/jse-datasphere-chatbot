@@ -5,7 +5,7 @@ import time
 import uuid
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, List
 from contextlib import asynccontextmanager
 
 from app.models import (
@@ -19,6 +19,8 @@ from app.models import (
     Source,
     FinancialDataFilters,
     FinancialDataRecord,
+    CostSummary,
+    PhaseCost,
 )
 from app.build_info import read_build_sha
 from app.charting import generate_chart
@@ -34,6 +36,7 @@ from app.metadata_loader import load_metadata_from_s3
 from app.document_selector import auto_load_relevant_documents
 from app.financial_utils import FinancialDataManager
 from app.agent_v2 import AgentV2
+from app.utils.cost_tracking import CostResult
 from app.config import get_config
 from app.response_cache import ResponseCache, build_response_cache
 from app.interaction_log import InteractionLogger, build_interaction_logger
@@ -568,6 +571,34 @@ async def chat(
 # ---------------------------------------------------------------------------
 
 
+def _build_cost_summary(costs: List[CostResult]) -> CostSummary:
+    """Turn the per-call costs collected via cost_sink into a CostSummary.
+
+    Mirrors AgentV2._build_cost_summary (app/agent_v2.py) so /fast_chat_v2
+    reports cost the same way /chat/stream does.
+    """
+    phases = [
+        PhaseCost(
+            phase=c.phase,
+            model=c.model,
+            input_tokens=c.token_usage.input_tokens,
+            output_tokens=c.token_usage.output_tokens,
+            cached_tokens=c.token_usage.cached_tokens,
+            input_cost_usd=c.input_cost,
+            output_cost_usd=c.output_cost,
+            total_cost_usd=c.total_cost,
+        )
+        for c in costs
+    ]
+    return CostSummary(
+        total_input_tokens=sum(p.input_tokens for p in phases),
+        total_output_tokens=sum(p.output_tokens for p in phases),
+        total_cached_tokens=sum(p.cached_tokens for p in phases),
+        total_cost_usd=sum(p.total_cost_usd for p in phases),
+        phases=phases,
+    )
+
+
 @app.post("/fast_chat_v2", response_model=FinancialDataResponse)
 async def fast_chat_v2(
     request: FinancialDataRequest,
@@ -788,6 +819,7 @@ async def fast_chat_v2(
             suggestions=suggestions if suggestions else None,
             chart=chart_spec,
             sources=sources,
+            cost_summary=_build_cost_summary(request_costs),
         )
     except HTTPException as e:
         schedule_log(response=None, cache_hit=False, success=False, error_message=str(e.detail))
