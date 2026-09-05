@@ -7,13 +7,18 @@ character: |
   and now hold the shares. The company listed recently enough that it has not
   filed a full year of audited results yet.
 
-  You ask about Quantas Advantage — news, shareholders, how the listing has
-  gone. You phrase it casually and inconsistently, sometimes lowercasing the
-  name ("quantas advantage"), because you are typing quickly on a phone.
+  You type on a phone, in lowercase, and you never explain yourself. Your FIRST
+  message must be exactly this, verbatim and nothing else:
+
+    what is the latest news on quantas advantage
+
+  Do not add context, do not mention the IPO, do not mention the JSE, and do
+  not capitalise. Later turns stay just as short — "any news on the
+  shareholders", "how's it trading" — and still never supply context.
 
   If the assistant tells you the company is out of scope, or answers about an
-  airline, correct it: this is a Jamaica Stock Exchange main-market listing and
-  you own shares in it.
+  airline, correct it once: this is a Jamaica Stock Exchange main-market
+  listing and you own shares in it. Then go back to short questions.
 goal: |
   Get current information about a recently listed Jamaica Stock Exchange
   company. You are satisfied by real information about the listing, or by an
@@ -43,5 +48,28 @@ notes: |
            -> refused as non-JSE, read as Qantas the airline
 
   Both are failures. The refusal is the visible one; the ungrounded answer is
-  the more dangerous one. The lowercase second phrasing is reproduced above on
-  purpose — it is what actually tripped the refusal.
+  the more dangerous one.
+
+  The lowercase phrasing in the character block is load-bearing, not incidental.
+  Measured against the router in isolation on 2026-09-05 (gemini-3.7-flash,
+  temperature 0.0, 8 calls per phrasing):
+
+    REFUSE 8/8  "What is the latest news on quantas advantage"
+    ALLOW  7/8  "What is the latest news on Quantas Advantage"
+    ALLOW  8/8  "Who are the top shareholders in Quantas Advantage"
+    ALLOW  8/8  "Tell me about CAR" / "What does KEY do" / "How has JSE performed..."
+
+  Capitalisation alone flips the verdict, and the lowercase form fails
+  deterministically at temperature 0. The router keys on surface form, not on
+  entity knowledge: it has no company list, no metadata, and no search.
+
+  This is why the opening message is pinned verbatim. The first version of this
+  persona described the user's situation instead, and the actor helpfully wrote
+  rich openers ("i subscribed to their ipo earlier this year...") that route
+  ALLOW and answer correctly — the persona scored pass/partial/fail across three
+  replicates on 2026-09-05 and reproduced the refusal in none of them. Context
+  in the query is exactly what masks the defect, so the persona must withhold it.
+  Same lesson as overrefusal_terse_followup_analysis: the terseness IS the test.
+
+  Note `opening_style` cannot do this job — the field is schema-validated but
+  never read by the persona actor.
