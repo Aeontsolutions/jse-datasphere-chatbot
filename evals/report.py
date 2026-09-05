@@ -336,9 +336,20 @@ def _persona_stats(convos: list[ConversationArtifact], personas: list[PersonaSpe
         out[f"std_{d}"] = s
 
     verdict_counts: dict[str, int] = {"pass": 0, "partial": 0, "fail": 0}
+    computed_counts: dict[str, int] = {"pass": 0, "partial": 0, "fail": 0}
     for c in judged:
         verdict_counts[c.judge_output.verdict] = verdict_counts.get(c.judge_output.verdict, 0) + 1
+        category = category_by_id.get(c.transcript.persona_id)
+        if category is None:
+            continue
+        cv, _ = _weighted_verdict_for(c.judge_output, category, _DEFAULT_VERDICT_WEIGHTS)
+        computed_counts[cv] = computed_counts.get(cv, 0) + 1
     out["verdict_counts"] = verdict_counts
+    # What the gate keys on. The judge's holistic verdict disagrees with the
+    # rubric's own weights on ~1 conversation in 6, and is the harsher of the
+    # two -- gating on it put the judge's scoring drift in the release path.
+    # Both are reported so verdict_agreement_rate stays meaningful.
+    out["computed_verdict_counts"] = computed_counts
     out["verdict_agreement_rate"] = _verdict_agreement_rate(judged, category_by_id)
 
     out["mean_turns"] = statistics.mean(len(c.transcript.turns) for c in convos)
@@ -380,8 +391,15 @@ def _overall_stats(
         overall[f"std_{d}"] = statistics.stdev(v) if len(v) > 1 else (0.0 if v else None)
 
     verdict_counts = {"pass": 0, "partial": 0, "fail": 0}
+    computed_counts = {"pass": 0, "partial": 0, "fail": 0}
     for c in judged:
         verdict_counts[c.judge_output.verdict] = verdict_counts.get(c.judge_output.verdict, 0) + 1
+        category = category_by_id.get(c.transcript.persona_id)
+        if category is None:
+            continue
+        cv, _ = _weighted_verdict_for(c.judge_output, category, _DEFAULT_VERDICT_WEIGHTS)
+        computed_counts[cv] = computed_counts.get(cv, 0) + 1
+    overall["computed_verdict_counts"] = computed_counts
     overall["verdict_counts"] = verdict_counts
     overall["verdict_agreement_rate"] = _verdict_agreement_rate(judged, category_by_id)
 

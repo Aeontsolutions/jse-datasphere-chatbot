@@ -43,6 +43,9 @@ BASELINE = {
         "coherence": 3.29,
     },
     "fail_verdicts": 10,
+    # Stamped: the gate refuses a baseline seeded from judge verdicts, because
+    # the two counts are not comparable.
+    "verdict_source": "computed",
 }
 
 
@@ -66,6 +69,10 @@ def _summary(*, judge_failed: int, conversation_count: int, **mean_overrides: fl
         "count": 21,
         "judged_count": 21 - judge_failed,
         "verdict_counts": {"pass": 10, "partial": 3, "fail": 8},
+        # The gate keys on this one; the judge's holistic counts above are
+        # reported but no longer gate. Deliberately different so a regression
+        # that reads the wrong field shows up as a wrong number, not a pass.
+        "computed_verdict_counts": {"pass": 13, "partial": 5, "fail": 3},
     }
     for dim in DIMS:
         cat[f"mean_{dim}"] = means[dim]
@@ -95,6 +102,7 @@ def _variance_baseline(**mean_overrides: float) -> dict:
         "stds": {d: REAL_STD for d in DIMS},
         "n": 63,
         "fail_verdicts": 8,
+        "verdict_source": "computed",
     }
 
 
@@ -260,8 +268,11 @@ def test_update_baseline_pools_several_runs(tmp_path):
     assert written["source_run_ids"] == ["ci-0", "ci-1", "ci-2"]
     assert written["n"] == 63  # 21 judged x 3 runs
     assert set(written["stds"]) == set(DIMS)
-    # Pooled fail verdicts stay on a single run's scale, not summed.
-    assert written["fail_verdicts"] == 8
+    # Pooled fail verdicts stay on a single run's scale, not summed -- and are
+    # counted from computed_verdict_counts (3 per run in the fixture), not the
+    # judge's verdict_counts (8).
+    assert written["fail_verdicts"] == 3
+    assert written["verdict_source"] == "computed"
 
 
 def test_several_run_dirs_are_rejected_when_gating(tmp_path):
@@ -284,3 +295,45 @@ def test_several_run_dirs_are_rejected_when_gating(tmp_path):
     )
     assert result.returncode == 1
     assert "only accepted with --update-baseline" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Verdict source -- the gate counts the deterministic verdict, not the judge's
+# ---------------------------------------------------------------------------
+
+
+def test_gate_counts_the_computed_verdict_not_the_judge(run_gate):
+    """The fixture carries 8 judge fails and 3 computed fails against a
+    baseline of 10. Reading the judge's count would still pass here, so assert
+    on the printed number rather than the exit code."""
+    result = run_gate(_summary(judge_failed=0, conversation_count=21))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "current=3" in result.stdout
+    assert "[computed verdict]" in result.stdout
+
+
+def test_gate_still_reports_the_judge_verdict_for_reference(run_gate):
+    """Dropping it would hide judge drift entirely -- verdict_agreement_rate
+    is the signal that the judge or the rubric has moved."""
+    result = run_gate(_summary(judge_failed=0, conversation_count=21))
+    assert "judge holistic fail count for reference: 8" in result.stdout
+
+
+@pytest.mark.parametrize("run_gate", [{**BASELINE, "verdict_source": None}], indirect=True)
+def test_gate_refuses_a_baseline_seeded_from_judge_verdicts(run_gate):
+    """A pre-existing baseline counted judge fails. Comparing the computed
+    count against it would silently loosen or tighten the gate by the size of
+    the disagreement between the two metrics."""
+    result = run_gate(_summary(judge_failed=0, conversation_count=21))
+    assert result.returncode == 1
+    assert "not comparable" in result.stdout
+    assert "--update-baseline" in result.stdout
+
+
+def test_gate_refuses_a_summary_without_computed_counts(run_gate):
+    """A run produced by an older build cannot be gated on the new metric."""
+    summary = _summary(judge_failed=0, conversation_count=21)
+    del summary["by_category"]["positive"]["computed_verdict_counts"]
+    result = run_gate(summary)
+    assert result.returncode == 1
+    assert "no computed_verdict_counts" in result.stdout

@@ -21,7 +21,15 @@ from evals.gate_stats import combined_standard_error, pool_runs, regression_thre
 
 
 def _summary(run_id: str, *, means: dict[str, float], stds: dict[str, float], n: int, fails: int):
-    cat = {"count": n, "judged_count": n, "verdict_counts": {"pass": 0, "partial": 0, "fail": fails}}
+    cat = {
+        "count": n,
+        "judged_count": n,
+        # `fails` now describes the computed verdict, which is what pool_runs
+        # counts. The judge's holistic counts are kept alongside and are
+        # deliberately different so a read of the wrong field is visible.
+        "verdict_counts": {"pass": 0, "partial": 0, "fail": fails + 5},
+        "computed_verdict_counts": {"pass": 0, "partial": 0, "fail": fails},
+    }
     for dim, value in means.items():
         cat[f"mean_{dim}"] = value
     for dim, value in stds.items():
