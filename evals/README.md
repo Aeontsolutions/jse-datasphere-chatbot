@@ -150,6 +150,19 @@ directly verify financial tool calling on `/chat/stream`, send a metric
 query (e.g. "What was NCB revenue in 2023?") with `enable_financial_data:
 true` rather than relying on a `chat_stream`-filtered eval run.
 
+## Which `evals` actually runs
+
+`python scripts/run_eval.py` puts `scripts/` on `sys.path[0]`, not the repo
+root, so a bare `import evals` used to resolve through the editable install —
+whichever checkout last ran `pip install -e evals/`. With several worktrees on
+one machine that silently swapped both the harness code and the persona set
+(`--personas-dir` defaults to a path derived from the resolved package).
+
+`scripts/_local_evals.py` now puts this checkout first and fails loudly if it
+cannot win, so `run_eval.py`, `check_eval_gate.py` and `render_eval_summary.py`
+always run the code sitting next to them. No `PYTHONPATH` or `--personas-dir`
+juggling required.
+
 ## Provenance caveat
 
 Nothing in this suite verifies which chatbot code is actually running at

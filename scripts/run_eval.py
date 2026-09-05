@@ -44,6 +44,12 @@ if not os.environ.get("GOOGLE_API_KEY"):
         )
         sys.exit(2)
 
+# Run THIS checkout's evals package, not whichever worktree last ran
+# `pip install -e evals/`. See scripts/_local_evals.py.
+from _local_evals import use_local_evals  # noqa: E402
+
+use_local_evals()
+
 from evals.cli import main  # noqa: E402
 
 sys.exit(main())

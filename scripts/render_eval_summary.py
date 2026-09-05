@@ -17,7 +17,13 @@ import json
 import sys
 from pathlib import Path
 
-from evals.summary_md import render_summary_markdown
+# Run THIS checkout's evals package, not whichever worktree last ran
+# `pip install -e evals/`. See scripts/_local_evals.py.
+from _local_evals import use_local_evals  # noqa: E402
+
+use_local_evals()
+
+from evals.summary_md import render_summary_markdown  # noqa: E402  -- follows use_local_evals()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASELINE = REPO_ROOT / "evals" / "baselines" / "dev.json"
