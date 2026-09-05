@@ -80,6 +80,77 @@ SYSTEM_PROMPT_NO_SEARCH = SYSTEM_PROMPT.replace(
     "\nYou have web search access for current market data.", ""
 )
 
+# ==============================================================================
+# EXPERIMENT FLAGS - strip curated company knowledge to measure internet-only
+# behaviour. Both default OFF; absent or falsey changes nothing.
+# ==============================================================================
+#
+# AgentV2 carries company identity in two independent places, and an experiment
+# that removes one while leaving the other measures very little:
+#
+#   1. The BigQuery registry - symbol extraction plus the deterministic
+#      symbol->company block (AEO-25).
+#   2. The "Key JSE Stocks by Sector" list hardcoded in SYSTEM_PROMPT above.
+#
+# These exist so the eval suite can run both arms against the same build. They
+# are deliberately opt-in and deliberately strict about what counts as "on": a
+# blank or misspelled value leaves production behaviour untouched, because a
+# flag that tripped on "" would silently invalidate every eval run taken after
+# it landed.
+
+_TRUTHY = {"true", "1", "yes", "on"}
+
+
+def _env_flag(name: str) -> bool:
+    """True only for an explicit truthy value; anything else is False."""
+    return os.getenv(name, "").strip().lower() in _TRUTHY
+
+
+def resolve_registry_grounding() -> bool:
+    """Whether the BigQuery symbol registry informs identity. Default True.
+
+    Set DISABLE_REGISTRY_GROUNDING=true to skip both the extraction call and
+    the verified-metadata block, leaving Google Search as the only source of
+    company identity.
+    """
+    return not _env_flag("DISABLE_REGISTRY_GROUNDING")
+
+
+def resolve_prompt_company_list() -> bool:
+    """Whether SYSTEM_PROMPT keeps its hardcoded ticker list. Default True.
+
+    Set DISABLE_PROMPT_COMPANY_LIST=true to strip it.
+    """
+    return not _env_flag("DISABLE_PROMPT_COMPANY_LIST")
+
+
+def strip_company_list(prompt: str) -> str:
+    """Remove the "Key JSE Stocks by Sector" block and its bullets.
+
+    Anchored on the heading and terminated by the next "## " section, so it
+    cannot silently eat a neighbouring rule if the prompt is reordered. Returns
+    the prompt unchanged when the heading is absent.
+    """
+    marker = "**Key JSE Stocks by Sector**"
+    start = prompt.find(marker)
+    if start == -1:
+        return prompt
+    end = prompt.find("\n## ", start)
+    if end == -1:
+        return prompt[:start].rstrip() + "\n"
+    return prompt[:start].rstrip() + prompt[end:]
+
+
+# Resolved at import because it rewrites the prompt constants below. The
+# registry flag is deliberately NOT cached here -- run() resolves it per call,
+# so there is one source of truth and no import-order surprise.
+PROMPT_COMPANY_LIST_ENABLED = resolve_prompt_company_list()
+
+if not PROMPT_COMPANY_LIST_ENABLED:
+    SYSTEM_PROMPT = strip_company_list(SYSTEM_PROMPT)
+    SYSTEM_PROMPT_NO_SEARCH = strip_company_list(SYSTEM_PROMPT_NO_SEARCH)
+
+
 # Model used for the cheap route + refusal calls (Phase A).
 # Router/refusal calls run on a small output budget, so the model must not spend
 # that budget thinking -- see _THINKING_FLOOR below for how each model family is
@@ -671,16 +742,24 @@ class AgentV2:
             return self._blank_query_response(conversation_history)
 
         # Kick off symbol extraction now so its network call overlaps with the
-        # router call below instead of adding to total latency.
-        symbol_task = asyncio.create_task(
-            self._extract_grounded_symbols(query, conversation_history, financial_manager)
+        # router call below instead of adding to total latency. Skipped whole
+        # when the registry is disabled -- an extraction whose result is thrown
+        # away would still cost a call, and the experiment arm exists to measure
+        # what removing the registry actually costs.
+        registry_enabled = resolve_registry_grounding()
+        symbol_task = (
+            asyncio.create_task(
+                self._extract_grounded_symbols(query, conversation_history, financial_manager)
+            )
+            if registry_enabled
+            else None
         )
 
         # Fast path: Flash router. Returns a result on REFUSE; returns None to
         # fall through to the Pro+grounding path for every other query.
         fast_result = await self._fast_path(query, conversation_history)
         if fast_result is not None:
-            if not symbol_task.done():
+            if symbol_task is not None and not symbol_task.done():
                 symbol_task.cancel()
             logger.info(
                 f"AgentV2 fast_path used. " f"record_count={fast_result.get('record_count', 0)}"
@@ -691,8 +770,10 @@ class AgentV2:
             # Build conversation contents
             contents = self._build_contents(conversation_history, query)
 
-            extracted_symbols = await symbol_task
-            grounding_note = self._build_grounding_note(extracted_symbols, financial_manager)
+            grounding_note = None
+            if symbol_task is not None:
+                extracted_symbols = await symbol_task
+                grounding_note = self._build_grounding_note(extracted_symbols, financial_manager)
             if grounding_note:
                 last = contents[-1]
                 contents[-1] = types.Content(
