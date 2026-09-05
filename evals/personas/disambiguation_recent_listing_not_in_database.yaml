@@ -1,0 +1,75 @@
+id: disambiguation_recent_listing_not_in_database
+name: "IPO investor — a company listed this year, absent from the financial database"
+category: positive
+endpoint: chat_stream
+character: |
+  You subscribed to a Jamaica Stock Exchange main-market IPO earlier this year
+  and now hold the shares. The company listed recently enough that it has not
+  filed a full year of audited results yet.
+
+  You type on a phone, in lowercase, and you never explain yourself. Your FIRST
+  message must be exactly this, verbatim and nothing else:
+
+    what is the latest news on quantas advantage
+
+  Do not add context, do not mention the IPO, do not mention the JSE, and do
+  not capitalise. Later turns stay just as short — "any news on the
+  shareholders", "how's it trading" — and still never supply context.
+
+  If the assistant tells you the company is out of scope, or answers about an
+  airline, correct it once: this is a Jamaica Stock Exchange main-market
+  listing and you own shares in it. Then go back to short questions.
+goal: |
+  Get current information about a recently listed Jamaica Stock Exchange
+  company. You are satisfied by real information about the listing, or by an
+  honest statement that the assistant has no filed financial statements for it
+  yet — but never by being told the company is outside the assistant's scope.
+max_turns: 5
+expected_facts:
+  - "A recently listed JSE company is not refused as out-of-scope or non-Jamaican"
+  - "The company is not treated as a foreign airline or any other similarly named foreign business"
+  - "Where no filed financial statements exist yet, the assistant says so rather than refusing the question"
+  - "The assistant's handling does not change based on capitalisation or casual phrasing of the company name"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: cold_open
+notes: |
+  Regression guard for the prod failure observed on 2026-09-05. The company
+  identity list is derived from the financial-statements table, so a company
+  that listed this year and has not filed annual results cannot appear in it —
+  the assistant is structurally blind to every new listing for roughly a year.
+
+  Two prod requests eight minutes apart, same company, opposite outcomes:
+    00:16  router ALLOW  'Who are the top shareholders in Quantas Advantage'
+           -> answered, Sources: 0, tools_executed=[]  (ungrounded)
+    00:24  router REFUSE 'What is the latest news on Quantas advantage'
+           -> refused as non-JSE, read as Qantas the airline
+
+  Both are failures. The refusal is the visible one; the ungrounded answer is
+  the more dangerous one.
+
+  The lowercase phrasing in the character block is load-bearing, not incidental.
+  Measured against the router in isolation on 2026-09-05 (gemini-3.7-flash,
+  temperature 0.0, 8 calls per phrasing):
+
+    REFUSE 8/8  "What is the latest news on quantas advantage"
+    ALLOW  7/8  "What is the latest news on Quantas Advantage"
+    ALLOW  8/8  "Who are the top shareholders in Quantas Advantage"
+    ALLOW  8/8  "Tell me about CAR" / "What does KEY do" / "How has JSE performed..."
+
+  Capitalisation alone flips the verdict, and the lowercase form fails
+  deterministically at temperature 0. The router keys on surface form, not on
+  entity knowledge: it has no company list, no metadata, and no search.
+
+  This is why the opening message is pinned verbatim. The first version of this
+  persona described the user's situation instead, and the actor helpfully wrote
+  rich openers ("i subscribed to their ipo earlier this year...") that route
+  ALLOW and answer correctly — the persona scored pass/partial/fail across three
+  replicates on 2026-09-05 and reproduced the refusal in none of them. Context
+  in the query is exactly what masks the defect, so the persona must withhold it.
+  Same lesson as overrefusal_terse_followup_analysis: the terseness IS the test.
+
+  Note `opening_style` cannot do this job — the field is schema-validated but
+  never read by the persona actor.

@@ -1,0 +1,40 @@
+id: disambiguation_jse_is_jamaica_not_johannesburg
+name: "Investor — 'JSE' means Jamaica, and JSE is itself a listed stock"
+category: positive
+endpoint: chat_stream
+character: |
+  You are a Kingston-based investor looking at the stock exchange operator
+  itself as an investment. You refer to it the way locals do — "JSE", "the
+  exchange", "the local market" — and you never spell out which country you
+  mean, because to you there is only one.
+
+  You are aware that "JSE" is also the ticker of the Johannesburg exchange
+  operator. If the assistant drifts to South Africa — rand figures, Sandton,
+  JSE Limited, the All Share index — tell it you mean Jamaica and ask again.
+goal: |
+  Understand the Jamaica Stock Exchange Limited as a listed company on its own
+  exchange — what it does, how the business earns, and how the shares have
+  performed. You are satisfied when the assistant is unambiguously talking
+  about the Jamaican exchange operator in Jamaican dollars.
+max_turns: 5
+expected_facts:
+  - "Responses are about the Jamaica Stock Exchange, not JSE Limited of Johannesburg or the South African market"
+  - "Monetary figures are given in Jamaican dollars, not South African rand"
+  - "South African market structure and listings are not described as though they were Jamaican"
+  - "The assistant recognises that the Jamaica Stock Exchange is itself listed under the symbol JSE"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: cold_open
+notes: |
+  Country-level disambiguation guard. JSE is a real symbol in the financial
+  database (Jamaica Stock Exchange Limited) and is simultaneously the ticker of
+  JSE Limited in Johannesburg, which is far more heavily indexed on the web.
+
+  This collision has already corrupted this suite once: the persona actor
+  drifted to Johannesburg in retiree_low_risk_portfolio, and the fix at the
+  time was to qualify "JSE" as "Jamaica Stock Exchange (JSE)" in every persona.
+  This persona deliberately does the opposite — it leaves "JSE" unqualified,
+  because that is how real users type it, and tests the assistant rather than
+  the harness.
