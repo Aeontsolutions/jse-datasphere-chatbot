@@ -25,6 +25,7 @@ from app.logging_config import get_logger
 from app.models import CostSummary, PhaseCost, Source, SourceType
 from app.tracing import log_completed_generation
 from app.utils.cost_tracking import calculate_cost_from_response
+from app.utils.gemini_response import extract_finish_reason
 from app.utils.monitoring import record_ai_cost
 from app.utils.prompt_cache import PromptCache
 
@@ -136,24 +137,6 @@ def resolve_router_model() -> str:
     truncation this guards against.
     """
     return os.getenv("ROUTER_MODEL_NAME", "").strip() or DEFAULT_ROUTER_MODEL
-
-
-def extract_finish_reason(response: Any) -> Optional[str]:
-    """Bare finish-reason name from a Gemini response, or None if unavailable.
-
-    The SDK yields an enum whose str() is 'FinishReason.MAX_TOKENS', so prefer
-    .name. Never raises: this feeds logging, which must not break a request.
-    """
-    try:
-        candidates = getattr(response, "candidates", None) or []
-        if not candidates:
-            return None
-        reason = getattr(candidates[0], "finish_reason", None)
-        if reason is None:
-            return None
-        return getattr(reason, "name", None) or str(reason).rsplit(".", 1)[-1]
-    except Exception:  # pragma: no cover - defensive
-        return None
 
 
 ROUTER_MODEL = resolve_router_model()

@@ -25,6 +25,7 @@ from app.s3_client import (
     download_and_extract_from_s3,
     download_and_extract_from_s3_async,
 )
+from app.utils.gemini_response import extract_finish_reason
 from app.utils.monitoring import record_document_load, record_document_selection
 
 logger = get_logger(__name__)
@@ -119,10 +120,15 @@ Return ONLY valid JSON in this format:
     # Build content for the SDK
     contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
 
-    # Use low temperature for deterministic extraction
+    # Use low temperature for deterministic extraction. Thinking disabled: this
+    # is one-shot entity extraction with no deliberation to do, and thinking
+    # tokens count against max_output_tokens — left at the model default they
+    # can eat the 512-token budget and leave a truncated, unparseable JSON tail
+    # (same failure mode fixed for the router/refusal calls in agent_v2.py).
     generate_config = types.GenerateContentConfig(
         temperature=0.1,
         max_output_tokens=512,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
 
     return model_name, contents, generate_config
@@ -157,11 +163,25 @@ def _parse_extraction_response(response_text: str, start_time: float) -> Dict:
     return result
 
 
-def _log_extraction_failure(exc: Exception, query: str) -> Dict:
-    """Log an extraction failure and return the empty result both variants use."""
+def _log_extraction_failure(
+    exc: Exception, query: str, finish_reason: Optional[str] = None
+) -> Dict:
+    """Log an extraction failure and return the empty result both variants use.
+
+    finish_reason is only available when a response was actually received (a
+    parse failure, not an API-call failure) — see the two call sites below.
+    Surfacing it turns "JSONDecodeError" from a mystery into a diagnosis: a
+    MAX_TOKENS reason means the model's output got cut off, not that its JSON
+    was simply wrong.
+    """
     logger.error(
         "company_extraction_failed",
-        extra={"error": str(exc), "error_type": type(exc).__name__, "query": query[:100]},
+        extra={
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+            "query": query[:100],
+            "finish_reason": finish_reason,
+        },
     )
     return {"companies": [], "symbols": []}
 
@@ -203,10 +223,13 @@ def extract_companies_from_query(
             contents=contents,
             config=generate_config,
         )
-        return _parse_extraction_response(response.text, start_time)
-
     except Exception as e:
         return _log_extraction_failure(e, query)
+
+    try:
+        return _parse_extraction_response(response.text, start_time)
+    except Exception as e:
+        return _log_extraction_failure(e, query, finish_reason=extract_finish_reason(response))
 
 
 async def extract_companies_from_query_async(
@@ -232,10 +255,13 @@ async def extract_companies_from_query_async(
             contents=contents,
             config=generate_config,
         )
-        return _parse_extraction_response(response.text, start_time)
-
     except Exception as e:
         return _log_extraction_failure(e, query)
+
+    try:
+        return _parse_extraction_response(response.text, start_time)
+    except Exception as e:
+        return _log_extraction_failure(e, query, finish_reason=extract_finish_reason(response))
 
 
 def resolve_companies(
