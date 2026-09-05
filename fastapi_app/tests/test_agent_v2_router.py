@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.agent_v2 import ROUTER_MODEL, AgentV2
+from app.agent_v2 import DEFAULT_ROUTER_MODEL, ROUTER_MODEL, AgentV2
 
 
 @pytest.fixture
@@ -31,7 +31,10 @@ def mock_genai_client():
 
 
 def test_router_model_is_flash():
-    assert ROUTER_MODEL == "gemini-2.5-flash"
+    # Bound to the constant, not a literal: pinned to "gemini-2.5-flash" this
+    # assertion silently went stale at the 3.7 migration (#90) and stayed red.
+    assert ROUTER_MODEL == DEFAULT_ROUTER_MODEL
+    assert "flash" in ROUTER_MODEL
 
 
 # NOTE: every builder sets usage_metadata = None so the real _track_cost takes
@@ -83,7 +86,7 @@ def test_route_call_uses_flash_and_no_tools(mock_genai_client):
     calls = mock_genai_client.aio.models.generate_content.call_args_list
     assert len(calls) == 2
     route_cfg = calls[0].kwargs["config"]
-    assert calls[0].kwargs["model"] == "gemini-2.5-flash"
+    assert calls[0].kwargs["model"] == ROUTER_MODEL
     assert route_cfg.tools is None
 
 
@@ -166,7 +169,7 @@ def test_refuse_path_uses_flash_only_no_pro(mock_genai_client):
     # Both calls must use Flash, not Pro
     calls = mock_genai_client.aio.models.generate_content.call_args_list
     assert len(calls) == 2
-    assert all(c.kwargs["model"] == "gemini-2.5-flash" for c in calls)
+    assert all(c.kwargs["model"] == ROUTER_MODEL for c in calls)
 
 
 def test_refuse_path_no_tools_on_refusal_call(mock_genai_client):
