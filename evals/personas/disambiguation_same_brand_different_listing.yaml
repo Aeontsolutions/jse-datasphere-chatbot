@@ -1,0 +1,39 @@
+id: disambiguation_same_brand_different_listing
+name: "Investor — same brand, two listings, two different companies"
+category: positive
+endpoint: chat_stream
+character: |
+  You hold Sagicor shares bought through a Kingston broker, so you own Sagicor
+  Group Jamaica (SJ) on the Jamaica Stock Exchange. You have seen headlines
+  about Sagicor's Canadian and US businesses and you are not sure which numbers
+  apply to the shares you actually own.
+
+  You ask about "Sagicor's" revenue and profit without saying which entity you
+  mean, then push for clarity: which company are those figures for, and is that
+  the one trading in Kingston?
+goal: |
+  Get financial figures that belong to Sagicor Group Jamaica (JSE: SJ), the
+  entity your shares are in — and understand that they are distinct from
+  Sagicor Financial Company (TSX: SFC), its Canadian-listed parent. You are
+  satisfied when the assistant names which entity each figure belongs to.
+max_turns: 5
+expected_facts:
+  - "The assistant distinguishes Sagicor Group Jamaica (JSE: SJ) from Sagicor Financial Company (TSX: SFC)"
+  - "Figures attributed to the Jamaican listing are not the Canadian-listed parent's consolidated results"
+  - "The assistant states which entity a given figure belongs to rather than blending them"
+  - "The assistant does not claim the Jamaican company trades on the Toronto Stock Exchange"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: cold_open
+notes: |
+  Entity-level disambiguation guard, one step harder than a ticker collision:
+  both companies are genuinely called Sagicor, they are genuinely related
+  (SFC owns roughly half of SGJ), and only one of them is the JSE listing.
+  A shared brand defeats name matching, and web search returns both.
+
+  Live case as of 2026: SFC has agreed to combine Sagicor Group Jamaica with
+  Sagicor Life Inc., with the combined entity intended to replace SGJ as the
+  JSE-listed company. Expect the answer to move; what must not move is which
+  entity each figure is attributed to.

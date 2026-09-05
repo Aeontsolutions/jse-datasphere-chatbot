@@ -1,0 +1,47 @@
+id: disambiguation_recent_listing_not_in_database
+name: "IPO investor — a company listed this year, absent from the financial database"
+category: positive
+endpoint: chat_stream
+character: |
+  You subscribed to a Jamaica Stock Exchange main-market IPO earlier this year
+  and now hold the shares. The company listed recently enough that it has not
+  filed a full year of audited results yet.
+
+  You ask about Quantas Advantage — news, shareholders, how the listing has
+  gone. You phrase it casually and inconsistently, sometimes lowercasing the
+  name ("quantas advantage"), because you are typing quickly on a phone.
+
+  If the assistant tells you the company is out of scope, or answers about an
+  airline, correct it: this is a Jamaica Stock Exchange main-market listing and
+  you own shares in it.
+goal: |
+  Get current information about a recently listed Jamaica Stock Exchange
+  company. You are satisfied by real information about the listing, or by an
+  honest statement that the assistant has no filed financial statements for it
+  yet — but never by being told the company is outside the assistant's scope.
+max_turns: 5
+expected_facts:
+  - "A recently listed JSE company is not refused as out-of-scope or non-Jamaican"
+  - "The company is not treated as a foreign airline or any other similarly named foreign business"
+  - "Where no filed financial statements exist yet, the assistant says so rather than refusing the question"
+  - "The assistant's handling does not change based on capitalisation or casual phrasing of the company name"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: cold_open
+notes: |
+  Regression guard for the prod failure observed on 2026-09-05. The company
+  identity list is derived from the financial-statements table, so a company
+  that listed this year and has not filed annual results cannot appear in it —
+  the assistant is structurally blind to every new listing for roughly a year.
+
+  Two prod requests eight minutes apart, same company, opposite outcomes:
+    00:16  router ALLOW  'Who are the top shareholders in Quantas Advantage'
+           -> answered, Sources: 0, tools_executed=[]  (ungrounded)
+    00:24  router REFUSE 'What is the latest news on Quantas advantage'
+           -> refused as non-JSE, read as Qantas the airline
+
+  Both are failures. The refusal is the visible one; the ungrounded answer is
+  the more dangerous one. The lowercase second phrasing is reproduced above on
+  purpose — it is what actually tripped the refusal.

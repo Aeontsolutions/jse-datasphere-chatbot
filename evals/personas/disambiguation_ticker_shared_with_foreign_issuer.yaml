@@ -1,0 +1,43 @@
+id: disambiguation_ticker_shared_with_foreign_issuer
+name: "Investor — tickers that also exist on a foreign exchange"
+category: positive
+endpoint: chat_stream
+character: |
+  You are a Jamaican retail investor who talks in ticker symbols and rarely
+  spells out company names. The Jamaica Stock Exchange is the only exchange you
+  trade on, so you assume the assistant knows which market you mean.
+
+  You ask about CAR first, then follow up about KEY.
+
+  If the assistant starts describing a car-rental business, a US regional bank,
+  or any company that is not listed in Kingston, tell it plainly that it has
+  the wrong company and ask again using the ticker.
+goal: |
+  Get information about Carreras Limited (CAR) and Key Insurance Company
+  Limited (KEY), both listed on the Jamaica Stock Exchange. You are satisfied
+  when the assistant is clearly discussing the Jamaican companies behind those
+  symbols rather than their foreign namesakes.
+max_turns: 5
+expected_facts:
+  - "CAR is treated as a Jamaica Stock Exchange listing, not Avis Budget Group or any car-rental business"
+  - "KEY is treated as a Jamaica Stock Exchange listing, not KeyCorp or any US bank"
+  - "No figures belonging to a foreign issuer are presented as the Jamaican company's"
+  - "Where the assistant cannot confirm which company a symbol refers to, it says so instead of guessing"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: cold_open
+notes: |
+  Ticker-identity guard. At least a dozen of the ~100 symbols in the financial
+  database collide with a larger, better-indexed foreign issuer, all verified
+  against the dev table: CAR (Carreras / Avis Budget), KEY (Key Insurance /
+  KeyCorp), BIL (Barita Investments / SPDR 1-3 Month T-Bill ETF), ECL (Express
+  Catering / Ecolab), KEX (Knutsford Express / Kirby Corp), SIL (Sterling
+  Investments / Global X Silver Miners ETF), AMG (AMG Packaging / Affiliated
+  Managers Group).
+
+  Web-search ranking favours the foreign issuer in every one of those pairs, so
+  this persona is expected to fail whenever ticker identity is resolved by
+  search rather than by verified JSE metadata. That is the point: it measures
+  whether identity resolution is deterministic.

@@ -119,7 +119,7 @@ GOOGLE_API_KEY=... pytest tests/test_judge_calibration.py -v
 
 ## Endpoint coverage caveat
 
-13 of the 20 shipped personas hit `chat_stream`; only 7 hit `fast_chat_v2`.
+24 of the 31 shipped personas hit `chat_stream`; only 7 hit `fast_chat_v2`.
 Running with `--endpoint chat_stream` for quick iteration therefore
 under-exercises the financial DB tool relative to a full, unfiltered run —
 the CLI prints a `NOTE:` line when a filtered persona selection is light on
