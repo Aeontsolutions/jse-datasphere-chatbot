@@ -130,13 +130,93 @@ Output ONLY the JSON, no commentary.
 """
 
 
+# Fields the judge is shown, in the order grounding actually depends on.
+# Everything else is dropped -- see _project_metadata.
+_GROUNDING_FIELDS = (
+    "sources",
+    "tools_executed",
+    "record_count",
+    "data_found",
+    "filters_used",
+    "finish_reason",
+    "truncated",
+    "needs_clarification",
+    "warnings",
+)
+
+# data_preview can be a full BigQuery row dump. Show enough to verify a figure
+# without letting it crowd out `sources`.
+_DATA_PREVIEW_ROWS = 3
+
+# Grounding URIs are vertexaisearch redirects -- opaque, ~255 chars at the
+# median, and expiring after about 30 days. `domain` and `title` are what let
+# the judge check a claim against its source, and `domain` is captured
+# separately for that reason (see test_agent_v2_sources.py). Keeping the full
+# URI cost 3740 chars per turn and pushed `sources` back over the limit.
+_SOURCE_URL_CHARS = 60
+
+
+def _trim_source(source: Any) -> Any:
+    """Shorten a source's opaque redirect URL, keeping title and domain intact."""
+    if not isinstance(source, dict):
+        return source
+    url = source.get("url")
+    if not isinstance(url, str) or len(url) <= _SOURCE_URL_CHARS:
+        return source
+    trimmed = dict(source)
+    trimmed["url"] = url[:_SOURCE_URL_CHARS] + "...[redirect truncated]"
+    return trimmed
+
+
+def _project_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Reduce a turn's raw API metadata to what groundedness depends on.
+
+    Measured over a 315-turn run, raw metadata averaged 40802 chars of
+    `data_preview` and 4313 of `conversation_history` against a 4000-char
+    budget, while `sources` -- the actual evidence -- averaged 1283. So 85% of
+    conversations were truncated before `sources` was reached, and the judge
+    fell back on `data_found` to guess, scoring unsourced answers as grounded.
+
+    `sources` now leads, `data_preview` is summarised to a row count plus a
+    sample, and fields carrying no grounding signal are dropped:
+    `conversation_history` (the judge already has the transcript verbatim),
+    `response` (shown as BOT TEXT), `cost_summary`, `chart`, and
+    `web_search_results.grounding_chunks` (bulk duplicate of `sources`).
+    """
+    if not metadata:
+        return {}
+    out: dict[str, Any] = {}
+    for key in _GROUNDING_FIELDS:
+        if key in metadata and metadata[key] is not None:
+            out[key] = metadata[key]
+
+    if isinstance(out.get("sources"), list):
+        out["sources"] = [_trim_source(x) for x in out["sources"]]
+
+    preview = metadata.get("data_preview")
+    if isinstance(preview, list):
+        out["data_preview_row_count"] = len(preview)
+        if preview:
+            out["data_preview_sample"] = preview[:_DATA_PREVIEW_ROWS]
+    elif preview is not None:
+        out["data_preview"] = preview
+
+    # Keep the queries that were run; drop the chunk bulk, which duplicates
+    # `sources` at roughly twice the size.
+    wsr = metadata.get("web_search_results")
+    if isinstance(wsr, dict) and wsr.get("queries"):
+        out["web_search_queries"] = wsr["queries"]
+    return out
+
+
 def _format_transcript(transcript: Transcript) -> tuple[str, list[int]]:
     """Render the transcript for the judge prompt.
 
-    Returns (text, truncated_turn_indices). Turns whose metadata JSON exceeds
-    _METADATA_CHAR_LIMIT are cut but visibly marked -- both to the judge (so
-    it doesn't score groundedness against data it can't see) and to callers
-    (so report.py can surface how often this happens).
+    Returns (text, truncated_turn_indices). Metadata is projected to the
+    grounding-relevant fields first (see _project_metadata); a turn still over
+    _METADATA_CHAR_LIMIT after that is cut and visibly marked -- both to the
+    judge (so it doesn't score groundedness against data it can't see) and to
+    callers (so report.py can surface how often this happens).
     """
     lines = []
     truncated_turns: list[int] = []
@@ -144,7 +224,7 @@ def _format_transcript(transcript: Transcript) -> tuple[str, list[int]]:
         lines.append(f"--- Turn {t.turn_index} ---")
         lines.append(f"USER: {t.persona_utterance}")
         lines.append(f"BOT TEXT: {t.chatbot_text}")
-        metadata_json = json.dumps(t.chatbot_metadata, indent=2)
+        metadata_json = json.dumps(_project_metadata(t.chatbot_metadata), indent=2)
         if len(metadata_json) > _METADATA_CHAR_LIMIT:
             omitted = len(metadata_json) - _METADATA_CHAR_LIMIT
             metadata_json = (
