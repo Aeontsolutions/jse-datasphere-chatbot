@@ -73,6 +73,27 @@ def test_router_biases_to_allow():
     assert "When in doubt, choose ALLOW" in QUERY_ROUTER_PROMPT
 
 
+def test_router_allows_plain_acknowledgment_after_an_answer():
+    """Regression guard for #100: a content-free closing remark like "thanks
+    for the update" was matching the REFUSE list's "chit-chat" bullet on its
+    own (the router has no memory of a satisfied prior turn to weigh against
+    it), producing "I am unable to assist with this request" right after a
+    correct answer. If this instruction is weakened or removed, that defect
+    can silently return with no test going red."""
+    assert (
+        'A plain acknowledgment or closing remark with no new request ("thanks", '
+        '"thanks for the update", "got it", "that\'s helpful") is ALLOW.'
+    ) in QUERY_ROUTER_PROMPT
+
+
+def test_router_still_refuses_genuine_offtopic_chitchat_request():
+    """The #100 fix narrows the REFUSE chit-chat bullet to a *new request* for
+    off-topic content -- it must not also let an actual request to chat about
+    something unrelated (not just a closing "thanks") through as ALLOW."""
+    refuse_block = QUERY_ROUTER_PROMPT.split("REFUSE —")[1].split("ALLOW —")[0]
+    assert "chit-chat about something unrelated to JSE/Jamaican finance" in refuse_block
+
+
 def test_router_still_emits_exactly_two_labels():
     assert QUERY_ROUTER_PROMPT.rstrip().endswith("Output only: REFUSE or ALLOW")
 
