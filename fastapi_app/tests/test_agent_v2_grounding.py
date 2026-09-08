@@ -163,9 +163,11 @@ def test_run_injects_grounding_note_into_pro_call(mock_genai_client):
     assert len(calls) == 2
     pro_contents = calls[1].kwargs["contents"]
     last_turn_parts = pro_contents[-1].parts
-    assert len(last_turn_parts) == 2
+    # [grounding note, date anchor (#103, always present), original message]
+    assert len(last_turn_parts) == 3
     assert "MDS = Medical Disposables & Supplies Limited" in last_turn_parts[0].text
-    assert last_turn_parts[1].text == "What was the revenue for MDS in 2025"
+    assert "today's date is" in last_turn_parts[1].text
+    assert last_turn_parts[2].text == "What was the revenue for MDS in 2025"
 
 
 def test_run_no_grounding_note_without_financial_manager(mock_genai_client):
@@ -180,8 +182,10 @@ def test_run_no_grounding_note_without_financial_manager(mock_genai_client):
 
     calls = mock_genai_client.aio.models.generate_content.call_args_list
     pro_contents = calls[1].kwargs["contents"]
-    assert len(pro_contents[-1].parts) == 1
-    assert pro_contents[-1].parts[0].text == "What was NCB revenue in 2023?"
+    # [date anchor (#103, always present), original message] -- no grounding note
+    assert len(pro_contents[-1].parts) == 2
+    assert "today's date is" in pro_contents[-1].parts[0].text
+    assert pro_contents[-1].parts[1].text == "What was NCB revenue in 2023?"
 
 
 def test_run_no_grounding_note_when_extraction_finds_nothing(mock_genai_client):
@@ -197,7 +201,9 @@ def test_run_no_grounding_note_when_extraction_finds_nothing(mock_genai_client):
 
     calls = mock_genai_client.aio.models.generate_content.call_args_list
     pro_contents = calls[1].kwargs["contents"]
-    assert len(pro_contents[-1].parts) == 1
+    # [date anchor (#103, always present), original message] -- extraction found nothing
+    assert len(pro_contents[-1].parts) == 2
+    assert "today's date is" in pro_contents[-1].parts[0].text
 
 
 def test_run_refuse_path_unaffected_by_grounding(mock_genai_client):
