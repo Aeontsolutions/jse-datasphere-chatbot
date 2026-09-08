@@ -840,7 +840,8 @@ class AgentV2:
             last = contents[-1]
             contents[-1] = types.Content(
                 role=last.role,
-                parts=[types.Part.from_text(text=self._build_date_anchor_note())] + list(last.parts),
+                parts=[types.Part.from_text(text=self._build_date_anchor_note())]
+                + list(last.parts),
             )
 
             grounding_note = None
