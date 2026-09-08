@@ -6,8 +6,8 @@ from collections import defaultdict
 
 import pytest
 
-from app.financial_utils import FinancialDataManager
-from app.models import FinancialDataFilters
+from app.financial_utils import FinancialDataManager, reconcile_warnings_with_results
+from app.models import FinancialDataFilters, FinancialDataRecord
 
 # Helper to load CSV as list of dicts
 TEST_CSV_PATH = os.path.join(os.path.dirname(__file__), "bq_test_data.csv")
@@ -770,3 +770,97 @@ def test_parse_user_query_falls_back_when_cache_none():
         asyncio.run(mgr.parse_user_query("What is NCBFG revenue?"))
 
     mgr.model.generate_content_async.assert_awaited_once()
+
+
+def _record(company, year, standard_item, value=1.0):
+    return FinancialDataRecord(
+        company=company,
+        symbol="X",
+        year=year,
+        standard_item=standard_item,
+        item=value,
+        unit_multiplier=1,
+        formatted_value=str(value),
+    )
+
+
+class TestReconcileWarningsWithResults:
+    """Regression coverage for #101: validate_data_availability's warnings come
+    from a metadata snapshot that can be stale relative to BigQuery, so a
+    warning can claim a data point is missing when the live query in the same
+    request actually returned it. reconcile_warnings_with_results() is the
+    fix -- it drops any warning the real results contradict."""
+
+    def test_drops_item_missing_warning_when_result_present(self):
+        warnings = ["JMMB Group Limited (2021) missing: revenue"]
+        missing_keys = [("JMMB Group Limited", "2021", "revenue")]
+        results = [_record("JMMB Group Limited", "2021", "revenue", 22439850.0)]
+
+        assert reconcile_warnings_with_results(warnings, missing_keys, results) == []
+
+    def test_keeps_item_missing_warning_when_result_absent(self):
+        warnings = ["NCB Financial Group Limited (2021) missing: revenue"]
+        missing_keys = [("NCB Financial Group Limited", "2021", "revenue")]
+        results = [_record("JMMB Group Limited", "2021", "revenue", 22439850.0)]
+
+        assert reconcile_warnings_with_results(warnings, missing_keys, results) == warnings
+
+    def test_drops_no_data_for_year_warning_when_year_present(self):
+        warnings = ["Wisynco Group Limited has no data for 2022"]
+        missing_keys = [("Wisynco Group Limited", "2022", None)]
+        results = [_record("Wisynco Group Limited", "2022", "net_profit", 500.0)]
+
+        assert reconcile_warnings_with_results(warnings, missing_keys, results) == []
+
+    def test_drops_item_not_available_for_any_company_warning_when_item_present(self):
+        warnings = ["'revenue' not available for any selected companies"]
+        missing_keys = [(None, None, "revenue")]
+        results = [_record("Wisynco Group Limited", "2022", "revenue", 500.0)]
+
+        assert reconcile_warnings_with_results(warnings, missing_keys, results) == []
+
+    def test_keeps_multiple_warnings_independently(self):
+        warnings = [
+            "NCB Financial Group Limited has no data for 2021",
+            "JMMB Group Limited (2021) missing: revenue",
+        ]
+        missing_keys = [
+            ("NCB Financial Group Limited", "2021", None),
+            ("JMMB Group Limited", "2021", "revenue"),
+        ]
+        results = [_record("JMMB Group Limited", "2021", "revenue", 22439850.0)]
+
+        assert reconcile_warnings_with_results(warnings, missing_keys, results) == [
+            "NCB Financial Group Limited has no data for 2021",
+        ]
+
+    def test_empty_warnings_or_results_are_noops(self):
+        assert reconcile_warnings_with_results([], [], []) == []
+        warnings = ["JMMB Group Limited (2021) missing: revenue"]
+        missing_keys = [("JMMB Group Limited", "2021", "revenue")]
+        assert reconcile_warnings_with_results(warnings, missing_keys, []) == warnings
+
+
+def test_validate_data_availability_returns_aligned_missing_keys():
+    """validate_data_availability's missing_keys must line up with warnings
+    positionally so reconcile_warnings_with_results can zip them."""
+    mgr = _make_mgr_with_metadata()
+    mgr.metadata = {
+        "associations": {
+            "company_year_to_items": {
+                "JMMB Group Limited": {"2021": ["net_profit", "eps"]},
+            },
+            "company_to_years": {"JMMB Group Limited": ["2020", "2021", "2022"]},
+        }
+    }
+    filters = FinancialDataFilters(
+        companies=["JMMB Group Limited"],
+        years=["2021"],
+        standard_items=["revenue"],
+        interpretation="test",
+    )
+
+    availability = mgr.validate_data_availability(filters)
+
+    assert availability["warnings"] == ["JMMB Group Limited (2021) missing: revenue"]
+    assert availability["missing_keys"] == [("JMMB Group Limited", "2021", "revenue")]

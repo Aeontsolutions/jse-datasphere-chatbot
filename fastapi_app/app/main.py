@@ -32,7 +32,7 @@ from app.gemini_client import (
 )
 from app.metadata_loader import load_metadata_from_s3
 from app.document_selector import auto_load_relevant_documents
-from app.financial_utils import FinancialDataManager
+from app.financial_utils import FinancialDataManager, reconcile_warnings_with_results
 from app.agent_v2 import AgentV2
 from app.config import get_config
 from app.response_cache import ResponseCache, build_response_cache
@@ -704,10 +704,15 @@ async def fast_chat_v2(
             logger.info(f"filters type: {type(filters)}, filters: {filters}")
             availability = financial_manager.validate_data_availability(filters)
             # logger.info(f"availability type: {type(availability)}, availability: {availability}")
-            warnings = availability.get("warnings", [])
             suggestions = availability.get("suggestions", [])
             results = await asyncio.to_thread(financial_manager.query_data, filters)
             logger.info(f"results type: {type(results)}, results: {results}")
+            # validate_data_availability reads a metadata snapshot that can be
+            # stale relative to BigQuery (see its docstring, #101); drop any
+            # warning the live query result above just contradicted.
+            warnings = reconcile_warnings_with_results(
+                availability.get("warnings", []), availability.get("missing_keys", []), results
+            )
             ai_response = await financial_manager.format_response(
                 results,
                 request.query,
