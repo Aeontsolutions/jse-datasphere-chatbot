@@ -3,7 +3,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import google.generativeai as genai
 from google.cloud import bigquery
@@ -72,6 +72,57 @@ def safe_float(val):
         return float(val)
     except Exception:
         return None
+
+
+def reconcile_warnings_with_results(
+    warnings: List[str],
+    missing_keys: List[Tuple[Optional[str], Optional[str], Optional[str]]],
+    results: List[FinancialDataRecord],
+) -> List[str]:
+    """Drop any "missing data" warning that the actual query result contradicts.
+
+    validate_data_availability() flags likely-missing data from a metadata
+    snapshot that can go stale relative to BigQuery (see its docstring, #101).
+    Once the real query has run, a warning claiming a (company, year,
+    standard_item) is missing must not survive if `results` actually contains
+    a record for it -- that contradiction is what produced a response whose
+    prose and `warnings` disagreed about the same data point.
+
+    `warnings` and `missing_keys` must be the same length and in the same
+    order (as returned by validate_data_availability); each key is
+    (company, year, item), with `item` (a missing item within an otherwise
+    present company/year) or `company`+`year` (an item missing for any
+    requested company, checked across years) as None where not applicable.
+    """
+    if not warnings or not missing_keys:
+        return warnings
+    if len(warnings) != len(missing_keys):
+        # Contract violation between validate_data_availability's two parallel
+        # lists -- don't silently misalign warnings with the wrong keys.
+        logger.warning(
+            "reconcile_warnings_with_results: warnings/missing_keys length mismatch "
+            f"({len(warnings)} vs {len(missing_keys)}); skipping reconciliation"
+        )
+        return warnings
+    present_triples = {(r.company, r.year, r.standard_item) for r in results}
+    present_company_years = {(r.company, r.year) for r in results}
+    present_items = {r.standard_item for r in results}
+    surviving = []
+    for warning, (company, year, item) in zip(warnings, missing_keys, strict=True):
+        if company is None and year is None:
+            # "'{item}' not available for any selected companies"
+            if item in present_items:
+                continue
+        elif item is None:
+            # "{company} has no data for {year}"
+            if (company, year) in present_company_years:
+                continue
+        else:
+            # "{company} ({year}) missing: {item}"
+            if (company, year, item) in present_triples:
+                continue
+        surviving.append(warning)
+    return surviving
 
 
 class FinancialDataManager:
@@ -1059,10 +1110,29 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
         )
 
     def validate_data_availability(self, filters: FinancialDataFilters) -> Dict[str, Any]:
+        """Flag likely-missing data ahead of the actual query.
+
+        This reads self.metadata's associations, a snapshot built once from
+        BigQuery at process startup (load_metadata_from_bigquery) with no
+        refresh path -- it can drift out of sync with BigQuery's live
+        contents for the life of the running container. The query at
+        query_data() always hits BigQuery fresh, so it can return a value for
+        exactly the (company, year, standard_item) this method just flagged
+        as missing, producing a response whose warnings contradict its own
+        data_preview (#101). `missing_keys` carries the same information as
+        `warnings` in structured form, in the same order, so the caller can
+        drop any warning the live query result actually contradicts --
+        see reconcile_warnings_with_results.
+        """
         logger.info(
             f"IN validate_data_availability: filters type: {type(filters)}, filters: {filters}"
         )
-        availability_info = {"has_data": True, "warnings": [], "suggestions": []}
+        availability_info = {
+            "has_data": True,
+            "warnings": [],
+            "suggestions": [],
+            "missing_keys": [],
+        }
 
         if not self.metadata or not self.metadata.get("associations"):
             logger.info("No metadata or associations available.")
@@ -1072,6 +1142,7 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
         if filters.companies and filters.years and filters.standard_items:
             logger.info("Checking company-year-item combinations.")
             missing_data = []
+            missing_keys: List[Tuple[Optional[str], Optional[str], Optional[str]]] = []
             available_alternatives = {}
 
             if "company_year_to_items" in self.metadata["associations"]:
@@ -1096,6 +1167,7 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
                                     -3:
                                 ]  # Last 3 years
                             missing_data.append(f"{company} has no data for {year}")
+                            missing_keys.append((company, year, None))
                         else:
                             available_items = company_year_items[year]
                             # Robust fix for BigQuery Row 'items' field
@@ -1128,9 +1200,11 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
                                 logger.info(f"Checking item: {item}")
                                 if item not in available_items:
                                     missing_data.append(f"{company} ({year}) missing: {item}")
+                                    missing_keys.append((company, year, item))
 
             if missing_data:
                 availability_info["warnings"] = missing_data[:5]  # Limit warnings
+                availability_info["missing_keys"] = missing_keys[:5]  # Kept aligned with warnings
                 if available_alternatives:
                     for company, years in available_alternatives.items():
                         availability_info["suggestions"].append(
@@ -1151,6 +1225,7 @@ Return ONLY the JSON object, no markdown formatting, no code blocks, no addition
                     availability_info["warnings"].append(
                         f"'{item}' not available for any selected companies"
                     )
+                    availability_info["missing_keys"].append((None, None, item))
                     # Suggest companies that have this item
                     available_for = list(item_companies)[:3]
                     if available_for:
