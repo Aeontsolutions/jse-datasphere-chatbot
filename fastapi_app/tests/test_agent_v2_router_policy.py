@@ -92,7 +92,22 @@ def test_market_scope_still_enforced_in_system_prompt():
 
 
 def test_system_prompt_still_forbids_analysis_of_out_of_scope_markets():
-    assert "Do not provide any analysis, data, or commentary for these markets" in SYSTEM_PROMPT
+    assert "Do not provide any analysis, data, or commentary for the out-of-scope market" in (
+        SYSTEM_PROMPT
+    )
+
+
+def test_system_prompt_still_forbids_volunteering_jse_content_on_scope_mismatch():
+    """Regression guard for #102: on an out-of-scope-exchange query (e.g. the
+    Johannesburg Stock Exchange, which shares "JSE" as an abbreviation), the
+    synthesis call acknowledged the mismatch correctly but then, unprompted and
+    with zero tool calls, answered about the Jamaica Stock Exchange anyway --
+    naming specific companies and instruments it never verified for that turn.
+    If this instruction is weakened or removed, that ungrounded-volunteered-
+    answer defect can silently return with no test going red."""
+    assert "Johannesburg Stock Exchange" in SYSTEM_PROMPT
+    assert "do not go on to answer about JSE companies" in SYSTEM_PROMPT
+    assert "Wait for them to ask an actual JSE question before answering one" in SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------
