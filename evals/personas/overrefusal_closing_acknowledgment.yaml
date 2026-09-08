@@ -1,0 +1,62 @@
+id: overrefusal_closing_acknowledgment
+name: "Investor — plain thanks after a satisfied question"
+category: positive
+endpoint: chat_stream
+character: |
+  You are a casual investor. Both of your messages are pinned verbatim -- send
+  exactly this text and nothing else, in order, one per turn:
+
+  Turn 1:
+    what is the latest news on grace kennedy
+
+  Turn 2:
+    thanks for the update
+
+  Do not add any other words to either message, do not ask a follow-up
+  question, do not restate what you learned, do not rephrase. A plain,
+  content-free closing acknowledgment on turn 2 is the whole point of this
+  persona -- and turn 1 must land on a real, unambiguous JSE company so
+  nothing about turn 1 itself is in question.
+goal: |
+  Get a normal answer about GraceKennedy Limited (GK) on turn 1, then a
+  normal, friendly acknowledgment of your thanks on turn 2 (or the assistant
+  simply offering further help). You are never satisfied by turn 2 being met
+  with "cannot assist" or "is unable to help" -- that response has no
+  relationship to what you just said.
+max_turns: 2
+expected_facts:
+  - "Turn 1 answers the question about GraceKennedy Limited (GK)"
+  - "The closing 'thanks for the update' is not met with a refusal ('I cannot assist', 'I am unable to help', or similar)"
+  - "The response to the acknowledgment reads as a normal conversational close, not an error"
+api_options:
+  memory_enabled: true
+  enable_web_search: true
+  enable_financial_data: true
+opening_style: cold_open
+notes: |
+  Regression guard for issue #100. Reproduced 2026-09-08 against dev: any
+  correctly-answered financial question followed by a bare acknowledgment
+  ("thanks for the update", "thank you", "thanks!", "got it, thanks", "that
+  is helpful") got "I am unable to assist with this request." Root cause was
+  the router (QUERY_ROUTER_PROMPT), not the synthesis model -- log evidence:
+
+    AgentV2 router: 'ALLOW' for query 'what is the latest news on quantas advantage'
+    AgentV2 router: 'REFUSE' for query 'thanks for the update'
+
+  The router's REFUSE list included "chit-chat" as an off-topic-request
+  category, and a content-free closing remark was matching that bullet on its
+  own merits -- the router has no way to weigh "this follows a satisfied,
+  in-scope answer" against a bare classification of the latest message's
+  surface form. Fixed by narrowing that REFUSE bullet to a *new request* for
+  off-topic content and adding an explicit ALLOW carve-out for plain
+  acknowledgments (see QUERY_ROUTER_PROMPT in app/agent_v2.py).
+
+  Both turns are pinned verbatim for the same reason as
+  overrefusal_terse_followup_analysis and disambiguation_recent_listing_not_
+  in_database: an actor free to add context to turn 2 ("thanks, that clarifies
+  things about GK!") would route ALLOW anyway and never reproduce the defect
+  -- the content-free-ness of the closing message is the test. Turn 1 needed
+  pinning too after an unpinned first attempt: left to invent "a JSE-listed
+  company," the actor picked Naspers (Johannesburg-listed, not Jamaica) in
+  3/3 local replicates, which correctly triggered the out-of-scope-exchange
+  handling (#102) instead of ever reaching turn 2 within max_turns.
