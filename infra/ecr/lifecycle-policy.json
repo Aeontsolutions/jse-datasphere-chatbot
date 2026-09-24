@@ -1,0 +1,105 @@
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Keep last 3 images tagged 'latest'",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPatternList": [
+          "latest"
+        ],
+        "countType": "imageCountMoreThan",
+        "countNumber": 3
+      },
+      "action": {
+        "type": "expire"
+      }
+    },
+    {
+      "rulePriority": 2,
+      "description": "Keep last 3 images tagged 'dev'",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPatternList": [
+          "dev"
+        ],
+        "countType": "imageCountMoreThan",
+        "countNumber": 3
+      },
+      "action": {
+        "type": "expire"
+      }
+    },
+    {
+      "rulePriority": 3,
+      "description": "Keep last 3 images tagged 'v*' (semantic versions)",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPatternList": [
+          "v*"
+        ],
+        "countType": "imageCountMoreThan",
+        "countNumber": 3
+      },
+      "action": {
+        "type": "expire"
+      }
+    },
+    {
+      "rulePriority": 5,
+      "description": "Keep last 5 'prod-*' images. The prod ECS task definition pins a digest, so its image must never expire; matching here shields it from rules 10, 20 and 30.",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPatternList": [
+          "prod-*"
+        ],
+        "countType": "imageCountMoreThan",
+        "countNumber": 5
+      },
+      "action": {
+        "type": "expire"
+      }
+    },
+    {
+      "rulePriority": 10,
+      "description": "Remove untagged images after 1 day",
+      "selection": {
+        "tagStatus": "untagged",
+        "countType": "sinceImagePushed",
+        "countUnit": "days",
+        "countNumber": 1
+      },
+      "action": {
+        "type": "expire"
+      }
+    },
+    {
+      "rulePriority": 20,
+      "description": "Keep only last 10 tagged images for rollback safety",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPatternList": [
+          "*"
+        ],
+        "countType": "imageCountMoreThan",
+        "countNumber": 10
+      },
+      "action": {
+        "type": "expire"
+      }
+    },
+    {
+      "rulePriority": 30,
+      "description": "Expire any remaining images older than 90 days",
+      "selection": {
+        "tagStatus": "any",
+        "countType": "sinceImagePushed",
+        "countUnit": "days",
+        "countNumber": 90
+      },
+      "action": {
+        "type": "expire"
+      }
+    }
+  ]
+}
