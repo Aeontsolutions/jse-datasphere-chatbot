@@ -76,20 +76,25 @@ GEMINI_PRICING_PER_MILLION: dict[str, dict[str, float]] = {
 def usage_tokens_from_response(response: Any) -> tuple[int, int]:
     """Extract (input_tokens, output_tokens) from a google-genai response.
 
+    `output_tokens` is the *billable* output: visible candidates plus thinking
+    tokens, which Google bills at the output rate but reports separately in
+    `thoughts_token_count`.
+
     Defensive against responses that lack `usage_metadata` entirely, and
     against loosely-mocked test doubles whose auto-generated attributes
-    aren't real ints -- both cases resolve to (0, 0) rather than raising.
+    aren't real ints -- both cases resolve to 0 rather than raising.
     """
     usage = getattr(response, "usage_metadata", None)
     if usage is None:
         return 0, 0
-    input_tokens = getattr(usage, "prompt_token_count", None)
-    output_tokens = getattr(usage, "candidates_token_count", None)
-    if not isinstance(input_tokens, int):
-        input_tokens = 0
-    if not isinstance(output_tokens, int):
-        output_tokens = 0
-    return input_tokens, output_tokens
+
+    def _count(name: str) -> int:
+        value = getattr(usage, name, None)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    return _count("prompt_token_count"), _count("candidates_token_count") + _count(
+        "thoughts_token_count"
+    )
 
 
 def estimate_gemini_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:

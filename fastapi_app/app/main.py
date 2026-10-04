@@ -778,8 +778,11 @@ async def fast_chat_v2(
             model=request_costs[0].model if request_costs else None,
             input_tokens=sum(c.token_usage.input_tokens for c in request_costs),
             output_tokens=sum(c.token_usage.output_tokens for c in request_costs),
+            thinking_tokens=sum(c.token_usage.thinking_tokens for c in request_costs),
+            # The API-reported totals include thinking; input + output would not.
+            total_tokens=sum(c.token_usage.total_tokens for c in request_costs),
             cost_usd=sum(c.total_cost for c in request_costs),
-            phase_costs=[c.phase for c in request_costs],
+            phase_costs=[c.to_log_record() for c in request_costs],
             sources=sources,
         )
         return FinancialDataResponse(
@@ -1101,12 +1104,19 @@ async def chat_stream(
 
         cost_summary = response.cost_summary
         thinking_tokens = cost_summary.total_thinking_tokens if cost_summary else None
+        # The model that wrote the answer: the generation phase when there is
+        # one, otherwise the last phase to run (e.g. a refusal).
+        phases = cost_summary.phases if cost_summary else []
+        answer_model = next((p.model for p in reversed(phases) if p.phase == "generation"), None)
+        if answer_model is None and phases:
+            answer_model = phases[-1].model
         schedule_log(
             response=response.response,
             cache_hit=False,
             success=True,
             data_found=response.data_found,
             record_count=response.record_count,
+            model=answer_model,
             input_tokens=cost_summary.total_input_tokens if cost_summary else 0,
             output_tokens=cost_summary.total_output_tokens if cost_summary else 0,
             thinking_tokens=thinking_tokens,
@@ -1121,7 +1131,7 @@ async def chat_stream(
             ),
             finish_reason=result.get("finish_reason"),
             cost_usd=cost_summary.total_cost_usd if cost_summary else 0.0,
-            phase_costs=[p.phase for p in cost_summary.phases] if cost_summary else None,
+            phase_costs=[p.model_dump() for p in phases] if cost_summary else None,
             sources=response.sources,
         )
 

@@ -82,6 +82,15 @@ def test_usage_tokens_from_response_non_int_fields_default_to_zero():
     assert usage_tokens_from_response(response) == (0, 0)
 
 
+def test_usage_tokens_from_response_counts_thinking_as_billable_output():
+    """Thinking tokens bill at the output rate but sit outside candidates_token_count."""
+    response = MagicMock()
+    response.usage_metadata.prompt_token_count = 1000
+    response.usage_metadata.candidates_token_count = 100
+    response.usage_metadata.thoughts_token_count = 250
+    assert usage_tokens_from_response(response) == (1000, 350)
+
+
 # ---------------------------------------------------------------------------
 # estimate_gemini_cost_usd — mirrors fastapi_app/app/utils/cost_tracking.py
 # ---------------------------------------------------------------------------

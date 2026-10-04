@@ -368,8 +368,16 @@ class PhaseCost(BaseModel):
     thinking_tokens: int = Field(
         default=0, description="Reasoning tokens, billed as output and counted against the cap"
     )
+    grounding_queries: int = Field(
+        default=0, description="Google Search queries the model executed for grounding"
+    )
     input_cost_usd: float = Field(default=0.0, description="Cost for input tokens in USD")
-    output_cost_usd: float = Field(default=0.0, description="Cost for output tokens in USD")
+    output_cost_usd: float = Field(
+        default=0.0, description="Cost for output tokens in USD, thinking tokens included"
+    )
+    grounding_cost_usd: float = Field(
+        default=0.0, description="Cost for grounding queries in USD (0 unless a price is set)"
+    )
     total_cost_usd: float = Field(default=0.0, description="Total cost for this phase in USD")
 
 
