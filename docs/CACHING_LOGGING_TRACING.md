@@ -26,7 +26,36 @@ covered.
   doesn't do response caching) and not the permanent log (BigQuery is). No-ops
   safely if `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` aren't set.
 
+## What the cost columns mean
+
+- `input_tokens`, `output_tokens`, `thinking_tokens`: summed over every Gemini
+  call in the request. `output_tokens` is visible output only; thinking is
+  reported apart and **billed at the output rate**. `total_tokens` is the API's
+  own total, which includes thinking.
+- `cost_usd`: input + (output + thinking) at the model's rate, plus grounding
+  when a price is configured. Cache hits log 0 tokens and $0.
+- `model`: the model that wrote the answer (`/chat/stream`: the generation
+  phase, or the last phase for a refusal; `/fast_chat_v2`: the first call).
+  Rows written before this change have `model` NULL on `chat_stream`.
+- `phase_costs_json`: a JSON list with one record per Gemini call — `phase`,
+  `model`, `input_tokens`, `output_tokens`, `thinking_tokens`, `cached_tokens`,
+  `grounding_queries` and the `*_cost_usd` split. **Older rows hold a list of
+  phase-name strings**, so test with `JSON_TYPE(...)` before reading fields.
+  No schema change: the column was already a STRING.
+- Prices: see `GEMINI_MODEL_PRICES_JSON` below. A model with no exact price
+  entry is priced at its family rate and logs a warning once; treat its
+  `cost_usd` as an estimate. Rows written before this change omit thinking
+  tokens from `cost_usd`; recompute them from the token columns.
+- Not captured yet: tokens spent by a request that then failed (the row logs 0),
+  and the cached-token discount (cached input is billed at full price here).
+
 ## New environment variables
+
+- `GEMINI_MODEL_PRICES_JSON` — exact per-model prices, USD per 1M tokens, e.g.
+  `{"gemini-3.7-flash": {"input": <usd>, "output": <usd>}}`. Take the numbers
+  from Google's Gemini Developer API price list; none are shipped for gemini-3.x.
+- `GEMINI_GROUNDING_PRICE_PER_THOUSAND_QUERIES` — price per 1,000 executed
+  Google Search grounding queries (default 0: counted, not charged).
 
 See `fastapi_app/.env.example` for the full list with defaults
 (`RESPONSE_CACHE_*`, `INTERACTION_LOGGING_ENABLED`, `BIGQUERY_INTERACTIONS_*`,

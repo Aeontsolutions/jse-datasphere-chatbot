@@ -367,6 +367,8 @@ class AgentV2:
         output_cost: float,
         total_cost: float,
         thinking_tokens: int = 0,
+        grounding_queries: int = 0,
+        grounding_cost: float = 0.0,
     ) -> None:
         """Add a phase cost to tracking."""
         self._phase_costs.append(
@@ -377,8 +379,10 @@ class AgentV2:
                 output_tokens=output_tokens,
                 cached_tokens=cached_tokens,
                 thinking_tokens=thinking_tokens,
+                grounding_queries=grounding_queries,
                 input_cost_usd=input_cost,
                 output_cost_usd=output_cost,
+                grounding_cost_usd=grounding_cost,
                 total_cost_usd=total_cost,
             )
         )
@@ -427,6 +431,8 @@ class AgentV2:
             output_cost=cost.output_cost,
             total_cost=cost.total_cost,
             thinking_tokens=cost.token_usage.thinking_tokens,
+            grounding_queries=cost.grounding_queries,
+            grounding_cost=cost.grounding_cost,
         )
 
     # --------------------------------------------------------------------------

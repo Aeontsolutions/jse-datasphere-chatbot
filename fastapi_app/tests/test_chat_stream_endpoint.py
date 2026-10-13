@@ -135,3 +135,48 @@ def test_chat_stream_logs_thinking_tokens_from_cost_summary():
     kwargs = _log_spy_call(result)
     assert kwargs["thinking_tokens"] == 243
     assert kwargs["total_tokens"] == 392 + 9 + 243
+
+
+def test_chat_stream_logs_model_and_per_phase_breakdown():
+    """`model` was NULL on every chat_stream row, and phase_costs held names only."""
+    from app.models import CostSummary, PhaseCost
+
+    result = _result()
+    result["cost_summary"] = CostSummary(
+        total_input_tokens=500,
+        total_output_tokens=120,
+        total_thinking_tokens=80,
+        total_cost_usd=0.01,
+        phases=[
+            PhaseCost(phase="routing", model="router-model", input_tokens=100),
+            PhaseCost(
+                phase="generation",
+                model="synthesis-model",
+                input_tokens=400,
+                output_tokens=120,
+                thinking_tokens=80,
+                grounding_queries=2,
+            ),
+        ],
+    )
+    kwargs = _log_spy_call(result)
+
+    assert kwargs["model"] == "synthesis-model"
+    routing, generation = kwargs["phase_costs"]
+    assert routing["phase"] == "routing" and routing["model"] == "router-model"
+    assert generation["thinking_tokens"] == 80
+    assert generation["grounding_queries"] == 2
+
+
+def test_chat_stream_model_falls_back_to_last_phase_without_generation():
+    """A refusal never reaches a generation phase; still say which model answered."""
+    from app.models import CostSummary, PhaseCost
+
+    result = _result()
+    result["cost_summary"] = CostSummary(
+        phases=[
+            PhaseCost(phase="routing", model="router-model"),
+            PhaseCost(phase="refusal", model="refusal-model"),
+        ]
+    )
+    assert _log_spy_call(result)["model"] == "refusal-model"
