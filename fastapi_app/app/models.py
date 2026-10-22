@@ -361,7 +361,12 @@ class PhaseCost(BaseModel):
     """Cost breakdown for a single agent phase."""
 
     phase: str = Field(..., description="Agent phase name (e.g., 'classification', 'synthesis')")
-    model: str = Field(..., description="Model used for this phase")
+    model: str = Field(..., description="Model REQUESTED for this phase")
+    model_version: Optional[str] = Field(
+        default=None,
+        description="Model that actually SERVED the call, from the response's model_version "
+        "(may differ from `model`: Google re-routes some names). None when not reported.",
+    )
     input_tokens: int = Field(default=0, description="Number of input tokens")
     output_tokens: int = Field(default=0, description="Number of output tokens")
     cached_tokens: int = Field(default=0, description="Number of cached tokens")

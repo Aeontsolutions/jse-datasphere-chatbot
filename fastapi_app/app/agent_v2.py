@@ -25,7 +25,7 @@ from app.gemini_client import get_genai_client
 from app.logging_config import get_logger
 from app.models import CostSummary, PhaseCost, Source, SourceType
 from app.tracing import log_completed_generation
-from app.utils.cost_tracking import calculate_cost_from_response
+from app.utils.cost_tracking import calculate_cost_from_response, extract_model_version
 from app.utils.monitoring import record_ai_cost
 from app.utils.prompt_cache import PromptCache
 
@@ -371,12 +371,14 @@ class AgentV2:
         grounding_queries: int = 0,
         grounding_cost: float = 0.0,
         latency_ms: float = 0.0,
+        model_version: Optional[str] = None,
     ) -> None:
         """Add a phase cost to tracking."""
         self._phase_costs.append(
             PhaseCost(
                 phase=phase,
                 model=model,
+                model_version=model_version,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cached_tokens=cached_tokens,
@@ -447,6 +449,7 @@ class AgentV2:
             grounding_queries=cost.grounding_queries,
             grounding_cost=cost.grounding_cost,
             latency_ms=latency_ms,
+            model_version=extract_model_version(response),
         )
 
     # --------------------------------------------------------------------------
