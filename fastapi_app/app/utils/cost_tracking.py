@@ -333,6 +333,20 @@ def calculate_cost(
     )
 
 
+def extract_model_version(response: Any) -> Optional[str]:
+    """Name of the model that actually served `response`, or None.
+
+    Google can serve a different model than the one requested (measured
+    2026-10-22: gemini-3.7-flash is served by gemini-3.8-flash), and says so
+    only in the response's `model_version`. Anything that is not a non-empty
+    string (absent, None, a test double's auto-created attribute) is "unknown".
+    """
+    value = getattr(response, "model_version", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def count_grounding_queries(response: Any) -> int:
     """Count the search queries a grounded response executed.
 
