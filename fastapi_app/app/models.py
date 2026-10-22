@@ -379,6 +379,10 @@ class PhaseCost(BaseModel):
         default=0.0, description="Cost for grounding queries in USD (0 unless a price is set)"
     )
     total_cost_usd: float = Field(default=0.0, description="Total cost for this phase in USD")
+    latency_ms: float = Field(
+        default=0.0,
+        description="Wall-clock time the phase took in milliseconds (0 when not measured)",
+    )
 
 
 class CostSummary(BaseModel):

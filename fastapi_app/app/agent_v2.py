@@ -14,6 +14,7 @@ Architecture:
 
 import asyncio
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -369,6 +370,7 @@ class AgentV2:
         thinking_tokens: int = 0,
         grounding_queries: int = 0,
         grounding_cost: float = 0.0,
+        latency_ms: float = 0.0,
     ) -> None:
         """Add a phase cost to tracking."""
         self._phase_costs.append(
@@ -384,6 +386,7 @@ class AgentV2:
                 output_cost_usd=output_cost,
                 grounding_cost_usd=grounding_cost,
                 total_cost_usd=total_cost,
+                latency_ms=latency_ms,
             )
         )
 
@@ -398,8 +401,18 @@ class AgentV2:
             phases=self._phase_costs.copy(),
         )
 
-    def _track_cost(self, response: Any, phase: str, model: Optional[str] = None) -> None:
-        """Track cost from a Gemini response (model defaults to self.model_name)."""
+    def _track_cost(
+        self,
+        response: Any,
+        phase: str,
+        model: Optional[str] = None,
+        latency_ms: float = 0.0,
+    ) -> None:
+        """Track cost from a Gemini response (model defaults to self.model_name).
+
+        `latency_ms` is the wall-clock time of the call that produced `response`,
+        so a slow request can be attributed to a phase instead of just a total.
+        """
         model = model or self.model_name
         cost = calculate_cost_from_response(model, response, phase)
         record_ai_cost(
@@ -433,6 +446,7 @@ class AgentV2:
             thinking_tokens=cost.token_usage.thinking_tokens,
             grounding_queries=cost.grounding_queries,
             grounding_cost=cost.grounding_cost,
+            latency_ms=latency_ms,
         )
 
     # --------------------------------------------------------------------------
@@ -592,8 +606,24 @@ class AgentV2:
         symbols = metadata.get("symbols") or []
         if not symbols:
             return []
+        call_start = time.perf_counter()
         extracted = await extract_companies_from_query_async(
             query, companies, symbols, conversation_history
+        )
+        # This call runs concurrently with the router, so its duration is only
+        # on the critical path when it outlasts the router. Its token usage is
+        # not tracked, hence a timing-only record at zero cost. Recorded only on
+        # success: a call that raised or was cancelled has no duration to report.
+        self._add_phase_cost(
+            phase="symbol_extraction",
+            model="",
+            input_tokens=0,
+            output_tokens=0,
+            cached_tokens=0,
+            input_cost=0.0,
+            output_cost=0.0,
+            total_cost=0.0,
+            latency_ms=(time.perf_counter() - call_start) * 1000,
         )
         return extracted.get("symbols") or []
 
@@ -673,6 +703,7 @@ class AgentV2:
             # Uses the SDK's native async client so the call yields the event
             # loop directly, without occupying a thread-pool worker
             # (see docs/adr/0003-native-async-gemini-client.md).
+            call_start = time.perf_counter()
             route = await self.client.aio.models.generate_content(
                 model=ROUTER_MODEL,
                 contents=contents,
@@ -683,7 +714,12 @@ class AgentV2:
                     thinking_config=NO_THINKING,
                 ),
             )
-            self._track_cost(route, "routing", model=ROUTER_MODEL)
+            self._track_cost(
+                route,
+                "routing",
+                model=ROUTER_MODEL,
+                latency_ms=(time.perf_counter() - call_start) * 1000,
+            )
 
             route_label = (route.text or "").strip().upper()
             logger.info(f"AgentV2 router: '{route_label}' for query '{query[:60]}'")
@@ -695,6 +731,7 @@ class AgentV2:
                 return None
 
             # --- REFUSE: Flash answers directly, no Pro call needed ---
+            call_start = time.perf_counter()
             refusal = await self.client.aio.models.generate_content(
                 model=ROUTER_MODEL,
                 contents=contents,
@@ -706,7 +743,12 @@ class AgentV2:
                     tools=None,
                 ),
             )
-            self._track_cost(refusal, "refusal", model=ROUTER_MODEL)
+            self._track_cost(
+                refusal,
+                "refusal",
+                model=ROUTER_MODEL,
+                latency_ms=(time.perf_counter() - call_start) * 1000,
+            )
             self._finish_reason = extract_finish_reason(refusal)
 
             response_text = (refusal.text or "").strip() or (
@@ -869,6 +911,7 @@ class AgentV2:
             # through the SDK's native async client so it yields the event loop
             # (see docs/adr/0003-native-async-gemini-client.md).
             _cache = _SYSTEM_PROMPT_CACHE if enable_web_search else _SYSTEM_PROMPT_NO_SEARCH_CACHE
+            call_start = time.perf_counter()
             response = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=contents,
@@ -883,7 +926,9 @@ class AgentV2:
             )
 
             # Track cost
-            self._track_cost(response, "generation")
+            self._track_cost(
+                response, "generation", latency_ms=(time.perf_counter() - call_start) * 1000
+            )
             self._finish_reason = extract_finish_reason(response)
 
             # Extract response text
